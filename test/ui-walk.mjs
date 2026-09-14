@@ -120,7 +120,7 @@ const main = async () => {
 
   // expand our card and verify the body controls render
   console.log("expand card:", await evalJs(`(() => {
-    const header = [...document.querySelectorAll("button")].find(b => (b.textContent||"").includes("字体增强") || (b.textContent||"").includes("Font plus"));
+    const header = [...document.querySelectorAll("button")].find(b => (b.textContent||"").includes("字体增强") || (b.textContent||"").includes("Font tune"));
     if (!header) return "header not found";
     header.click();
     return "clicked";
@@ -139,6 +139,28 @@ const main = async () => {
       chips: document.querySelectorAll(".dfp-chip").length,
       resetAll: has("全部重置") || has("Reset all")
     });
+  })()`));
+
+  // the segmented control must show the selected option with a real surface,
+  // matching dsh-quick-toc's --dsw-specific-sidebar-nav-item-active
+  console.log("mode toggle styling:", await evalJs(`(() => {
+    const buttons = [...document.querySelectorAll(".dfp-modeButton")];
+    if (buttons.length < 2) return "mode buttons not found";
+    const root = getComputedStyle(document.documentElement);
+    const token = root.getPropertyValue("--dsw-specific-sidebar-nav-item-active").trim();
+    const read = (b) => {
+      const s = getComputedStyle(b);
+      return { text: (b.textContent || "").trim(), color: s.color, background: s.backgroundColor, border: s.borderTopColor, height: s.height };
+    };
+    const on = buttons.find((b) => b.className.includes("Active"));
+    const off = buttons.find((b) => !b.className.includes("Active"));
+    // resolve the token against the button so the two can be compared directly
+    const probe = document.createElement("div");
+    probe.style.background = token || "transparent";
+    document.body.appendChild(probe);
+    const resolvedToken = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return JSON.stringify({ token: token, resolvedToken: resolvedToken, selected: on ? read(on) : null, unselected: off ? read(off) : null });
   })()`));
 
   console.log("== console ==");
