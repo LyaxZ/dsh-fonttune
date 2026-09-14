@@ -1,0 +1,45 @@
+# Changelog
+
+## 0.1.1 — 2026-09-14
+
+Documentation and engineering wrap-up after 0.1.0 — **the running code is identical to 0.1.0**: an English changelog (`CHANGELOG.en.md`, shipped in the package); the stale offline-check count in the README/CHANGELOG corrected (35 → 42); a GitHub Release workflow that packs a **version-free** `dsh-fonttune.tgz` asset on every tag (the market's `tarball:` field points at it, so the link cannot rot on the next release).
+
+## 0.1.0 — 2026-09-14
+
+First release. The architecture is a dual-half plugin (host + client), not the client-only plugin the design doc first assumed — see "Why it is not a client-only plugin" in the README.
+
+### Added
+
+- **Plugin settings card**: a host settings namespace registered under the `settings.plugin.item` slot, so it appears in Settings → Plugins → Plugin configuration; saving and resetting go through DSH's own settings document (`settings.yaml`).
+- **Body / code font families**: two independent CSS font-family fallback stacks, each allowed to be empty (= leave DSH's own stack alone).
+- **Font picker panel**: four preset groups (monospace / CJK / Latin / generic); on Chromium `queryLocalFonts()` adds an "installed on this machine" group; a search miss offers a "use xxx" entry; every row renders in its own font.
+- **West / CJK split (simple mode)**: the switch row at the top of the card — an "Edit mode" label on the left, a segmented Simple/Advanced toggle on the right. **Simple mode** splits the stack into a Western and a CJK single-pick slot per axis (one pair for body, one for code) while keeping one stack underneath; **Advanced mode** is the full chip editor. Semantics ("simple mode only touches the front"): the Western slot is the first non-CJK entry — picking replaces it in place, or prepends when there is none; the CJK slot is the first CJK entry — picking replaces it in place, or inserts right after the Western slot when there is none (which keeps `Western, CJK, generic` CSS semantics correct). Everything beyond the two slots keeps its order and is shown as a "other fallbacks" note. **Switching modes is a pure view switch and writes nothing.** CJK classification is name-heuristic first (a broad regex plus localized names containing CJK characters); canvas measurement only confirms names that do not look CJK — measurement necessarily misclassifies families that are not installed, hence its secondary role. Verified: slot dispatch, the full list in advanced mode, zero data change when toggling, and a real panel pick replacing only the matching slot, with a clean console.
+- **Drag to reorder**: the selected families are a chip list with drag reordering, plus earlier/later buttons for keyboard and touch.
+- **Live preview**: mixed Chinese/English plus a code line, rendered from the current configuration.
+- **Global font-size offset** (-3 ~ +6 px): **rescales DSH's own size tokens** (`--dsh-content-font-size`, `--dsw-font-*-font-size` / `-line-height`) with the base read live, so it stacks with DSH's own font-size setting instead of overriding it; the token list is discovered at runtime with a built-in fallback map.
+- **Global font weight** (300 ~ 600, any integer): applied through `body, body *`; 400 and "unset" both mean "leave DSH's own weight alone".
+- **Commit-on-release sliders**: dragging the size-offset or weight slider only updates a local value and its readout — the write happens once on `pointerup`/`touchend` (window capture-level listeners) or on blur/keyup, so dragging never recomputes the size tokens per step. **No snap-back after release**: the local value stays on screen until the host confirms it — clearing it immediately would show the old committed number for one frame ("bounces back, then settles"); a repeated `pointerup` is guarded by an "already awaiting confirmation" flag so the same value is never written twice. Frame-by-frame sampling after release shows no old value flashing back.
+- **Shorter weight hint**: "Overrides text weight everywhere, headings included. Default weight is 400."
+- **No first-paint font flash**: the host half listens on `webserver/index-inject` and injects the same declarations, so the first paint is already correct.
+- **Bilingual copy** (zh/en) with an English fallback; `queryLocalFonts` unavailability or refusal falls back to the built-in list silently.
+
+### Security
+
+- Family names are sanitized with an **allowlist** (letters/digits/space/`.` `,` `_` `-` only) before the whole name is quoted; the host schema adds a `^[^{};<>\\]*$` pattern and a length cap. A hand-crafted CSS injection cannot close a declaration or start a rule.
+
+### Engineering
+
+- Plain JavaScript sources plus a **zero-dependency build script** (`build.mjs`): inlines the shared core, wraps the bundle in the `window.__ModuleLoader__.load` shell, attaches `exports.apply/inject`, and enforces "the client bundle may only require shell-held modules".
+- `node test/run.mjs`: **42 offline checks** green, including a hand-built DOM, a cordis double, settings-surface and slot-dispatch doubles, real `@deepseek-ai/schemastery` schema parsing, CSS generation and injection, and sanitizer adversarial cases.
+- **Real-browser verification loop** (reproducible on this machine, no user involvement): a managed instance (`--port 0 --no-open`, token read from stdout) → `Invoke-WebRequest -SessionVariable` to exchange the token for a cookie, then POST `/api/settings/describe` directly (envelope `{type:"client-request",rpcId,method:"<ns>/<method>",payload:{args:{}}}`) to confirm the namespace is registered → `test/browser-probe.mjs` / `test/ui-walk.mjs` drive **headless Edge over CDP** (Node's built-in WebSocket) through Settings → Plugins → Plugin configuration and assert the card renders, the expanded controls are complete, and the console is clean. Final state: `fontCardVisible: true`, all of sans/mono/size/weight/preview/resetAll rendered, 2 sliders, clean console.
+
+### Fixed (real defects found during development)
+
+- **The card crashed on first render** (a release blocker caught by the headless browser): `scope.subscribe` was passed to React's `useSyncExternalStore` as a bare method reference, while the host's `SettingsScopeController.subscribe` is a prototype method reading `this.store` — called detached, `this` is undefined → `slot entry crashed in 'settings.plugin.item': Cannot read properties of undefined (reading 'store')` → the card simply never appeared in the plugin configuration page (other cards fine, the plugin listed). Fixed by wrapping the subscribe in a closure that preserves `this`. The offline tests had missed it because the double's subscribe did not depend on `this` and the React double never called subscribe; both doubles now reproduce the bug (strict scope plus a detached call).
+- **Three size-offset bugs** (each caught in a real browser): ① missing `!important` — the theme writes `--dsh-content-font-size` **inline on body**, and an inline declaration beats a normal stylesheet rule, so the body itself was not scaled while descendants were, splitting the page's font size in two; ② a **self-pollution compounding loop** ("the fonts keep growing") — the 4-second token refresh re-read the plugin's own stylesheet declarations as its untouched base and multiplied the ratio again on every cycle; fixed by skipping the plugin's own tags, reading `--dsh-content-font-*` from the body inline style, and no longer using computed styles as a base source (once the rule applies, the computed value is already scaled, so feeding it back compounds); ③ **double scaling through the `var()` chain** — DSH's derived tokens (delta/secondary/markdown) all derive from `var(--dsh-content-font-size)`, so scaling them too multiplied the ratio twice; fixed by skipping tokens whose base contains `var(` and letting the variable chain carry them. Stability over two refresh cycles: the content-size value is unchanged, zero `var(` in the stylesheet, clean console.
+- **Families did not reach the conversation or sidebar**: markdown and sidebar CSS declare `font-family: var(--dsw-font-family)` themselves, truncating inheritance, so a body-level `font-family` never got through. Fixed by overriding at the **variable source** (`:root,body{--dsw-font-family:<sans>!important}` plus `--dsw-font-mono` / `--ds-font-family-code`); the explicit body / `pre,code` rules remain as a second path.
+- **Weight snapped to ±100**: values used to snap to 300/400/500/600; the chosen integer is now written to CSS verbatim (variable fonts are fully linear, static fonts round to their nearest available weight natively), with a step of 1.
+- The sanitizer was too permissive: `Arial"; } body { background: url(evil) }` left `:` `(` `)` behind; rewritten as an allowlist.
+- The host half importing named exports from the CJS shared module broke ESM loading (`Named export not found`); switched to a default import.
+- The size-token regex missed `--dsh-content-font-size` (the name has no `-font-` segment) and its `-secondary` variants.
+- Timers now go through `globalThis` instead of assuming `window` carries them.

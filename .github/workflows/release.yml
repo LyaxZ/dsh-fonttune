@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Pack tarball
+        run: |
+          ASSET=$(npm pack --silent)
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+          # stable name so /releases/latest/download/dsh-fonttune.tgz always works
+          cp "$ASSET" dsh-fonttune.tgz
+          echo "STABLE=dsh-fonttune.tgz" >> "$GITHUB_ENV"
+
+      # The release body defaults to the CHINESE changelog section for this tag
+      # (CHANGELOG.md), with the English section (CHANGELOG.en.md) folded into a
+      # collapsible block — Chinese first, English one click away.
+      - name: Extract release notes from CHANGELOG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          extract() {
+            awk -v pat="$VERSION" '
+              /^## / {
+                line = $0
+                gsub(/[\[\]]/, "", line)
+                if (index(line, "## " pat) == 1) { found = 1; next }
+                if (found) exit
+              }
+              found { print }
+            ' "$1"
+          }
+          extract CHANGELOG.md > NOTES.zh.md
+          if [ -f CHANGELOG.en.md ]; then extract CHANGELOG.en.md > NOTES.en.md; fi
+          if [ -s NOTES.zh.md ]; then
+            {
+              printf '**dsh-fonttune %s**\n' "$VERSION"
+              cat NOTES.zh.md
+              if [ -s NOTES.en.md ]; then
+                printf '\n<details>\n<summary>English</summary>\n\n'
+                cat NOTES.en.md
+                printf '\n</details>\n'
+              fi
+            } > NOTES.full.md
+            echo "HAS_NOTES=1" >> "$GITHUB_ENV"
+          else
+            : > NOTES.full.md
+            echo "HAS_NOTES=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create or update release with tarballs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ASSET" "$STABLE" --clobber
+            if [ -n "$HAS_NOTES" ]; then
+              gh release edit "$GITHUB_REF_NAME" --notes-file NOTES.full.md
+            fi
+          else
+            if [ -n "$HAS_NOTES" ]; then
+              gh release create "$GITHUB_REF_NAME" "$ASSET" "$STABLE" \
+                --title "$GITHUB_REF_NAME" --notes-file NOTES.full.md
+            else
+              gh release create "$GITHUB_REF_NAME" "$ASSET" "$STABLE" \
+                --title "$GITHUB_REF_NAME" --generate-notes
+            fi
+          fi

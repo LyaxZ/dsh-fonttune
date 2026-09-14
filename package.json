@@ -1,6 +1,6 @@
 {
   "name": "dsh-fonttune",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness (DSH) Web GUI plugin: UI and code font families plus a global font-size offset and font weight, configured from Settings -> Plugins -> Plugin configuration and stored in the Host settings document",
   "type": "module",
   "main": "lib/index.js",
@@ -15,6 +15,7 @@
     "README.md",
     "README.en.md",
     "CHANGELOG.md",
+    "CHANGELOG.en.md",
     "LICENSE"
   ],
   "engines": {

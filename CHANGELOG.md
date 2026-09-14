@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 — 2026-09-14
+
+首发（0.1.0）之后的文档与工程收尾，**运行代码与 0.1.0 相同**：新增英文 CHANGELOG（`CHANGELOG.en.md`，随包发布）；订正 README / CHANGELOG 里过期的离线检查数（35 → 42 项）；新增 GitHub Release 工作流，随 tag 自动产出**不带版本号**的 `dsh-fonttune.tgz`（市场 `tarball:` 字段指向它，版本号不会因为下次发版而 404）。
+
 ## 0.1.0 — 2026-09-14
 
 首个版本（M1–M3 完成）。架构取"host 半 + 客户端半"双半插件，而非设计文档最初设想的纯客户端插件——理由见 README「为什么不是纯客户端插件」。
@@ -26,7 +30,7 @@
 ### 工程
 
 - 纯 JavaScript 源码 + **零依赖构建脚本**（`build.mjs`）：内联 shared、套 `window.__ModuleLoader__.load` 外壳、挂 `exports.apply/inject`，并强制校验"客户端 bundle 只能 require shell 预注入模块"。
-- `node test/run.mjs`：**35 项离线检查**全绿，含自建 DOM、cordis 替身、设置面与 slot 派发替身、真实 `@deepseek-ai/schemastery` schema 解析、CSS 生成与注入、消毒对抗用例。
+- `node test/run.mjs`：**42 项离线检查**全绿，含自建 DOM、cordis 替身、设置面与 slot 派发替身、真实 `@deepseek-ai/schemastery` schema 解析、CSS 生成与注入、消毒对抗用例。
 - **真实浏览器验证闭环**（本机可复跑，无需用户参与）：受管实例（`--port 0 --no-open`，token 从 stdout 拿）→ `Invoke-WebRequest -SessionVariable` 用 token 换 cookie 后可直接 POST `/api/settings/describe`（信封 `{type:"client-request",rpcId,method:"<ns>/<method>",payload:{args:{}}}`）验证 namespace 已注册 → `test/browser-probe.mjs` / `test/ui-walk.mjs` 用**无头 Edge + CDP**（Node 内置 WebSocket）真实渲染页面：设置 → 插件 → 插件配置 → 断言卡片渲染、展开后控件齐全、控制台零报错。最终态实测：`fontCardVisible: true`，展开后 sans/mono/size/weight/preview/resetAll 全渲染、2 个滑块、控制台干净。
 
 ### 修复（开发期自查发现的真实缺陷）
