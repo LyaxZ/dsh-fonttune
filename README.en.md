@@ -13,9 +13,6 @@
 - **Font picker panel** — four preset groups (monospace / CJK / Latin / generic), plus an "installed on this machine" group on Chromium; a name that is not in the list can be created with "use xxx"
 - **Drag to reorder** — selected families are a chip list you can drag, with earlier / later buttons kept for keyboard and touch
 - **Live preview** — a mixed Chinese/English line and a code line, rendered from the current configuration
-- **Commit on release** — the size and weight sliders only update their readout while dragging; the value is written once on pointer release (or keyup / blur), so dragging stays smooth
-- **No first-paint flash** — the host half ships the saved declarations with the page, so the first paint already uses your fonts
-- **Bilingual** — card copy follows DSH's language (Chinese / English)
 
 ## Compatibility
 
