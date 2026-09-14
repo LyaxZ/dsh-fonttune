@@ -141,26 +141,24 @@ const main = async () => {
     });
   })()`));
 
-  // the segmented control must show the selected option with a real surface,
-  // matching dsh-quick-toc's --dsw-specific-sidebar-nav-item-active
+  // the segmented control must stay one joined pill (shared border, divider
+  // between the options) while the selected option carries a real surface
   console.log("mode toggle styling:", await evalJs(`(() => {
     const buttons = [...document.querySelectorAll(".dfp-modeButton")];
     if (buttons.length < 2) return "mode buttons not found";
-    const root = getComputedStyle(document.documentElement);
-    const token = root.getPropertyValue("--dsw-specific-sidebar-nav-item-active").trim();
     const read = (b) => {
       const s = getComputedStyle(b);
-      return { text: (b.textContent || "").trim(), color: s.color, background: s.backgroundColor, border: s.borderTopColor, height: s.height };
+      return { text: (b.textContent || "").trim(), color: s.color, background: s.backgroundColor, dividerLeft: s.borderLeftWidth + " " + s.borderLeftColor, height: s.height };
     };
+    const seg = buttons[0].parentElement;
+    const segStyle = getComputedStyle(seg);
     const on = buttons.find((b) => b.className.includes("Active"));
     const off = buttons.find((b) => !b.className.includes("Active"));
-    // resolve the token against the button so the two can be compared directly
-    const probe = document.createElement("div");
-    probe.style.background = token || "transparent";
-    document.body.appendChild(probe);
-    const resolvedToken = getComputedStyle(probe).backgroundColor;
-    probe.remove();
-    return JSON.stringify({ token: token, resolvedToken: resolvedToken, selected: on ? read(on) : null, unselected: off ? read(off) : null });
+    return JSON.stringify({
+      container: { display: segStyle.display, border: segStyle.borderTopWidth + " " + segStyle.borderTopColor, radius: segStyle.borderTopLeftRadius, overflow: segStyle.overflow, background: segStyle.backgroundColor },
+      selected: on ? read(on) : null,
+      unselected: off ? read(off) : null,
+    });
   })()`));
 
   console.log("== console ==");

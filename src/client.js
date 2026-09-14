@@ -195,7 +195,7 @@ var DICTS = {
     "stack.groupLocal": "本机已安装",
     "stack.hintOrder": "顺序靠前的优先命中，取第一个已安装的字体。",
 
-    "mode.label": "编辑方式",
+    "mode.label": "编辑模式",
     "mode.simple": "简单",
     "mode.advanced": "高级",
     "mode.simpleHint":
@@ -298,16 +298,18 @@ var CARD_CSS = [
   ".dfp-add{align-items:center;gap:6px;height:28px;padding:0 12px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;display:inline-flex;font-size:13px;line-height:18px}",
   ".dfp-add:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-specific-sidebar-nav-item-hover)}",
 
-  // Segmented / toggle controls follow dsh-quick-toc's settings card exactly:
-  // 28px pills, .5px border, and the selected one takes the same
-  // --dsw-specific-sidebar-nav-item-active surface (not just darker text).
+  // Segmented / toggle controls follow dsh-quick-toc's settings card colours:
+  // the selected option takes the same --dsw-specific-sidebar-nav-item-active
+  // surface (not just darker text). Shape: one joined pill with a divider, as
+  // the card had before — quick-toc is being aligned to this shape instead.
   ".dfp-modeRow{align-items:center;gap:10px;margin:14px 0 0;display:flex}",
   ".dfp-modeLabel{flex:1;min-width:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}",
-  ".dfp-modeSeg{align-items:center;flex-wrap:wrap;gap:6px;display:flex}",
-  ".dfp-modeButton{appearance:none;font:inherit;cursor:pointer;height:28px;padding:0 12px;color:var(--dsw-alias-label-secondary);background:0 0;border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;font-size:13px;line-height:18px}",
+  ".dfp-modeSeg{flex:none;display:inline-flex;overflow:hidden;background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:8px}",
+  ".dfp-modeButton{appearance:none;font:inherit;cursor:pointer;height:28px;padding:0 14px;color:var(--dsw-alias-label-secondary);background:0 0;border:none;border-left:.5px solid var(--dsw-alias-border-l3);font-size:13px;line-height:18px}",
+  ".dfp-modeButton:first-child{border-left:none}",
   ".dfp-modeButton:hover:not(:disabled):not(.dfp-modeButtonActive){background:var(--dsw-specific-sidebar-nav-item-hover)}",
   ".dfp-modeButton:disabled{opacity:.4;cursor:default}",
-  ".dfp-modeButtonActive{color:var(--dsw-alias-label-primary);background:var(--dsw-specific-sidebar-nav-item-active);border-color:transparent}",
+  ".dfp-modeButtonActive{color:var(--dsw-alias-label-primary);background:var(--dsw-specific-sidebar-nav-item-active)}",
   ".dfp-slotRow{align-items:center;gap:10px;margin-top:10px;display:flex}",
   ".dfp-slotLabel{flex:none;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;min-width:96px}",
   ".dfp-splitRow{flex:1;align-items:center;gap:4px;display:inline-flex;min-width:0}",
