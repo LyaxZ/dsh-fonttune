@@ -1,0 +1,20 @@
+# dsh-fonttune layer.
+#
+# Adds one plugin row. The host half registers the `dsh-fonttune` settings
+# namespace and injects the saved font declarations into the served index, so
+# the first paint already uses them; the browser half owns the
+# Settings -> Plugins -> Plugin configuration card.
+#
+# A profile may pin the composition defaults here; a saved value still wins,
+# and a field left out falls back to the schema default (empty = do not touch
+# that axis):
+#
+# - insert:
+#     - id: fonttune
+#       name: dsh-fonttune
+#       config:
+#         sans: '"JetBrains Mono", "Sarasa Mono SC", "Microsoft YaHei", sans-serif'
+#         mono: '"JetBrains Mono", "Cascadia Code", Consolas, monospace'
+- insert:
+    - id: fonttune
+      name: dsh-fonttune

@@ -1,0 +1,66 @@
+{
+  "name": "dsh-fonttune",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness (DSH) Web GUI plugin: UI and code font families plus a global font-size offset and font weight, configured from Settings -> Plugins -> Plugin configuration and stored in the Host settings document",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "dsh": ">=0.1.5-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.1.5-rc.2": "compatible"
+      }
+    }
+  },
+  "peerDependencies": {
+    "react": "^18.2.0",
+    "@deepseek-ai/schemastery": "^3.18.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "test": "node test/run.mjs",
+    "prepublishOnly": "node build.mjs && node test/run.mjs"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "font",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "typography"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LyaxZ/dsh-fonttune.git"
+  }
+}
