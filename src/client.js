@@ -84,7 +84,7 @@ var MAX_VISIBLE_FONTS = 240;
 
 var DICTS = {
   en: {
-    "card.title": "Font plus",
+    "card.title": "Font tune",
     "card.description":
       "UI and code font families, a global size offset, and font weight",
     "card.expand": "Expand",
