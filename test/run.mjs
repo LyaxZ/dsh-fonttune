@@ -828,7 +828,7 @@ await test("the card exposes its scope and a working translate seat", async () =
   await loadClientBundle(ctx);
   const face = registered[0].options.inject();
   assert.equal(face.scope, scope);
-  assert.equal(face.t("card.title"), "Font plus");
+  assert.equal(face.t("card.title"), "Font tune");
 });
 
 await test("localized copy follows the active locale", async () => {
@@ -864,7 +864,7 @@ await test("a composition without a working locale service still renders copy", 
     settingsScope: { bind: () => scope },
   });
   await loadClientBundle(ctx);
-  assert.equal(registered[0].options.inject().t("card.title"), "Font plus");
+  assert.equal(registered[0].options.inject().t("card.title"), "Font tune");
 });
 
 await test("resetting every axis leaves no user-layer entry", async () => {
