@@ -2,6 +2,14 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.1.3] - 2026-09-14
+
+### Changed
+- **Switch row wording and shape**: the label on the left is now **编辑模式 / "Edit mode"** (was 编辑方式), and the two options are back to a **joined segmented control** (one shared frame with a divider between the options), while the selected option keeps its grey `--dsw-specific-sidebar-nav-item-active` surface and primary-coloured text (0.1.2 had split them into two separate buttons; this reverts that shape).
+- **Card description**: now mentions the **West/CJK split** as well, in both languages, so it matches what the card actually offers.
+- **Feature list trimmed in the README**: the "commit on release", "no first-paint flash" and "bilingual" bullets are gone — they describe implementation details rather than features, and the behaviour itself is unchanged (still recorded under 0.1.0 in this file).
+- **Compatibility table** now lists 0.1.3 as the latest version.
+
 ## [0.1.2] - 2026-09-14
 
 ### Changed

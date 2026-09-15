@@ -86,7 +86,7 @@ var DICTS = {
   en: {
     "card.title": "Font tune",
     "card.description":
-      "UI and code font families, a global size offset, and font weight",
+      "Body and code fonts, a size offset, weight, and a West/CJK split",
     "card.expand": "Expand",
     "card.collapse": "Collapse",
     "card.resetAll": "Reset all",
@@ -159,7 +159,7 @@ var DICTS = {
   },
   zh: {
     "card.title": "字体增强",
-    "card.description": "正文与代码字体、全局字号偏移、字重",
+    "card.description": "正文与代码字体、字号偏移、字重、中西文分栏",
     "card.expand": "展开",
     "card.collapse": "收起",
     "card.resetAll": "全部重置",
