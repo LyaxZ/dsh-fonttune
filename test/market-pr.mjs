@@ -1,17 +1,20 @@
 /**
  * Keep the awesome-dsh-plugin entry in sync and open the listing PR.
  *
- *   node test/market-pr.mjs update    # push the entry file on the fork branch
- *   node test/market-pr.mjs status    # report repo age / existing PR
- *   node test/market-pr.mjs open      # open the PR once upstream CI's
+ *   node test/market-pr.mjs update    # rebuild the branch on upstream main and push the entry
+ *   node test/market-pr.mjs status    # report repo age / existing PR / branch diff
+ *   node test/market-pr.mjs open      # sync, then open the PR once upstream CI's
  *                                     # "repository is at least one day old"
  *                                     # prerequisite is satisfied
  *
  * The entry lives at `data/plugins/<owner>__<repo>.yml` in the upstream repo
  * and is a single-file contribution: whatever `description` says there is what
  * the market shows, so it has to be re-pushed when the plugin's description
- * changes. The token comes from git's credential helper (this machine's GitHub
- * login); nothing is read from the environment.
+ * changes. `update` force-resets the branch to upstream `main` first, so the
+ * result is always "current main + exactly one added file" — a branch that has
+ * been sitting around would otherwise drift hundreds of commits behind. The
+ * token comes from git's credential helper (this machine's GitHub login);
+ * nothing is read from the environment.
  */
 import { execFileSync } from "node:child_process";
 
@@ -110,21 +113,46 @@ async function status() {
   return ageHours >= 24;
 }
 
+/**
+ * Point the fork branch at upstream `main` and push the entry on top of it.
+ *
+ * The force-reset is what keeps the PR a clean "current main + one added file":
+ * a branch created days ago would otherwise show up hundreds of commits behind,
+ * which is both noisy to review and a risk if the entry schema moved on.
+ * @returns {Promise<string>} the branch commit that carries the entry.
+ */
+async function sync() {
+  const upstreamRef = await api("GET", `/repos/${UPSTREAM}/git/ref/heads/main`);
+  const base = upstreamRef.object.sha;
+  console.log(`upstream main: ${base}`);
+  await api("PATCH", `/repos/${FORK}/git/refs/heads/${BRANCH}`, { sha: base, force: true });
+  console.log(`reset ${FORK}:${BRANCH} to upstream main`);
+  const result = await api("PUT", `/repos/${FORK}/contents/${PATH}`, {
+    message: "fonttune: add the plugin entry",
+    content: Buffer.from(ENTRY, "utf8").toString("base64"),
+    branch: BRANCH,
+  });
+  console.log(`pushed ${result.commit.sha} to ${FORK}:${BRANCH}`);
+  return result.commit.sha;
+}
+
 async function update() {
   const file = await readEntry();
   const current = file === null ? "" : Buffer.from(file.content, "base64").toString("utf8");
   if (current === ENTRY) {
-    console.log("entry already up to date");
-    return;
+    // Same content, but the branch may still sit on an old base.
+    const upstreamRef = await api("GET", `/repos/${UPSTREAM}/git/ref/heads/main`);
+    const diff = await api(
+      "GET",
+      `/repos/${UPSTREAM}/compare/main...${FORK.split("/")[0]}:${BRANCH}`
+    ).catch(() => null);
+    if (diff !== null && diff.behind_by === 0) {
+      console.log(`entry already up to date and branch is current (base ${upstreamRef.object.sha.slice(0, 7)})`);
+      return;
+    }
+    console.log(`entry content is current but the branch is ${diff ? diff.behind_by : "?"} commits behind — rebasing`);
   }
-  const body = {
-    message: "fonttune: describe the two font-size axes",
-    content: Buffer.from(ENTRY, "utf8").toString("base64"),
-    branch: BRANCH,
-  };
-  if (file !== null) body.sha = file.sha;
-  const result = await api("PUT", `/repos/${FORK}/contents/${PATH}`, body);
-  console.log(`pushed ${result.commit.sha} to ${FORK}:${BRANCH}`);
+  await sync();
 }
 
 async function open() {
@@ -138,6 +166,20 @@ async function open() {
   const existing = prs.find((pr) => pr.head?.label === `${FORK.split("/")[0]}:${BRANCH}`);
   if (existing) {
     console.log(`PR already exists: #${existing.number} ${existing.state} ${existing.html_url}`);
+    return;
+  }
+  await sync();
+  const diff = await api(
+    "GET",
+    `/repos/${UPSTREAM}/compare/main...${FORK.split("/")[0]}:${BRANCH}`
+  );
+  console.log(
+    `branch diff vs main: ahead=${diff.ahead_by} behind=${diff.behind_by} files=` +
+      diff.files.map((file) => `${file.status} ${file.filename}`).join(", ")
+  );
+  if (diff.files.length !== 1 || diff.files[0].status !== "added") {
+    console.log("\nrefusing to open a PR that is not exactly one added file");
+    process.exitCode = 1;
     return;
   }
   const pr = await api("POST", `/repos/${UPSTREAM}/pulls`, {
@@ -157,9 +199,9 @@ async function open() {
   console.log(`opened #${pr.number}: ${pr.html_url}`);
 }
 
-const run = { status, update, open }[action];
+const run = { status, update, sync, open }[action];
 if (!run) {
-  console.error("usage: node test/market-pr.mjs [status|update|open]");
+  console.error("usage: node test/market-pr.mjs [status|update|sync|open]");
   process.exit(2);
 }
 run().catch((error) => {
