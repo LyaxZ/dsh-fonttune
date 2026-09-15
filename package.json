@@ -1,7 +1,7 @@
 {
   "name": "dsh-fonttune",
-  "version": "0.1.4",
-  "description": "Font plugin for the DeepSeek Harness Web GUI: body and code font families, a separate font-size offset for each, a global font weight, and a West/CJK split picker.",
+  "version": "0.1.5",
+  "description": "Font plugin for the DeepSeek Harness Web GUI: body and code font families, a separate font size and weight for each, and a West/CJK split picker.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

@@ -39,6 +39,7 @@ var MONO_FIELD = shared.MONO_FIELD;
 var SIZE_FIELD = shared.SIZE_FIELD;
 var CODE_SIZE_FIELD = shared.CODE_SIZE_FIELD;
 var WEIGHT_FIELD = shared.WEIGHT_FIELD;
+var CODE_WEIGHT_FIELD = shared.CODE_WEIGHT_FIELD;
 var SIZE_MIN = shared.SIZE_MIN;
 var SIZE_MAX = shared.SIZE_MAX;
 var WEIGHT_MIN = shared.WEIGHT_MIN;
@@ -88,7 +89,7 @@ var DICTS = {
   en: {
     "card.title": "Font tune",
     "card.description":
-      "Body and code fonts, a size offset for each, weight, and a West/CJK split",
+      "Body and code fonts, a size and a weight for each, and a West/CJK split",
     "card.expand": "Expand",
     "card.collapse": "Collapse",
     "card.resetAll": "Reset all",
@@ -148,8 +149,12 @@ var DICTS = {
       "Adds {offset} to code blocks and inline code only; the body offset does not reach them. 0 keeps DSH's sizes.",
     "size.unit": "px",
 
-    "weight.label": "Font weight",
-    "weight.hint": "Overrides text weight everywhere, headings included. Default weight is 400.",
+    "weight.bodyLabel": "Body font weight",
+    "weight.bodyHint":
+      "Overrides the weight of text and interface copy, headings included. Code keeps its own weight. Default weight is 400.",
+    "weight.codeLabel": "Code font weight",
+    "weight.codeHint":
+      "Overrides code blocks, inline code and terminal output only. 400 or unset keeps DSH's own weight and takes code out of the body weight.",
     "weight.unset": "Unset",
 
     "preview.label": "Preview",
@@ -164,7 +169,7 @@ var DICTS = {
   },
   zh: {
     "card.title": "字体增强",
-    "card.description": "正文与代码字体、各自的字号偏移、字重、中西文分栏",
+    "card.description": "正文与代码字体、各自的字号与字重、中西文分栏",
     "card.expand": "展开",
     "card.collapse": "收起",
     "card.resetAll": "全部重置",
@@ -222,8 +227,12 @@ var DICTS = {
       "只作用于代码块与行内代码，与正文字号互不影响；0 表示保持原样。",
     "size.unit": "px",
 
-    "weight.label": "字重",
-    "weight.hint": "覆盖全局文字粗细（含标题）；默认字重为400。",
+    "weight.bodyLabel": "正文字重",
+    "weight.bodyHint":
+      "覆盖正文与界面文字的粗细（含标题）；代码不受它影响。默认字重为400。",
+    "weight.codeLabel": "代码字重",
+    "weight.codeHint":
+      "只覆盖代码块、行内代码与终端输出；400 或未设置表示保持 DSH 原样，也就是不被正文字重带着走。",
     "weight.unset": "未设置",
 
     "preview.label": "预览",
@@ -1420,6 +1429,7 @@ function FontCard(props) {
   var offset = config[SIZE_FIELD];
   var codeOffset = config[CODE_SIZE_FIELD];
   var weight = config[WEIGHT_FIELD];
+  var codeWeight = config[CODE_WEIGHT_FIELD];
   var offsetText = offset > 0 ? "+" + offset : String(offset);
   var codeOffsetText = codeOffset > 0 ? "+" + codeOffset : String(codeOffset);
 
@@ -1455,6 +1465,43 @@ function FontCard(props) {
         },
         onChange: function (value) {
           setField(props.field, value);
+        },
+      })
+    );
+  };
+
+  /**
+   * One weight slider, under the family it reweights.
+   * @param {object} props - field, label keys and current value.
+   * @returns {object} the field shell wrapping the slider.
+   */
+  var weightField = function (props) {
+    return h(
+      FieldShell,
+      {
+        t: t,
+        label: t(props.labelKey),
+        hint: t(props.hintKey),
+        overridden: overridden(props.field) && props.value !== WEIGHT_UNSET,
+        disabled: !writable,
+        onReset: function () {
+          resetField(props.field);
+        },
+      },
+      h(NumberSlider, {
+        min: WEIGHT_MIN,
+        max: WEIGHT_MAX,
+        value: props.value === WEIGHT_UNSET ? NEUTRAL_WEIGHT : props.value,
+        disabled: !writable,
+        label: t(props.labelKey),
+        readout: props.value === WEIGHT_UNSET ? t("weight.unset") : String(props.value),
+        minLabel: String(WEIGHT_MIN),
+        maxLabel: String(WEIGHT_MAX),
+        onChange: function (value) {
+          // 400 is DSH's own body weight, so choosing it means "leave the axis
+          // alone" rather than "write 400 on every element".
+          if (value === NEUTRAL_WEIGHT) resetField(props.field);
+          else setField(props.field, value);
         },
       })
     );
@@ -1575,6 +1622,13 @@ function FontCard(props) {
             text: offsetText,
           }),
 
+          weightField({
+            field: WEIGHT_FIELD,
+            labelKey: "weight.bodyLabel",
+            hintKey: "weight.bodyHint",
+            value: weight,
+          }),
+
           view === "simple"
             ? h(SimpleFamilyField, {
                 t: t,
@@ -1624,35 +1678,12 @@ function FontCard(props) {
             text: codeOffsetText,
           }),
 
-          h(
-            FieldShell,
-            {
-              t: t,
-              label: t("weight.label"),
-              hint: t("weight.hint"),
-              overridden: overridden(WEIGHT_FIELD) && weight !== WEIGHT_UNSET,
-              disabled: !writable,
-              onReset: function () {
-                resetField(WEIGHT_FIELD);
-              },
-            },
-            h(NumberSlider, {
-              min: WEIGHT_MIN,
-              max: WEIGHT_MAX,
-              value: weight === WEIGHT_UNSET ? NEUTRAL_WEIGHT : weight,
-              disabled: !writable,
-              label: t("weight.label"),
-              readout: weight === WEIGHT_UNSET ? t("weight.unset") : String(weight),
-              minLabel: String(WEIGHT_MIN),
-              maxLabel: String(WEIGHT_MAX),
-              onChange: function (value) {
-                // 400 is DSH's own body weight, so choosing it means "leave the
-                // axis alone" rather than "write 400 on every element".
-                if (value === NEUTRAL_WEIGHT) resetField(WEIGHT_FIELD);
-                else setField(WEIGHT_FIELD, value);
-              },
-            })
-          ),
+          weightField({
+            field: CODE_WEIGHT_FIELD,
+            labelKey: "weight.codeLabel",
+            hintKey: "weight.codeHint",
+            value: codeWeight,
+          }),
 
           h(
             "div",
@@ -1685,7 +1716,7 @@ function FontCard(props) {
               h(
                 "div",
                 {
-                  className: "dfp-previewText",
+                  className: "dfp-previewText dfp-previewCode",
                   style:
                     config[MONO_FIELD] === ""
                       ? undefined
@@ -1711,6 +1742,7 @@ function FontCard(props) {
                   resetField(SIZE_FIELD);
                   resetField(CODE_SIZE_FIELD);
                   resetField(WEIGHT_FIELD);
+                  resetField(CODE_WEIGHT_FIELD);
                 },
               },
               t("card.resetAll")

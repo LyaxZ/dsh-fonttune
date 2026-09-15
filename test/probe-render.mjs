@@ -89,8 +89,8 @@ class StrictScope {
   getSnapshot() {
     return {
       status: "ready",
-      value: { sans: '"Inter", "Microsoft YaHei"', mono: '"JetBrains Mono"', sizeOffset: 2, sizeOffsetCode: -1, weight: 500 },
-      base: { sans: "", mono: "", sizeOffset: 0, sizeOffsetCode: 0, weight: 0 },
+      value: { sans: '"Inter", "Microsoft YaHei"', mono: '"JetBrains Mono"', sizeOffset: 2, sizeOffsetCode: -1, weight: 500, weightCode: 300 },
+      base: { sans: "", mono: "", sizeOffset: 0, sizeOffsetCode: 0, weight: 0, weightCode: 0 },
       user: { sans: '"Inter", "Microsoft YaHei"', sizeOffset: 2, weight: 500 },
       revision: 3,
       writable: true,

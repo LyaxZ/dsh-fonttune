@@ -2,6 +2,16 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.1.5] - 2026-09-15
+
+### Added
+- **Code font weight**: weight is split into **two independent axes** — "Body font weight" for text and interface copy (headings included), and "Code font weight" for code blocks, inline code, tool code bodies and terminal output only. The single slider used to press on both chains, so moving body always dragged code with it; now each moves on its own. The field is `weightCode` (300–600, 0 = leave alone), sitting next to the existing `weight`, whose meaning narrows to "body and interface text".
+
+### Changed
+- **Card layout**: the weight sliders moved into the group they belong to — body font → body size offset → body weight → code font → code size offset → code weight — and the two are labelled separately ("Body font weight" / "Code font weight"). The card description now reads "Body and code fonts, a size and a weight for each, and a West/CJK split".
+- **Code no longer follows the body weight**: weight has no token chain to ride (measured on rc.2 — **zero** `font-weight: var(--dsw-font-…)` usages; the theme writes literal weights in its own class rules), which is why the body axis is a blanket `body, body *` `!important` rule. The code axis now appends a scoped rule **after** it that wins either on specificity (`[class*=…]`) or on source order (`pre` ties with `body *`); the selector covers `pre` / `code` / `kbd` / `samp` / `var` / `tt` / `textarea` / `.cm-editor` **and their descendants** (the blanket rule matches every element, so a highlighted `<span>` inside a `<pre>` has to be named too), plus `[class*="code" i]` and `[class*="terminal" i]` for the tool code bodies and the terminal, which are plain `div`s. **The rule is written even when the code weight is unset** (value `normal`), otherwise the blanket rule would pull code onto the body weight; after upgrading, body-weight behaviour is unchanged and code returns to DSH's own weight.
+- **Compatibility table** now lists 0.1.5 as the latest version.
+
 ## [0.1.4] - 2026-09-15
 
 ### Added

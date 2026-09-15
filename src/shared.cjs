@@ -29,8 +29,11 @@ var SIZE_FIELD = "sizeOffset";
 /** Field carrying the code font-size offset in px (0 = leave DSH alone). */
 var CODE_SIZE_FIELD = "sizeOffsetCode";
 
-/** Field carrying the global font weight (0 = leave DSH alone). */
+/** Field carrying the body/UI font weight (0 = leave DSH alone). */
 var WEIGHT_FIELD = "weight";
+
+/** Field carrying the code font weight (0 = leave DSH alone). */
+var CODE_WEIGHT_FIELD = "weightCode";
 
 /** Allowed font-size offset range. The upper bound stays under a 2x scale. */
 var SIZE_MIN = -3;
@@ -57,6 +60,7 @@ var DEFAULTS = {
   sizeOffset: 0,
   sizeOffsetCode: 0,
   weight: WEIGHT_UNSET,
+  weightCode: WEIGHT_UNSET,
 };
 
 /**
@@ -147,18 +151,15 @@ function normalizeConfig(value) {
   var source = value !== null && typeof value === "object" ? value : {};
   var size = clampOffset(source[SIZE_FIELD]);
   var codeSize = clampOffset(source[CODE_SIZE_FIELD]);
-  var weight = Number(source[WEIGHT_FIELD]);
-  if (!isFinite(weight)) weight = WEIGHT_UNSET;
-  weight = Math.round(weight);
-  if (weight !== WEIGHT_UNSET) {
-    weight = Math.min(WEIGHT_MAX, Math.max(WEIGHT_MIN, weight));
-  }
+  var weight = clampWeight(source[WEIGHT_FIELD]);
+  var codeWeight = clampWeight(source[CODE_WEIGHT_FIELD]);
   var config = {};
   config[SANS_FIELD] = sanitize(source[SANS_FIELD]).slice(0, MAX_STACK_LENGTH);
   config[MONO_FIELD] = sanitize(source[MONO_FIELD]).slice(0, MAX_STACK_LENGTH);
   config[SIZE_FIELD] = size;
   config[CODE_SIZE_FIELD] = codeSize;
   config[WEIGHT_FIELD] = weight;
+  config[CODE_WEIGHT_FIELD] = codeWeight;
   return config;
 }
 
@@ -171,6 +172,19 @@ function clampOffset(value) {
   var size = Number(value);
   if (!isFinite(size)) return 0;
   return Math.round(Math.min(SIZE_MAX, Math.max(SIZE_MIN, size)));
+}
+
+/**
+ * Clamp one weight to the allowed range, keeping 0 as "do not touch".
+ * @param {unknown} value - candidate weight.
+ * @returns {number} the weight the stylesheet may use.
+ */
+function clampWeight(value) {
+  var weight = Number(value);
+  if (!isFinite(weight)) return WEIGHT_UNSET;
+  weight = Math.round(weight);
+  if (weight === WEIGHT_UNSET) return WEIGHT_UNSET;
+  return Math.min(WEIGHT_MAX, Math.max(WEIGHT_MIN, weight));
 }
 
 /**
@@ -376,7 +390,8 @@ function isDormant(config) {
     config[MONO_FIELD] === "" &&
     config[SIZE_FIELD] === 0 &&
     config[CODE_SIZE_FIELD] === 0 &&
-    config[WEIGHT_FIELD] === WEIGHT_UNSET
+    config[WEIGHT_FIELD] === WEIGHT_UNSET &&
+    config[CODE_WEIGHT_FIELD] === WEIGHT_UNSET
   );
 }
 
@@ -406,7 +421,14 @@ function isDormant(config) {
  * what the shipped stylesheets use), which is why those are re-declared too,
  * not just their `-font-size` / `-line-height` parts.
  *
- * @param {{sans: string, mono: string, sizeOffset: number, sizeOffsetCode: number, weight: number}} config - normalized config.
+ * Weight has no token chain to ride: no shipped rule reads a `-font-weight`
+ * token (measured — zero `font-weight: var(--dsw-font-…)` in rc.2), the theme
+ * writes literal weights on its own class rules, and that is exactly why the
+ * body axis has to be a blanket `!important` rule. The code axis is therefore a
+ * selector-scoped `!important` rule placed after it, which wins on specificity
+ * (`[class*=…]`) or on source order (`pre, …` ties with `body *`).
+ *
+ * @param {{sans: string, mono: string, sizeOffset: number, sizeOffsetCode: number, weight: number, weightCode: number}} config - normalized config.
  * @param {Record<string, string>} [baseTokens] - token name to untouched value.
  * @returns {string} declarations for one `<style>` element ("" when dormant).
  */
@@ -417,6 +439,7 @@ function buildFontCss(config, baseTokens) {
   var offset = normalized[SIZE_FIELD];
   var codeOffset = normalized[CODE_SIZE_FIELD];
   var weight = normalized[WEIGHT_FIELD];
+  var codeWeight = normalized[CODE_WEIGHT_FIELD];
   if (isDormant(normalized)) return "";
   var declarations = [];
 
@@ -455,8 +478,53 @@ function buildFontCss(config, baseTokens) {
     // a static one rounds to its own nearest step by itself.
     declarations.push(bodyAndDescendants("font-weight:" + weight + " !important"));
   }
+  if (codeWeight !== WEIGHT_UNSET) {
+    declarations.push(CODE_SELECTOR + "{font-weight:" + codeWeight + " !important}");
+  } else if (weight !== WEIGHT_UNSET) {
+    // The body axis is a blanket `body, body *` rule, so code would inherit the
+    // body weight unless it is explicitly taken back out. `normal` is what DSH
+    // itself computes there (the code `font` shorthands carry no weight), so an
+    // unset code weight means "code stays exactly as DSH shipped it".
+    declarations.push(CODE_SELECTOR + "{font-weight:normal !important}");
+  }
   return declarations.join("\n");
 }
+
+/**
+ * What counts as code text for the weight axis.
+ *
+ * There is no token to hook here (see `buildFontCss`), so the code axis has to
+ * name the elements. Two layers, both measured against rc.2:
+ *
+ * 1. The tags DSH's own stylesheets size with a code token: markdown `pre` /
+ *    inline `code`, the tool card's `:where(pre)` block, form controls, and the
+ *    CodeMirror editor. Their descendants are listed too, because the blanket
+ *    body rule matches EVERY element — a `<span>` inside a highlighted block
+ *    would otherwise be pulled back to the body weight.
+ * 2. Containers that only a class name identifies: the terminal and tool-code
+ *    bodies are plain `div`s (`…_terminal`, `…_codeBody`, `md-code-block`).
+ *
+ * The `i` flag keeps a casing change in a future DSH from silently dropping the
+ * rule, and an unmatched token/class simply means that surface follows the body
+ * axis — the same degradation as an unknown token name on the size axes.
+ */
+var CODE_SELECTOR = [
+  "pre",
+  "code",
+  "kbd",
+  "samp",
+  "var",
+  "tt",
+  "textarea",
+  ".cm-editor",
+  ".dfp-previewCode",
+  '[class*="code" i]',
+  '[class*="terminal" i]',
+]
+  .map(function (selector) {
+    return selector + "," + selector + " *";
+  })
+  .join(",");
 
 /**
  * Values a ratio may multiply: a number with a unit, a bare number, or an
@@ -801,6 +869,7 @@ var shared = {
   SIZE_FIELD: SIZE_FIELD,
   CODE_SIZE_FIELD: CODE_SIZE_FIELD,
   WEIGHT_FIELD: WEIGHT_FIELD,
+  CODE_WEIGHT_FIELD: CODE_WEIGHT_FIELD,
   SIZE_MIN: SIZE_MIN,
   SIZE_MAX: SIZE_MAX,
   WEIGHT_MIN: WEIGHT_MIN,
@@ -818,6 +887,9 @@ var shared = {
   sanitizeFamily: sanitizeFamily,
   quoteFamily: quoteFamily,
   normalizeConfig: normalizeConfig,
+  clampOffset: clampOffset,
+  clampWeight: clampWeight,
+  CODE_SELECTOR: CODE_SELECTOR,
   formatStack: formatStack,
   parseStack: parseStack,
   scaleFor: scaleFor,

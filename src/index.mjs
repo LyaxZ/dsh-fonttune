@@ -23,6 +23,7 @@ import shared from "./shared.cjs";
 const {
   buildFontCss,
   CODE_SIZE_FIELD,
+  CODE_WEIGHT_FIELD,
   FALLBACK_TOKENS,
   MONO_FIELD,
   NAMESPACE,
@@ -53,8 +54,9 @@ const MAX_STACK = 200;
  *
  * Every field defaults to "leave DSH alone": an empty stack injects no family
  * rule, a zero offset injects no size rule on either axis, and a zero weight
- * injects no weight rule. Installing the plugin therefore changes nothing until
- * the user asks for something.
+ * injects no weight rule (an unset CODE weight still writes the rule that keeps
+ * code out of the body weight). Installing the plugin therefore changes nothing
+ * until the user asks for something.
  */
 export const Config = z.object({
   [SANS_FIELD]: z
@@ -91,7 +93,15 @@ export const Config = z.object({
     .max(WEIGHT_MAX)
     .default(WEIGHT_UNSET)
     .description(
-      `Global font weight (${WEIGHT_MIN}..${WEIGHT_MAX}, ${WEIGHT_UNSET} keeps DSH's own weights)`
+      `Body/UI font weight (${WEIGHT_MIN}..${WEIGHT_MAX}, ${WEIGHT_UNSET} keeps DSH's own weights; code is not affected)`
+    ),
+  [CODE_WEIGHT_FIELD]: z
+    .number()
+    .min(WEIGHT_UNSET)
+    .max(WEIGHT_MAX)
+    .default(WEIGHT_UNSET)
+    .description(
+      `Code font weight (${WEIGHT_MIN}..${WEIGHT_MAX}, ${WEIGHT_UNSET} keeps DSH's own weights; independent of the body weight)`
     ),
 });
 

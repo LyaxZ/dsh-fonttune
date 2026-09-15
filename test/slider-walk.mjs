@@ -1,18 +1,18 @@
 /**
- * Drive the three number sliders (body size / code size / weight) in a real
- * browser and prove they do NOT rewrite settings per drag step:
+ * Drive the four number sliders (body size / body weight / code size / code
+ * weight) in a real browser and prove they do NOT rewrite settings per drag
+ * step:
  *
  *   node test/slider-walk.mjs <url-with-token>
  *
  * Steps:
  *   1. open Settings -> Plugins -> configurable -> expand the card
- *   2. fire several `input` events on the body size slider (a drag) — the host
- *      settings must stay untouched and the readout must show the pending value
+ *   2. fire several `input` events on each slider (a drag) — the host settings
+ *      must stay untouched and the readout must show the pending value
  *   3. dispatch `pointerup` on window — the value must land in the settings
- *   4. the same for the code size slider and the weight slider
- *   5. the namespace's original user layer is restored, so a walk never leaves
+ *   4. the namespace's original user layer is restored, so a walk never leaves
  *      the machine's own preferences changed
- *   6. no console errors
+ *   5. no console errors
  */
 import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -187,10 +187,40 @@ const main = async () => {
   console.log("host after release:", await readUser());
   console.log("size readout now:", await evalJs(`(document.querySelector(".dfp-sliderRow .dfp-value")?.textContent || "").trim()`));
 
-  // --- code slider (second row): the code axis commits on release too ---
-  console.log("code drag:", await evalJs(`(() => {
-    const input = [...document.querySelectorAll(".dfp-slider")][1];
-    if (!input) return "code slider not found";
+  // --- body weight (second row) ---
+  console.log("body weight drag to 420:", await evalJs(`(() => {
+    const inputs = [...document.querySelectorAll(".dfp-slider")];
+    const input = inputs[1];
+    if (!input) return "body weight slider not found";
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    setter.call(input, "430");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    setter.call(input, "420");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return "dragged, readout=" + (input.closest(".dfp-sliderRow").querySelector(".dfp-value").textContent || "").trim();
+  })()`));
+  await sleep(400);
+  console.log("host during body weight drag:", await readUser());
+  console.log("body weight release:", await evalJs(`(() => {
+    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    return "released";
+  })()`));
+  console.log("body weight readout samples:", await evalJs(`(async () => {
+    const row = document.querySelectorAll(".dfp-sliderRow")[1];
+    const samples = [];
+    for (let i = 0; i < 24; i += 1) {
+      samples.push((row.querySelector(".dfp-value").textContent || "").trim());
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    return JSON.stringify([...new Set(samples)]);
+  })()`));
+  await sleep(1200);
+  console.log("host after body weight release:", await readUser());
+
+  // --- code size (third row) ---
+  console.log("code size drag:", await evalJs(`(() => {
+    const input = [...document.querySelectorAll(".dfp-slider")][2];
+    if (!input) return "code size slider not found";
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
     const set = (v) => {
       setter.call(input, String(v));
@@ -200,44 +230,35 @@ const main = async () => {
     return "dragged, readout=" + (input.closest(".dfp-sliderRow").querySelector(".dfp-value").textContent || "").trim();
   })()`));
   await sleep(1200);
-  console.log("host during code drag:", await readUser());
-  console.log("code release:", await evalJs(`(() => {
+  console.log("host during code size drag:", await readUser());
+  console.log("code size release:", await evalJs(`(() => {
     window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
     return "released";
   })()`));
   await sleep(1400);
-  console.log("host after code release:", await readUser());
+  console.log("host after code size release:", await readUser());
   console.log("code css:", await readHost());
 
-  // --- weight slider (third row): a value other than 400 must land verbatim ---
-  console.log("weight drag to 420:", await evalJs(`(() => {
-    const inputs = [...document.querySelectorAll(".dfp-slider")];
-    const input = inputs[2];
-    if (!input) return "weight slider not found";
+  // --- code weight (fourth row) ---
+  console.log("code weight drag to 300:", await evalJs(`(() => {
+    const input = [...document.querySelectorAll(".dfp-slider")][3];
+    if (!input) return "code weight slider not found";
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-    setter.call(input, "430");
+    setter.call(input, "320");
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    setter.call(input, "420");
+    setter.call(input, "300");
     input.dispatchEvent(new Event("input", { bubbles: true }));
     return "dragged, readout=" + (input.closest(".dfp-sliderRow").querySelector(".dfp-value").textContent || "").trim();
   })()`));
   await sleep(400);
-  console.log("host during weight drag:", await readUser());
-  console.log("weight release:", await evalJs(`(() => {
+  console.log("host during code weight drag:", await readUser());
+  console.log("code weight release:", await evalJs(`(() => {
     window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
     return "released";
   })()`));
-  console.log("weight readout samples:", await evalJs(`(async () => {
-    const row = document.querySelectorAll(".dfp-sliderRow")[2];
-    const samples = [];
-    for (let i = 0; i < 24; i += 1) {
-      samples.push((row.querySelector(".dfp-value").textContent || "").trim());
-      await new Promise((r) => setTimeout(r, 30));
-    }
-    return JSON.stringify([...new Set(samples)]);
-  })()`));
-  await sleep(1200);
-  console.log("host after weight release:", await readUser());
+  await sleep(1400);
+  console.log("host after code weight release:", await readUser());
+  console.log("weight css:", await readHost());
 
   // --- leave the machine as it was found ---
   console.log("restore:", await restoreUser(originalUser));

@@ -214,7 +214,14 @@ function createScope(initial = {}) {
   const listeners = new Set();
   let snapshot = {
     status: "ready",
-    value: initial.value ?? { sans: "", mono: "", sizeOffset: 0, sizeOffsetCode: 0, weight: 0 },
+    value: initial.value ?? {
+      sans: "",
+      mono: "",
+      sizeOffset: 0,
+      sizeOffsetCode: 0,
+      weight: 0,
+      weightCode: 0,
+    },
     base: initial.value ?? {},
     user: initial.user ?? {},
     revision: 1,
@@ -675,11 +682,55 @@ await test("tokens that derive from others via var() are skipped", () => {
   assert.equal(css.includes("--dsw-font-markdown-h1-font-size:"), false);
 });
 
-await test("the weight rule writes the chosen integer verbatim", () => {
+await test("the body weight rule writes the chosen integer verbatim", () => {
   assert.match(shared.buildFontCss({ weight: 300 }), /body,body \*\{font-weight:300 !important\}/);
   assert.match(shared.buildFontCss({ weight: 520 }), /font-weight:520 !important/);
   assert.match(shared.buildFontCss({ weight: 590 }), /font-weight:590 !important/);
   assert.equal(shared.buildFontCss({ weight: 0 }), "");
+});
+
+await test("an unset code weight still keeps code out of the body weight", () => {
+  const css = shared.buildFontCss({ weight: 480 });
+  assert.match(css, /body,body \*\{font-weight:480 !important\}/);
+  // Without this, the blanket `body, body *` rule would pull code to 480 too.
+  assert.match(css, /font-weight:normal !important/);
+  assert.ok(
+    css.indexOf("font-weight:normal") > css.indexOf("font-weight:480"),
+    "the code rule must come after the body rule to win the specificity tie"
+  );
+});
+
+await test("the weight axes are independent in one stylesheet", () => {
+  const css = shared.buildFontCss({ weight: 560, weightCode: 320 });
+  assert.match(css, /body,body \*\{font-weight:560 !important\}/);
+  assert.match(css, /font-weight:320 !important/);
+  assert.equal(css.includes("font-weight:normal"), false);
+  // code only: nothing touches the body
+  const codeOnly = shared.buildFontCss({ weightCode: 600 });
+  assert.equal(codeOnly.includes("font-weight:normal"), false);
+  assert.match(codeOnly, /font-weight:600 !important/);
+  assert.equal(codeOnly.includes("body,body *{font-weight"), false);
+});
+
+await test("the code weight selector names the code surfaces", () => {
+  const selector = shared.CODE_SELECTOR;
+  for (const needle of ["pre", "code", "kbd", "samp", "var", "tt", "textarea"]) {
+    assert.ok(selector.includes(needle + ","), `${needle} must be covered`);
+    // the blanket body rule matches every element, so descendants are needed too
+    assert.ok(selector.includes(needle + " *"), `${needle} descendants must be covered`);
+  }
+  assert.ok(selector.includes(".cm-editor"));
+  assert.ok(selector.includes(".dfp-previewCode"), "the card's own code preview");
+  assert.ok(selector.includes('[class*="code" i]'), "tool code bodies are plain divs");
+  assert.ok(selector.includes('[class*="terminal" i]'), "the terminal output is a plain div");
+});
+
+await test("the code weight clamps like the body weight", () => {
+  assert.equal(shared.normalizeConfig({ weightCode: 100 }).weightCode, shared.WEIGHT_MIN);
+  assert.equal(shared.normalizeConfig({ weightCode: 900 }).weightCode, shared.WEIGHT_MAX);
+  assert.equal(shared.normalizeConfig({ weightCode: 0 }).weightCode, shared.WEIGHT_UNSET);
+  assert.equal(shared.normalizeConfig("nonsense").weightCode, shared.WEIGHT_UNSET);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ weightCode: 450 })), false);
 });
 
 await test("generic keywords are neither western nor CJK", () => {
@@ -843,11 +894,13 @@ await test("a configured base layer is rendered into the row", async () => {
     sizeOffset: 2,
     sizeOffsetCode: -2,
     weight: 500,
+    weightCode: 300,
   });
   const rows = [];
   host.table[0](rows);
   assert.match(rows[0].text, /body\{font-family:"Inter" !important\}/);
-  assert.match(rows[0].text, /font-weight:500 !important/);
+  assert.match(rows[0].text, /body,body \*\{font-weight:500 !important\}/);
+  assert.match(rows[0].text, /font-weight:300 !important/);
   assert.match(rows[0].text, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\)/);
   assert.match(rows[0].text, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 0\.875\)/);
 });
@@ -865,12 +918,15 @@ await test("the host schema accepts real stacks and refuses bad ones", async () 
   assert.throws(() => schema({ sizeOffsetCode: 99 }));
   assert.throws(() => schema({ sizeOffsetCode: -99 }));
   assert.throws(() => schema({ weight: 900 }));
+  assert.throws(() => schema({ weightCode: 900 }));
+  assert.throws(() => schema({ weightCode: -1 }));
   assert.throws(() => schema({ sans: "a;b{}" }), "a declaration-breaking stack must be refused");
   const defaults = schema({});
   assert.equal(defaults.sans, "");
   assert.equal(defaults.sizeOffset, 0);
   assert.equal(defaults.sizeOffsetCode, 0);
   assert.equal(defaults.weight, 0);
+  assert.equal(defaults.weightCode, 0);
 });
 
 section("browser half: the card and the applied stylesheet");
@@ -888,7 +944,14 @@ await test("registers the card under the settings namespace key", async () => {
 
 await test("applies the saved configuration to one style tag", async () => {
   const scope = createScope({
-    value: { sans: '"Inter"', mono: "", sizeOffset: 2, sizeOffsetCode: 1, weight: 500 },
+    value: {
+      sans: '"Inter"',
+      mono: "",
+      sizeOffset: 2,
+      sizeOffsetCode: 1,
+      weight: 500,
+      weightCode: 300,
+    },
     user: { sans: '"Inter"' },
   });
   resetDom();
@@ -897,7 +960,8 @@ await test("applies the saved configuration to one style tag", async () => {
   const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
   assert.ok(tag, "the plugin must inject its stylesheet");
   assert.match(tag.textContent, /body\{font-family:"Inter" !important\}/);
-  assert.match(tag.textContent, /font-weight:500 !important/);
+  assert.match(tag.textContent, /body,body \*\{font-weight:500 !important\}/);
+  assert.match(tag.textContent, /font-weight:300 !important/);
   assert.match(tag.textContent, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\)/);
   assert.match(tag.textContent, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 1\.0625\)/);
 });
@@ -974,8 +1038,22 @@ await test("a composition without a working locale service still renders copy", 
 
 await test("resetting every axis leaves no user-layer entry", async () => {
   const scope = createScope({
-    value: { sans: '"Inter"', mono: '"Mono"', sizeOffset: 3, sizeOffsetCode: 2, weight: 300 },
-    user: { sans: '"Inter"', mono: '"Mono"', sizeOffset: 3, sizeOffsetCode: 2, weight: 300 },
+    value: {
+      sans: '"Inter"',
+      mono: '"Mono"',
+      sizeOffset: 3,
+      sizeOffsetCode: 2,
+      weight: 300,
+      weightCode: 500,
+    },
+    user: {
+      sans: '"Inter"',
+      mono: '"Mono"',
+      sizeOffset: 3,
+      sizeOffsetCode: 2,
+      weight: 300,
+      weightCode: 500,
+    },
   });
   resetDom();
   const { ctx } = cardContext(scope);
@@ -985,6 +1063,7 @@ await test("resetting every axis leaves no user-layer entry", async () => {
   await scope.unset("sizeOffset");
   await scope.unset("sizeOffsetCode");
   await scope.unset("weight");
+  await scope.unset("weightCode");
   assert.deepEqual(scope.getSnapshot().user, {});
   const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
   await new Promise((resolve) => setTimeout(resolve, 0));
