@@ -1,16 +1,18 @@
 /**
- * Drive the two number sliders (size offset / weight) in a real browser and
- * prove they do NOT rewrite settings per drag step:
+ * Drive the three number sliders (body size / code size / weight) in a real
+ * browser and prove they do NOT rewrite settings per drag step:
  *
  *   node test/slider-walk.mjs <url-with-token>
  *
  * Steps:
  *   1. open Settings -> Plugins -> configurable -> expand the card
- *   2. fire several `input` events on the size slider (a drag) — the host
+ *   2. fire several `input` events on the body size slider (a drag) — the host
  *      settings must stay untouched and the readout must show the pending value
  *   3. dispatch `pointerup` on window — the value must land in the settings
- *   4. the same for the weight slider, ending on 400 which resets the axis
- *   5. no console errors
+ *   4. the same for the code size slider and the weight slider
+ *   5. the namespace's original user layer is restored, so a walk never leaves
+ *      the machine's own preferences changed
+ *   6. no console errors
  */
 import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -103,15 +105,16 @@ const main = async () => {
   await sleep(1800);
   await click(`(el) => /插件配置|Plugin configuration/.test(el.textContent || "")`);
   await sleep(1600);
-  await click(`(el) => (el.textContent || "").includes("字体增强") || (el.textContent || "").includes("Font plus")`);
+  await click(`(el) => (el.textContent || "").includes("字体增强") || (el.textContent || "").includes("Font tune")`);
   await sleep(1500);
 
   const readHost = () => evalJs(`(() => {
     const tags = [...document.querySelectorAll("style")].filter((s) => s.dataset.plugin === "dsh-fonttune");
     const css = tags.map((t) => t.textContent || "").join("\\n");
     const size = (css.match(/--dsh-content-font-size:[^;]+/) || [null])[0];
+    const code = (css.match(/--dsw-font-markdown-code-block:[^;]+/) || [null])[0];
     const weight = (css.match(/font-weight:[^;]+/) || [null])[0];
-    return JSON.stringify({ length: css.length, size: size, weight: weight });
+    return JSON.stringify({ length: css.length, size: size, code: code, weight: weight });
   })()`);
 
   const readUser = () => evalJs(`(async () => {
@@ -126,7 +129,27 @@ const main = async () => {
     return JSON.stringify(mine ? mine.user : "section not found");
   })()`);
 
-  console.log("start host:", await readUser());
+  /** Put the namespace's user layer back exactly as it was found. */
+  const restoreUser = (original) => evalJs(`(async () => {
+    const ops = [];
+    const original = ${JSON.stringify(original)};
+    for (const key of Object.keys(original)) ops.push({ op: "set", path: [key], value: original[key] });
+    for (const key of ["sans", "mono", "sizeOffset", "sizeOffsetCode", "weight"]) {
+      if (!Object.prototype.hasOwnProperty.call(original, key)) ops.push({ op: "unset", path: [key] });
+    }
+    const res = await fetch("/api/settings/mutate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "client-request", rpcId: "r" + Math.random(), method: "settings/mutate", payload: { args: { ns: "dsh-fonttune", ops: ops } } }),
+    });
+    const body = await res.json();
+    const value = body.result && body.result.value;
+    return JSON.stringify(value ? value.user : body);
+  })()`);
+
+  const startUser = await readUser();
+  console.log("start host:", startUser);
+  const originalUser = JSON.parse(startUser);
 
   // --- size slider: a "drag" of several input events, no pointerup yet ---
   console.log("size drag:", await evalJs(`(() => {
@@ -164,10 +187,32 @@ const main = async () => {
   console.log("host after release:", await readUser());
   console.log("size readout now:", await evalJs(`(document.querySelector(".dfp-sliderRow .dfp-value")?.textContent || "").trim()`));
 
-  // --- weight slider: a value other than 400 must land verbatim ---
+  // --- code slider (second row): the code axis commits on release too ---
+  console.log("code drag:", await evalJs(`(() => {
+    const input = [...document.querySelectorAll(".dfp-slider")][1];
+    if (!input) return "code slider not found";
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    const set = (v) => {
+      setter.call(input, String(v));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    set(2); set(3); set(4);
+    return "dragged, readout=" + (input.closest(".dfp-sliderRow").querySelector(".dfp-value").textContent || "").trim();
+  })()`));
+  await sleep(1200);
+  console.log("host during code drag:", await readUser());
+  console.log("code release:", await evalJs(`(() => {
+    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    return "released";
+  })()`));
+  await sleep(1400);
+  console.log("host after code release:", await readUser());
+  console.log("code css:", await readHost());
+
+  // --- weight slider (third row): a value other than 400 must land verbatim ---
   console.log("weight drag to 420:", await evalJs(`(() => {
     const inputs = [...document.querySelectorAll(".dfp-slider")];
-    const input = inputs[1];
+    const input = inputs[2];
     if (!input) return "weight slider not found";
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
     setter.call(input, "430");
@@ -183,7 +228,7 @@ const main = async () => {
     return "released";
   })()`));
   console.log("weight readout samples:", await evalJs(`(async () => {
-    const row = document.querySelectorAll(".dfp-sliderRow")[1];
+    const row = document.querySelectorAll(".dfp-sliderRow")[2];
     const samples = [];
     for (let i = 0; i < 24; i += 1) {
       samples.push((row.querySelector(".dfp-value").textContent || "").trim());
@@ -193,6 +238,11 @@ const main = async () => {
   })()`));
   await sleep(1200);
   console.log("host after weight release:", await readUser());
+
+  // --- leave the machine as it was found ---
+  console.log("restore:", await restoreUser(originalUser));
+  await sleep(800);
+  console.log("host after restore:", await readUser());
 
   console.log("== console ==");
   for (const line of consoleLines) console.log("  " + line);

@@ -2,6 +2,16 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.1.4] - 2026-09-15
+
+### Added
+- **Code font-size offset**: the size control is split into **two independent axes** — "Body font size offset" for text and interface sizes, and "Code font size offset" for code blocks and inline code only. The single slider used to scale both chains, so moving the body always dragged code along with it; now each moves on its own. The field is `sizeOffsetCode` (-3 ~ +6 px, 0 = leave alone), sitting next to the existing `sizeOffset`, whose meaning narrows to "body and interface text". After upgrading, an existing configuration leaves code at DSH's own sizes while body behaviour is unchanged.
+
+### Changed
+- **Card layout**: each size slider now sits under the font it resizes — body font → body size offset → code font → code size offset → weight. The two sliders are labelled separately ("Body font size offset" / "Code font size offset"), and the card description reads "Body and code fonts, a size offset for each, weight, and a West/CJK split".
+- **How the code chain is consumed**: DSH's markdown code tokens are `font` shorthands (`--dsw-font-markdown-code` / `-code-block` / `-code-block-small`, valued like `11px/19px <family>`), and the shorthands — not their `-font-size` parts — are what the shipped stylesheets actually read, so the code axis rewrites those too (size and line height scaled, family list kept verbatim) alongside the split parts. The embedded fallback map is corrected to rc.2's real values (it claimed 13px/20px) and gains the three shorthand names.
+- **Compatibility table** now lists 0.1.4 as the latest version.
+
 ## [0.1.3] - 2026-09-14
 
 ### Changed

@@ -37,6 +37,7 @@ var NAMESPACE = shared.NAMESPACE;
 var SANS_FIELD = shared.SANS_FIELD;
 var MONO_FIELD = shared.MONO_FIELD;
 var SIZE_FIELD = shared.SIZE_FIELD;
+var CODE_SIZE_FIELD = shared.CODE_SIZE_FIELD;
 var WEIGHT_FIELD = shared.WEIGHT_FIELD;
 var SIZE_MIN = shared.SIZE_MIN;
 var SIZE_MAX = shared.SIZE_MAX;
@@ -50,6 +51,7 @@ var PRESETS = shared.PRESETS;
 var buildFontCss = shared.buildFontCss;
 var formatStack = shared.formatStack;
 var isFontToken = shared.isFontToken;
+var isScaledToken = shared.isScaledToken;
 var normalizeConfig = shared.normalizeConfig;
 var parseStack = shared.parseStack;
 var quoteFamily = shared.quoteFamily;
@@ -86,7 +88,7 @@ var DICTS = {
   en: {
     "card.title": "Font tune",
     "card.description":
-      "Body and code fonts, a size offset, weight, and a West/CJK split",
+      "Body and code fonts, a size offset for each, weight, and a West/CJK split",
     "card.expand": "Expand",
     "card.collapse": "Collapse",
     "card.resetAll": "Reset all",
@@ -138,9 +140,12 @@ var DICTS = {
     "split.remove": "Remove {name}",
     "split.rest": "Other fallbacks (reorder them in Advanced): {names}",
 
-    "size.label": "Font size offset",
-    "size.hint":
-      "Adds {offset} to every size DSH uses, on top of its own font-size setting. 0 keeps DSH's sizes.",
+    "size.bodyLabel": "Body font size offset",
+    "size.bodyHint":
+      "Adds {offset} to text and interface sizes, on top of DSH's own font-size setting. 0 keeps DSH's sizes.",
+    "size.codeLabel": "Code font size offset",
+    "size.codeHint":
+      "Adds {offset} to code blocks and inline code only; the body offset does not reach them. 0 keeps DSH's sizes.",
     "size.unit": "px",
 
     "weight.label": "Font weight",
@@ -159,7 +164,7 @@ var DICTS = {
   },
   zh: {
     "card.title": "字体增强",
-    "card.description": "正文与代码字体、字号偏移、字重、中西文分栏",
+    "card.description": "正文与代码字体、各自的字号偏移、字重、中西文分栏",
     "card.expand": "展开",
     "card.collapse": "收起",
     "card.resetAll": "全部重置",
@@ -209,9 +214,12 @@ var DICTS = {
     "split.remove": "移除 {name}",
     "split.rest": "其余回退项（在高级模式中排序）：{names}",
 
-    "size.label": "字号偏移",
-    "size.hint":
-      "给 DSH 使用的每一档字号统一加 {offset}，与设置里的「字号大小」叠加；0 表示保持原样。",
+    "size.bodyLabel": "正文字号偏移",
+    "size.bodyHint":
+      "给正文与界面文字统一加 {offset}，与设置里的「字号大小」叠加；0 表示保持原样。",
+    "size.codeLabel": "代码字号偏移",
+    "size.codeHint":
+      "只作用于代码块与行内代码，与正文字号互不影响；0 表示保持原样。",
     "size.unit": "px",
 
     "weight.label": "字重",
@@ -387,7 +395,7 @@ function isOwnSheet(sheet) {
 }
 
 /**
- * Snapshot the typography tokens the size offset scales.
+ * Snapshot the typography tokens the size offsets scale.
  *
  * Three sources, in rising authority: the embedded fallback map (covers the
  * frame before DSH's runtime tokens exist), declarations read from the
@@ -396,6 +404,10 @@ function isOwnSheet(sheet) {
  * nowhere else). The computed style is deliberately NOT a source: after our
  * rule applies it reports the SCALED values, and feeding those back as bases
  * compounds the offset on every refresh.
+ *
+ * Code shorthands (`--dsw-font-markdown-code-block` and friends) are collected
+ * too: they are `font` values rather than `-font-size` tokens, and they are
+ * what the shipped stylesheets actually consume.
  *
  * @returns {Record<string, string>} token name to its untouched value.
  */
@@ -425,7 +437,7 @@ function readBaseTokens() {
         if (!style) continue;
         for (var propertyIndex = 0; propertyIndex < style.length; propertyIndex += 1) {
           var property = style[propertyIndex];
-          if (property.slice(0, 2) !== "--" || !isFontToken(property)) continue;
+          if (property.slice(0, 2) !== "--" || !isScaledToken(property)) continue;
           var declared = style.getPropertyValue(property).trim();
           if (declared !== "") out[property] = declared;
         }
@@ -446,7 +458,7 @@ function readBaseTokens() {
     }
     for (var inlineIndex = 0; inlineIndex < inline.length; inlineIndex += 1) {
       var inlineName = inline[inlineIndex];
-      if (inlineName.slice(0, 2) !== "--" || !isFontToken(inlineName)) continue;
+      if (inlineName.slice(0, 2) !== "--" || !isScaledToken(inlineName)) continue;
       var inlineValue = inline.getPropertyValue(inlineName).trim();
       if (inlineValue !== "") out[inlineName] = inlineValue;
     }
@@ -1406,8 +1418,47 @@ function FontCard(props) {
   };
 
   var offset = config[SIZE_FIELD];
+  var codeOffset = config[CODE_SIZE_FIELD];
   var weight = config[WEIGHT_FIELD];
   var offsetText = offset > 0 ? "+" + offset : String(offset);
+  var codeOffsetText = codeOffset > 0 ? "+" + codeOffset : String(codeOffset);
+
+  /**
+   * One size slider, rendered directly under the family it resizes.
+   * @param {object} props - field, label keys, current value and text.
+   * @returns {object} the field shell wrapping the slider.
+   */
+  var sizeField = function (props) {
+    return h(
+      FieldShell,
+      {
+        t: t,
+        label: t(props.labelKey),
+        hint: t(props.hintKey, { offset: props.text }),
+        overridden: overridden(props.field) && props.value !== 0,
+        disabled: !writable,
+        onReset: function () {
+          resetField(props.field);
+        },
+      },
+      h(NumberSlider, {
+        min: SIZE_MIN,
+        max: SIZE_MAX,
+        value: props.value,
+        disabled: !writable,
+        label: t(props.labelKey),
+        readout: props.text + " " + t("size.unit"),
+        minLabel: SIZE_MIN + " " + t("size.unit"),
+        maxLabel: "+" + SIZE_MAX + " " + t("size.unit"),
+        pendingText: function (value) {
+          return (value > 0 ? "+" + value : String(value)) + " " + t("size.unit");
+        },
+        onChange: function (value) {
+          setField(props.field, value);
+        },
+      })
+    );
+  };
 
   return h(
     "li",
@@ -1516,6 +1567,14 @@ function FontCard(props) {
             })
           ),
 
+          sizeField({
+            field: SIZE_FIELD,
+            labelKey: "size.bodyLabel",
+            hintKey: "size.bodyHint",
+            value: offset,
+            text: offsetText,
+          }),
+
           view === "simple"
             ? h(SimpleFamilyField, {
                 t: t,
@@ -1557,35 +1616,13 @@ function FontCard(props) {
             })
           ),
 
-          h(
-            FieldShell,
-            {
-              t: t,
-              label: t("size.label"),
-              hint: t("size.hint", { offset: offsetText }),
-              overridden: overridden(SIZE_FIELD) && offset !== 0,
-              disabled: !writable,
-              onReset: function () {
-                resetField(SIZE_FIELD);
-              },
-            },
-            h(NumberSlider, {
-              min: SIZE_MIN,
-              max: SIZE_MAX,
-              value: offset,
-              disabled: !writable,
-              label: t("size.label"),
-              readout: offsetText + " " + t("size.unit"),
-              minLabel: SIZE_MIN + " " + t("size.unit"),
-              maxLabel: "+" + SIZE_MAX + " " + t("size.unit"),
-              pendingText: function (value) {
-                return (value > 0 ? "+" + value : String(value)) + " " + t("size.unit");
-              },
-              onChange: function (value) {
-                setField(SIZE_FIELD, value);
-              },
-            })
-          ),
+          sizeField({
+            field: CODE_SIZE_FIELD,
+            labelKey: "size.codeLabel",
+            hintKey: "size.codeHint",
+            value: codeOffset,
+            text: codeOffsetText,
+          }),
 
           h(
             FieldShell,
@@ -1672,6 +1709,7 @@ function FontCard(props) {
                   resetField(SANS_FIELD);
                   resetField(MONO_FIELD);
                   resetField(SIZE_FIELD);
+                  resetField(CODE_SIZE_FIELD);
                   resetField(WEIGHT_FIELD);
                 },
               },

@@ -22,6 +22,7 @@ import shared from "./shared.cjs";
 
 const {
   buildFontCss,
+  CODE_SIZE_FIELD,
   FALLBACK_TOKENS,
   MONO_FIELD,
   NAMESPACE,
@@ -51,9 +52,9 @@ const MAX_STACK = 200;
  * The durable settings section.
  *
  * Every field defaults to "leave DSH alone": an empty stack injects no family
- * rule, a zero offset injects no size rule, and a zero weight injects no
- * weight rule. Installing the plugin therefore changes nothing until the user
- * asks for something.
+ * rule, a zero offset injects no size rule on either axis, and a zero weight
+ * injects no weight rule. Installing the plugin therefore changes nothing until
+ * the user asks for something.
  */
 export const Config = z.object({
   [SANS_FIELD]: z
@@ -74,7 +75,15 @@ export const Config = z.object({
     .max(SIZE_MAX)
     .default(0)
     .description(
-      `Global font-size offset in px (${SIZE_MIN}..${SIZE_MAX}, 0 keeps DSH's own sizes)`
+      `Body/UI font-size offset in px (${SIZE_MIN}..${SIZE_MAX}, 0 keeps DSH's own sizes)`
+    ),
+  [CODE_SIZE_FIELD]: z
+    .number()
+    .min(SIZE_MIN)
+    .max(SIZE_MAX)
+    .default(0)
+    .description(
+      `Code font-size offset in px (${SIZE_MIN}..${SIZE_MAX}, 0 keeps DSH's own sizes; independent of the body offset)`
     ),
   [WEIGHT_FIELD]: z
     .number()

@@ -214,7 +214,7 @@ function createScope(initial = {}) {
   const listeners = new Set();
   let snapshot = {
     status: "ready",
-    value: initial.value ?? { sans: "", mono: "", sizeOffset: 0, weight: 0 },
+    value: initial.value ?? { sans: "", mono: "", sizeOffset: 0, sizeOffsetCode: 0, weight: 0 },
     base: initial.value ?? {},
     user: initial.user ?? {},
     revision: 1,
@@ -460,18 +460,22 @@ await test("round-trips a stack through format and parse", () => {
 
 section("shared: configuration normalization");
 
-await test("clamps the size offset and the weight", () => {
+await test("clamps the size offsets and the weight", () => {
   assert.equal(shared.normalizeConfig({ sizeOffset: 99 }).sizeOffset, shared.SIZE_MAX);
   assert.equal(shared.normalizeConfig({ sizeOffset: -99 }).sizeOffset, shared.SIZE_MIN);
+  assert.equal(shared.normalizeConfig({ sizeOffsetCode: 99 }).sizeOffsetCode, shared.SIZE_MAX);
+  assert.equal(shared.normalizeConfig({ sizeOffsetCode: -99 }).sizeOffsetCode, shared.SIZE_MIN);
   assert.equal(shared.normalizeConfig({ weight: 100 }).weight, shared.WEIGHT_MIN);
   assert.equal(shared.normalizeConfig({ weight: 900 }).weight, shared.WEIGHT_MAX);
   assert.equal(shared.normalizeConfig({ weight: 0 }).weight, shared.WEIGHT_UNSET);
   assert.equal(shared.normalizeConfig("nonsense").sizeOffset, 0);
+  assert.equal(shared.normalizeConfig("nonsense").sizeOffsetCode, 0);
 });
 
 await test("an empty configuration is dormant", () => {
   assert.equal(shared.isDormant(shared.normalizeConfig({})), true);
   assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffset: 1 })), false);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffsetCode: -1 })), false);
 });
 
 await test("the scale is uniform and bounded", () => {
@@ -520,7 +524,7 @@ await test("an unset family overrides none of its variables", () => {
   assert.equal(sansOnly.includes("--dsw-font-family:"), true);
 });
 
-await test("the size offset scales tokens by one ratio", () => {
+await test("the body offset scales tokens by one ratio", () => {
   const css = shared.buildFontCss(
     { sizeOffset: 2 },
     { "--dsw-font-s-14-font-size": "14px", "--dsw-font-s-14-line-height": "24px" }
@@ -528,6 +532,61 @@ await test("the size offset scales tokens by one ratio", () => {
   assert.match(css, /--dsw-font-s-14-font-size:calc\(\(14px\) \* 1\.125\)/);
   assert.match(css, /--dsw-font-s-14-line-height:calc\(\(24px\) \* 1\.125\)/);
   assert.match(css, /^body,body \*\{/);
+});
+
+await test("the body offset leaves the code tokens to their own axis", () => {
+  const css = shared.buildFontCss(
+    { sizeOffset: 2 },
+    {
+      "--dsw-font-s-14-font-size": "14px",
+      "--dsw-font-markdown-code": "12px/19px var(--ds-font-family-code)",
+      "--dsw-font-markdown-code-block-small-font-size": "11px",
+    }
+  );
+  assert.match(css, /--dsw-font-s-14-font-size:calc\(\(14px\) \* 1\.125\)/);
+  assert.equal(
+    css.includes("--dsw-font-markdown-code"),
+    false,
+    "code answers to the code offset only"
+  );
+});
+
+await test("the code offset scales the code shorthand and its parts", () => {
+  const css = shared.buildFontCss(
+    { sizeOffsetCode: 2 },
+    {
+      "--dsw-font-s-14-font-size": "14px",
+      "--dsw-font-markdown-code-block-small": "11px/16px var(--ds-font-family-code)",
+      "--dsw-font-markdown-code-block-small-font-size": "11px",
+      "--dsw-font-markdown-code-block-small-line-height": "16px",
+    }
+  );
+  // The shorthand is what the shipped stylesheets consume (`font: var(…)`), so
+  // its size and line height must both ride the ratio and the family must not.
+  assert.match(
+    css,
+    /--dsw-font-markdown-code-block-small:calc\(\(11px\) \* 1\.125\)\/calc\(\(16px\) \* 1\.125\) var\(--ds-font-family-code\) !important/
+  );
+  assert.match(css, /--dsw-font-markdown-code-block-small-font-size:calc\(\(11px\) \* 1\.125\) !important/);
+  assert.match(css, /--dsw-font-markdown-code-block-small-line-height:calc\(\(16px\) \* 1\.125\) !important/);
+  assert.equal(
+    css.includes("--dsw-font-s-14-font-size:"),
+    false,
+    "the body axis stays out of the code rule"
+  );
+});
+
+await test("the two size axes are independent in one stylesheet", () => {
+  const base = {
+    "--dsh-content-font-size": "14px",
+    "--dsw-font-markdown-code-block": "11px/19px var(--ds-font-family-code)",
+  };
+  const up = shared.buildFontCss({ sizeOffset: 2, sizeOffsetCode: -2 }, base);
+  assert.match(up, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\)/);
+  assert.match(up, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 0\.875\)/);
+  const flipped = shared.buildFontCss({ sizeOffset: -2, sizeOffsetCode: 2 }, base);
+  assert.match(flipped, /--dsh-content-font-size:calc\(\(14px\) \* 0\.875\)/);
+  assert.match(flipped, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 1\.125\)/);
 });
 
 await test("the content size composes with DSH's own slider", () => {
@@ -545,6 +604,21 @@ await test("the embedded fallback map alone drives a real size rule", () => {
   assert.match(css, /--dsh-content-font-size-secondary:calc\(\(13px\) \* 1\.125\)/);
   assert.match(css, /--dsw-font-s-14-line-height:calc\(\(24px\) \* 1\.125\)/);
   assert.match(css, /--dsw-font-markdown-h1-font-size:calc\(\(21px\) \* 1\.125\)/);
+  assert.equal(
+    css.includes("--dsw-font-markdown-code"),
+    false,
+    "the fallback map's code tokens belong to the code axis"
+  );
+});
+
+await test("the fallback map sizes code through the code axis alone", () => {
+  const css = shared.buildFontCss({ sizeOffsetCode: 3 }, shared.FALLBACK_TOKENS);
+  assert.match(
+    css,
+    /--dsw-font-markdown-code-block-small:calc\(\(11px\) \* 1\.1875\)\/calc\(\(16px\) \* 1\.1875\) var\(--ds-font-family-code\) !important/
+  );
+  assert.match(css, /--dsw-font-markdown-code-font-size:calc\(\(12px\) \* 1\.1875\)/);
+  assert.equal(css.includes("--dsh-content-font-size:"), false, "the body axis stays dormant");
 });
 
 await test("only typography tokens are scaled", () => {
@@ -565,6 +639,24 @@ await test("only typography tokens are scaled", () => {
 
 await test("a size offset without tokens injects no size rule", () => {
   assert.equal(shared.buildFontCss({ sizeOffset: 3 }, {}), "");
+  assert.equal(shared.buildFontCss({ sizeOffsetCode: 3 }, {}), "");
+});
+
+await test("a value a ratio cannot multiply is left alone", () => {
+  // Defensive: the rewrite only fires on values a `calc()` may multiply, so a
+  // shape change in a future DSH cannot produce an invalid declaration.
+  const css = shared.buildFontCss(
+    { sizeOffsetCode: 2 },
+    { "--dsw-font-markdown-code": "12px", "--dsw-font-markdown-code-block": "unset" }
+  );
+  assert.match(css, /--dsw-font-markdown-code:calc\(\(12px\) \* 1\.125\) !important/);
+  assert.equal(css.includes("--dsw-font-markdown-code-block:"), false);
+  const body = shared.buildFontCss(
+    { sizeOffset: 2 },
+    { "--dsw-font-s-14-font-size": "unset", "--dsw-font-s-14-line-height": "24px" }
+  );
+  assert.equal(body.includes("--dsw-font-s-14-font-size:"), false);
+  assert.match(body, /--dsw-font-s-14-line-height:calc\(\(24px\) \* 1\.125\)/);
 });
 
 await test("tokens that derive from others via var() are skipped", () => {
@@ -721,11 +813,14 @@ await test("a hostile family name cannot escape the declaration", () => {
   assert.equal(css.includes("/*"), false, "no comment may be opened");
 });
 
-await test("the fallback token map covers both families of token", () => {
+await test("the fallback token map covers every scalable family", () => {
   assert.ok(shared.FALLBACK_TOKENS["--dsh-content-font-size"]);
   assert.ok(shared.FALLBACK_TOKENS["--dsw-font-s-14-font-size"]);
+  // The code axis is consumed through `font` shorthands, which the size-token
+  // pattern does not match — the map still has to carry them.
+  assert.ok(shared.FALLBACK_TOKENS["--dsw-font-markdown-code-block"]);
   for (const name of Object.keys(shared.FALLBACK_TOKENS)) {
-    assert.ok(shared.isFontToken(name), `${name} would never be scaled`);
+    assert.ok(shared.isScaledToken(name), `${name} would never be scaled`);
   }
 });
 
@@ -743,12 +838,18 @@ await test("registers the namespace and injects a style row", async () => {
 });
 
 await test("a configured base layer is rendered into the row", async () => {
-  const host = await loadHostHalf({ sans: '"Inter"', sizeOffset: 2, weight: 500 });
+  const host = await loadHostHalf({
+    sans: '"Inter"',
+    sizeOffset: 2,
+    sizeOffsetCode: -2,
+    weight: 500,
+  });
   const rows = [];
   host.table[0](rows);
   assert.match(rows[0].text, /body\{font-family:"Inter" !important\}/);
   assert.match(rows[0].text, /font-weight:500 !important/);
   assert.match(rows[0].text, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\)/);
+  assert.match(rows[0].text, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 0\.875\)/);
 });
 
 await test("the host schema accepts real stacks and refuses bad ones", async () => {
@@ -761,11 +862,14 @@ await test("the host schema accepts real stacks and refuses bad ones", async () 
   // the document another.
   assert.throws(() => schema({ sizeOffset: 99 }));
   assert.throws(() => schema({ sizeOffset: -99 }));
+  assert.throws(() => schema({ sizeOffsetCode: 99 }));
+  assert.throws(() => schema({ sizeOffsetCode: -99 }));
   assert.throws(() => schema({ weight: 900 }));
   assert.throws(() => schema({ sans: "a;b{}" }), "a declaration-breaking stack must be refused");
   const defaults = schema({});
   assert.equal(defaults.sans, "");
   assert.equal(defaults.sizeOffset, 0);
+  assert.equal(defaults.sizeOffsetCode, 0);
   assert.equal(defaults.weight, 0);
 });
 
@@ -784,7 +888,7 @@ await test("registers the card under the settings namespace key", async () => {
 
 await test("applies the saved configuration to one style tag", async () => {
   const scope = createScope({
-    value: { sans: '"Inter"', mono: "", sizeOffset: 2, weight: 500 },
+    value: { sans: '"Inter"', mono: "", sizeOffset: 2, sizeOffsetCode: 1, weight: 500 },
     user: { sans: '"Inter"' },
   });
   resetDom();
@@ -795,6 +899,7 @@ await test("applies the saved configuration to one style tag", async () => {
   assert.match(tag.textContent, /body\{font-family:"Inter" !important\}/);
   assert.match(tag.textContent, /font-weight:500 !important/);
   assert.match(tag.textContent, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\)/);
+  assert.match(tag.textContent, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 1\.0625\)/);
 });
 
 await test("the injected family rule survives the DSH token context", async () => {
@@ -869,8 +974,8 @@ await test("a composition without a working locale service still renders copy", 
 
 await test("resetting every axis leaves no user-layer entry", async () => {
   const scope = createScope({
-    value: { sans: '"Inter"', mono: '"Mono"', sizeOffset: 3, weight: 300 },
-    user: { sans: '"Inter"', mono: '"Mono"', sizeOffset: 3, weight: 300 },
+    value: { sans: '"Inter"', mono: '"Mono"', sizeOffset: 3, sizeOffsetCode: 2, weight: 300 },
+    user: { sans: '"Inter"', mono: '"Mono"', sizeOffset: 3, sizeOffsetCode: 2, weight: 300 },
   });
   resetDom();
   const { ctx } = cardContext(scope);
@@ -878,6 +983,7 @@ await test("resetting every axis leaves no user-layer entry", async () => {
   await scope.unset("sans");
   await scope.unset("mono");
   await scope.unset("sizeOffset");
+  await scope.unset("sizeOffsetCode");
   await scope.unset("weight");
   assert.deepEqual(scope.getSnapshot().user, {});
   const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');

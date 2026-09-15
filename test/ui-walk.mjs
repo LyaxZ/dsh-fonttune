@@ -113,7 +113,7 @@ const main = async () => {
   await sleep(1800);
 
   console.log("card check:", await evalJs(`(() => {
-    const hit = document.body.innerText.includes("字体增强") || document.body.innerText.includes("Font plus");
+    const hit = document.body.innerText.includes("字体增强") || document.body.innerText.includes("Font tune");
     const cards = [...document.querySelectorAll("li")].map(li => (li.querySelector("button")?.textContent || "").slice(0, 60)).filter(t => t.trim()).slice(0, 14);
     return JSON.stringify({ fontCardVisible: hit, cardTexts: cards });
   })()`));
@@ -132,10 +132,12 @@ const main = async () => {
     return JSON.stringify({
       sansRow: has("正文字体") || has("Body font"),
       monoRow: has("代码字体") || has("Code font"),
-      sizeRow: has("字号偏移") || has("Font size offset"),
+      bodySizeRow: has("正文字号偏移") || has("Body font size offset"),
+      codeSizeRow: has("代码字号偏移") || has("Code font size offset"),
       weightRow: has("字重") || has("Font weight"),
       preview: has("预览") || has("Preview"),
       sliders: document.querySelectorAll('input[type="range"]').length,
+      sliderLabels: [...document.querySelectorAll('input[type="range"]')].map((el) => el.getAttribute("aria-label")),
       chips: document.querySelectorAll(".dfp-chip").length,
       resetAll: has("全部重置") || has("Reset all")
     });

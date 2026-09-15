@@ -23,8 +23,11 @@ var SANS_FIELD = "sans";
 /** Field carrying the code CSS font-family stack (empty = leave DSH alone). */
 var MONO_FIELD = "mono";
 
-/** Field carrying the global font-size offset in px (0 = leave DSH alone). */
+/** Field carrying the body/UI font-size offset in px (0 = leave DSH alone). */
 var SIZE_FIELD = "sizeOffset";
+
+/** Field carrying the code font-size offset in px (0 = leave DSH alone). */
+var CODE_SIZE_FIELD = "sizeOffsetCode";
 
 /** Field carrying the global font weight (0 = leave DSH alone). */
 var WEIGHT_FIELD = "weight";
@@ -52,6 +55,7 @@ var DEFAULTS = {
   sans: "",
   mono: "",
   sizeOffset: 0,
+  sizeOffsetCode: 0,
   weight: WEIGHT_UNSET,
 };
 
@@ -137,13 +141,12 @@ var GENERIC_FAMILIES = [
  * Normalize a configuration-shaped object coming from the settings document,
  * a config layer, or a test fixture.
  * @param {unknown} value - candidate configuration.
- * @returns {{sans: string, mono: string, sizeOffset: number, weight: number}} the normalized config.
+ * @returns {{sans: string, mono: string, sizeOffset: number, sizeOffsetCode: number, weight: number}} the normalized config.
  */
 function normalizeConfig(value) {
   var source = value !== null && typeof value === "object" ? value : {};
-  var size = Number(source[SIZE_FIELD]);
-  if (!isFinite(size)) size = 0;
-  size = Math.round(Math.min(SIZE_MAX, Math.max(SIZE_MIN, size)));
+  var size = clampOffset(source[SIZE_FIELD]);
+  var codeSize = clampOffset(source[CODE_SIZE_FIELD]);
   var weight = Number(source[WEIGHT_FIELD]);
   if (!isFinite(weight)) weight = WEIGHT_UNSET;
   weight = Math.round(weight);
@@ -154,8 +157,20 @@ function normalizeConfig(value) {
   config[SANS_FIELD] = sanitize(source[SANS_FIELD]).slice(0, MAX_STACK_LENGTH);
   config[MONO_FIELD] = sanitize(source[MONO_FIELD]).slice(0, MAX_STACK_LENGTH);
   config[SIZE_FIELD] = size;
+  config[CODE_SIZE_FIELD] = codeSize;
   config[WEIGHT_FIELD] = weight;
   return config;
+}
+
+/**
+ * Clamp one size offset to the allowed range, with 0 for anything unusable.
+ * @param {unknown} value - candidate offset in px.
+ * @returns {number} the offset the stylesheet may use.
+ */
+function clampOffset(value) {
+  var size = Number(value);
+  if (!isFinite(size)) return 0;
+  return Math.round(Math.min(SIZE_MAX, Math.max(SIZE_MIN, size)));
 }
 
 /**
@@ -352,7 +367,7 @@ function scaleFor(sizeOffset, base) {
 
 /**
  * Whether a configuration asks for any change at all.
- * @param {{sans: string, mono: string, sizeOffset: number, weight: number}} config - normalized config.
+ * @param {{sans: string, mono: string, sizeOffset: number, sizeOffsetCode: number, weight: number}} config - normalized config.
  * @returns {boolean} true when nothing should be injected.
  */
 function isDormant(config) {
@@ -360,6 +375,7 @@ function isDormant(config) {
     config[SANS_FIELD] === "" &&
     config[MONO_FIELD] === "" &&
     config[SIZE_FIELD] === 0 &&
+    config[CODE_SIZE_FIELD] === 0 &&
     config[WEIGHT_FIELD] === WEIGHT_UNSET
   );
 }
@@ -375,13 +391,22 @@ function isDormant(config) {
  * would never inherit a plain `body` rule. The explicit `body` / `pre,code`
  * rules stay as a second path for elements that hardcode a family.
  *
- * The size offset rewrites DSH's own design tokens rather than every element:
+ * The size offsets rewrite DSH's own design tokens rather than every element:
  * a token whose name ends in `-font-size` or `-line-height` is re-declared as
  * itself multiplied by one scale factor. `baseTokens` supplies the untouched
  * values (read from the live document, falling back to the embedded map), so
  * the ratio composes with DSH's own font-size slider instead of replacing it.
  *
- * @param {{sans: string, mono: string, sizeOffset: number, weight: number}} config - normalized config.
+ * Body and code are two independent axes. Body sizes hang off the content-size
+ * chain (`--dsh-content-font-size` and the `--dsw-font-*` steps), while every
+ * markdown code token is a bare literal (`--dsw-font-markdown-code-block:
+ * 11px/19px …`) that the content chain never touches — so the code axis is the
+ * only thing that moves it, and the body axis deliberately leaves those tokens
+ * alone. Code sizing is consumed through the `font` SHORTHAND tokens (that is
+ * what the shipped stylesheets use), which is why those are re-declared too,
+ * not just their `-font-size` / `-line-height` parts.
+ *
+ * @param {{sans: string, mono: string, sizeOffset: number, sizeOffsetCode: number, weight: number}} config - normalized config.
  * @param {Record<string, string>} [baseTokens] - token name to untouched value.
  * @returns {string} declarations for one `<style>` element ("" when dormant).
  */
@@ -390,6 +415,7 @@ function buildFontCss(config, baseTokens) {
   var sans = formatStack(parseStack(normalized[SANS_FIELD]));
   var mono = formatStack(parseStack(normalized[MONO_FIELD]));
   var offset = normalized[SIZE_FIELD];
+  var codeOffset = normalized[CODE_SIZE_FIELD];
   var weight = normalized[WEIGHT_FIELD];
   if (isDormant(normalized)) return "";
   var declarations = [];
@@ -413,26 +439,15 @@ function buildFontCss(config, baseTokens) {
     );
   }
   if (offset !== 0) {
-    var scale = round(scaleFor(offset), 6);
-    var names = tokenNames(baseTokens);
-    var scaled = [];
-    for (var index = 0; index < names.length; index += 1) {
-      var name = names[index];
-      var base = baseTokens[name];
-      if (typeof base !== "string" || base === "") continue;
-      // A base that itself references another token via var() derives from it:
-      // scaling the var target already scales this one, so re-scaling here
-      // would compound (markdown-base = var(--dsh-content-font-size) would
-      // take the ratio twice). DSH's chain does the work instead.
-      if (base.indexOf("var(") !== -1) continue;
-      // !important: the theme writes `--dsh-content-font-size` INLINE on body,
-      // and an inline declaration outranks a plain stylesheet one — without
-      // the flag body itself would keep DSH's own size while every descendant
-      // scales, splitting the page in two.
-      scaled.push(name + ":calc((" + base + ") * " + scale + ") !important");
-    }
+    var scaled = scaleTokens(bodyTokenNames(baseTokens), baseTokens, round(scaleFor(offset), 6));
     if (scaled.length > 0) {
       declarations.push(bodyAndDescendants(scaled.join(";")));
+    }
+  }
+  if (codeOffset !== 0) {
+    var scaledCode = scaleCodeTokens(baseTokens, round(scaleFor(codeOffset), 6));
+    if (scaledCode.length > 0) {
+      declarations.push(bodyAndDescendants(scaledCode.join(";")));
     }
   }
   if (weight !== WEIGHT_UNSET) {
@@ -441,6 +456,109 @@ function buildFontCss(config, baseTokens) {
     declarations.push(bodyAndDescendants("font-weight:" + weight + " !important"));
   }
   return declarations.join("\n");
+}
+
+/**
+ * Values a ratio may multiply: a number with a unit, a bare number, or an
+ * expression. A keyword (`unset`, `inherit`) or an unrecognized shape is left
+ * alone instead of being wrapped into an invalid `calc()`.
+ */
+var SCALABLE_VALUE = /^(?:[+-]?(?:\d|\.\d)|calc\(|var\(|min\(|max\(|clamp\()/;
+
+/**
+ * Whether one token value can be multiplied by a scale factor.
+ * @param {string} value - the token's untouched value.
+ * @returns {boolean} true when `calc((value) * scale)` is meaningful.
+ */
+function isScalableValue(value) {
+  return typeof value === "string" && SCALABLE_VALUE.test(value.trim());
+}
+
+/**
+ * Scale one set of tokens by one ratio.
+ *
+ * A base that itself references another token via var() derives from it:
+ * scaling the var target already scales this one, so re-scaling here would
+ * compound (markdown-base = var(--dsh-content-font-size) would take the ratio
+ * twice). DSH's chain does the work instead.
+ *
+ * `!important` is required: the theme writes `--dsh-content-font-size` INLINE on
+ * body, and an inline declaration outranks a plain stylesheet one — without the
+ * flag body itself would keep DSH's own size while every descendant scales,
+ * splitting the page in two.
+ *
+ * @param {string[]} names - token names to re-declare.
+ * @param {Record<string, string>} baseTokens - token name to untouched value.
+ * @param {number} scale - the ratio to apply.
+ * @returns {string[]} declarations.
+ */
+function scaleTokens(names, baseTokens, scale) {
+  var out = [];
+  for (var index = 0; index < names.length; index += 1) {
+    var name = names[index];
+    var base = baseTokens[name];
+    if (typeof base !== "string" || base === "") continue;
+    if (base.indexOf("var(") !== -1) continue;
+    if (!isScalableValue(base)) continue;
+    out.push(name + ":calc((" + base + ") * " + scale + ") !important");
+  }
+  return out;
+}
+
+/**
+ * Re-declare the markdown code tokens at their own ratio.
+ *
+ * Two shapes exist and both must be covered, because the shipped stylesheets
+ * consume the shorthand (`font: var(--dsw-font-markdown-code-block-small)`)
+ * while the split tokens exist for anything that asks for a single part:
+ * `11px/19px <family>` and a bare `11px`.
+ *
+ * @param {Record<string, string>} baseTokens - token name to untouched value.
+ * @param {number} scale - the ratio to apply.
+ * @returns {string[]} declarations.
+ */
+function scaleCodeTokens(baseTokens, scale) {
+  var names = codeTokenNames(baseTokens);
+  var out = [];
+  for (var index = 0; index < names.length; index += 1) {
+    var name = names[index];
+    var base = baseTokens[name];
+    if (typeof base !== "string" || base === "") continue;
+    var shorthand = scaleFontShorthand(base, scale);
+    if (shorthand !== null) {
+      out.push(name + ":" + shorthand + " !important");
+      continue;
+    }
+    // A part token that derives from another token follows that token's own
+    // scaling; re-declaring it here would compound the ratio.
+    if (base.indexOf("var(") !== -1) continue;
+    if (!isScalableValue(base)) continue;
+    out.push(name + ":calc((" + base + ") * " + scale + ") !important");
+  }
+  return out;
+}
+
+/**
+ * Multiply the size and the line height inside one `font` shorthand value,
+ * leaving the family list (and anything else after it) untouched.
+ * @param {string} value - a value shaped like `11px/19px var(--ds-font-family-code)`.
+ * @param {number} scale - the ratio to apply.
+ * @returns {string|null} the scaled shorthand, or null when the shape differs.
+ */
+function scaleFontShorthand(value, scale) {
+  var slash = value.indexOf("/");
+  if (slash <= 0) return null;
+  var size = value.slice(0, slash).trim();
+  var rest = value.slice(slash + 1).trim();
+  var gap = rest.search(/\s/);
+  if (gap <= 0) return null;
+  var height = rest.slice(0, gap).trim();
+  var family = rest.slice(gap + 1).trim();
+  if (size === "" || height === "" || family === "") return null;
+  if (!isScalableValue(size) || !isScalableValue(height)) return null;
+  return (
+    "calc((" + size + ") * " + scale + ")/calc((" + height + ") * " + scale + ") " + family
+  );
 }
 
 /**
@@ -475,6 +593,30 @@ function isFontToken(name) {
 }
 
 /**
+ * Match DSH's markdown code tokens, which are their own sizing axis.
+ *
+ * The theme declares these as literals the content-size chain never reaches
+ * (`--dsw-font-markdown-code:12px/19px …`, `-code-block:11px/19px …`,
+ * `-code-block-small:11px/16px …`), and the shipped stylesheets consume them
+ * through the `font` shorthand. Everything with this prefix therefore belongs
+ * to the code offset and to nothing else.
+ * @param {string} name - custom property name including the leading dashes.
+ * @returns {boolean} true when the token sizes code.
+ */
+function isCodeToken(name) {
+  return typeof name === "string" && name.indexOf("--dsw-font-markdown-code") === 0;
+}
+
+/**
+ * Whether a token is one this plugin re-declares at all.
+ * @param {string} name - custom property name including the leading dashes.
+ * @returns {boolean} true for body sizes, body line heights and code tokens.
+ */
+function isScaledToken(name) {
+  return isFontToken(name) || isCodeToken(name);
+}
+
+/**
  * Ordered token names present in a base map, sizes before line heights so a
  * reader of the stylesheet sees each size next to its height.
  * @param {Record<string, string>} [baseTokens] - token name to value.
@@ -482,12 +624,34 @@ function isFontToken(name) {
  */
 function tokenNames(baseTokens) {
   if (baseTokens === null || typeof baseTokens !== "object") return [];
-  var names = Object.keys(baseTokens).filter(isFontToken);
+  var names = Object.keys(baseTokens).filter(isScaledToken);
   names.sort(function (left, right) {
     if (left.length !== right.length) return left.length - right.length;
     return left < right ? -1 : left > right ? 1 : 0;
   });
   return names;
+}
+
+/**
+ * The body/UI tokens: everything this plugin scales except the code family,
+ * which answers to its own offset.
+ * @param {Record<string, string>} [baseTokens] - token name to value.
+ * @returns {string[]} the names the body offset re-declares.
+ */
+function bodyTokenNames(baseTokens) {
+  return tokenNames(baseTokens).filter(function (name) {
+    return !isCodeToken(name);
+  });
+}
+
+/**
+ * The code tokens: the `font` shorthands plus their `-font-size` /
+ * `-line-height` parts, when the live stylesheets declare them.
+ * @param {Record<string, string>} [baseTokens] - token name to value.
+ * @returns {string[]} the names the code offset re-declares.
+ */
+function codeTokenNames(baseTokens) {
+  return tokenNames(baseTokens).filter(isCodeToken);
 }
 
 /**
@@ -537,12 +701,18 @@ var FALLBACK_TOKENS = {
   "--dsw-font-markdown-h3-line-height": "26px",
   "--dsw-font-markdown-h4-font-size": "15px",
   "--dsw-font-markdown-h4-line-height": "24px",
-  "--dsw-font-markdown-code-font-size": "13px",
-  "--dsw-font-markdown-code-line-height": "20px",
-  "--dsw-font-markdown-code-block-font-size": "13px",
-  "--dsw-font-markdown-code-block-line-height": "20px",
-  "--dsw-font-markdown-code-block-small-font-size": "12px",
-  "--dsw-font-markdown-code-block-small-line-height": "18px",
+  // The code family is consumed through the `font` shorthand, so the shorthand
+  // names matter more than their parts — both are listed, at rc.2's values.
+  "--dsw-font-markdown-code": "12px/19px var(--ds-font-family-code)",
+  "--dsw-font-markdown-code-font-size": "12px",
+  "--dsw-font-markdown-code-line-height": "19px",
+  "--dsw-font-markdown-code-block": "11px/19px var(--ds-font-family-code)",
+  "--dsw-font-markdown-code-block": "11px/19px var(--ds-font-family-code)",
+  "--dsw-font-markdown-code-block-font-size": "11px",
+  "--dsw-font-markdown-code-block-line-height": "19px",
+  "--dsw-font-markdown-code-block-small": "11px/16px var(--ds-font-family-code)",
+  "--dsw-font-markdown-code-block-small-font-size": "11px",
+  "--dsw-font-markdown-code-block-small-line-height": "16px",
   "--dsw-font-markdown-table-font-size": "13px",
   "--dsw-font-markdown-table-line-height": "22px",
   "--dsh-content-font-size": "14px",
@@ -629,6 +799,7 @@ var shared = {
   SANS_FIELD: SANS_FIELD,
   MONO_FIELD: MONO_FIELD,
   SIZE_FIELD: SIZE_FIELD,
+  CODE_SIZE_FIELD: CODE_SIZE_FIELD,
   WEIGHT_FIELD: WEIGHT_FIELD,
   SIZE_MIN: SIZE_MIN,
   SIZE_MAX: SIZE_MAX,
@@ -653,6 +824,11 @@ var shared = {
   isDormant: isDormant,
   buildFontCss: buildFontCss,
   isFontToken: isFontToken,
+  isCodeToken: isCodeToken,
+  isScaledToken: isScaledToken,
+  codeTokenNames: codeTokenNames,
+  bodyTokenNames: bodyTokenNames,
+  scaleFontShorthand: scaleFontShorthand,
   isGenericFamilyName: isGenericFamilyName,
   isCJKFamilyName: isCJKFamilyName,
   setWestEntry: setWestEntry,
