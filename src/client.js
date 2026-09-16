@@ -7,15 +7,16 @@
  * configuration by rewriting a single `<style>` element plus the official
  * `theme.overrideTokens` layer for the family variables.
  *
- * 0.2.0 shape: the card is an accordion — four sections (interface / dialog /
- * code / global fine-tuning), each collapsed to a title plus a summary of the
- * current values, at most one open at a time; an expanded section ends with an
- * inline preview of just that part. The preset bar sits under the edit mode: a
- * dropdown of the presets plus rename/import/export, and with a preset
- * selected every edit auto-saves into it. The dialog section leads with a
- * follow switch (on: an unset dialog axis uses the interface value). Light and
- * dark themes share one value set; the per-theme editor ships in a later
- * release.
+ * 0.2.x shape: the card is an accordion — four sections (conversation /
+ * interface / code / global fine-tuning), each collapsed to a title plus a
+ * summary of the current values, at most one open at a time; an expanded
+ * section ends with an inline preview of just that part. The preset bar sits
+ * under the edit mode: a dropdown of the presets plus rename/import/export, and
+ * with a preset selected every edit auto-saves into it. The conversation owns
+ * every axis; the interface's section leads with the follow switch — on (the
+ * default) it takes the conversation's family and weight and shows no controls
+ * of its own, off reveals its own family and weight. Light and dark themes share
+ * one value set; the per-theme editor ships in a later release.
  *
  * Module scope stays side-effect free: the loader materializes the factory
  * only when the plugin is first used, and everything that touches the document
@@ -43,6 +44,7 @@ var STACK_DIALOG_FIELD = shared.STACK_DIALOG_FIELD;
 var MONO_FIELD = shared.MONO_FIELD;
 var SIZE_DIALOG_FIELD = shared.SIZE_DIALOG_FIELD;
 var CODE_SIZE_FIELD = shared.CODE_SIZE_FIELD;
+var WEIGHT_FIELD = shared.WEIGHT_FIELD;
 var WEIGHT_DIALOG_FIELD = shared.WEIGHT_DIALOG_FIELD;
 var CODE_WEIGHT_FIELD = shared.CODE_WEIGHT_FIELD;
 var LINE_HEIGHT_DIALOG_FIELD = shared.LINE_HEIGHT_DIALOG_FIELD;
@@ -195,15 +197,18 @@ var DICTS = {
       "Adds {offset} to interface text sizes, on top of DSH's own font-size setting. 0 keeps DSH's sizes.",
     "size.dialogLabel": "Conversation font size offset",
     "size.dialogHint":
-      "Adds {offset} to the conversation text sizes, on top of DSH's own font-size setting; unset follows the interface offset.",
+      "Adds {offset} to the conversation text sizes, on top of DSH's own font-size setting. 0 keeps DSH's sizes.",
     "size.codeLabel": "Code font size offset",
     "size.codeHint":
       "Adds {offset} to code blocks and inline code only; the interface offset does not reach them. 0 keeps DSH's sizes.",
     "size.unit": "px",
 
+    "weight.uiLabel": "Interface font weight",
+    "weight.uiHint":
+      "Sets the weight of the whole interface (sidebars, settings, buttons, headings). The conversation keeps its own.",
     "weight.dialogLabel": "Conversation font weight",
     "weight.dialogHint":
-      "Overrides the weight of the conversation markdown; unset follows the interface weight.",
+      "Sets the weight of the conversation markdown; unset keeps DSH's own weights.",
     "weight.codeLabel": "Code font weight",
     "weight.codeHint":
       "Overrides code blocks, inline code and terminal output only. 400 or unset keeps DSH's own weight.",
@@ -213,7 +218,7 @@ var DICTS = {
       "Scales every interface line height by {ratio}. 100% keeps DSH's own line heights.",
     "line.dialogLabel": "Conversation line height",
     "line.dialogHint":
-      "Scales every conversation line height by {ratio}; unset follows the interface ratio.",
+      "Scales every conversation line height by {ratio}. 100% keeps DSH's own line heights.",
     "line.codeLabel": "Code line height",
     "line.codeHint":
       "Adds {offset} to code line heights only; 0 keeps DSH's own line heights.",
@@ -257,6 +262,7 @@ var DICTS = {
     "section.close": "Collapse {name}",
 
     "ui.follow": "Follows the conversation",
+    "ui.followHint": "Font and weight",
     "ui.own": "Own values",
     "dialog.default": "DSH defaults",
 
@@ -270,7 +276,7 @@ var DICTS = {
 
     "dialog.label": "Conversation font",
     "dialog.hint":
-      "Applies to the conversation markdown (paragraphs, tables, headings); code surfaces keep the code font. Empty follows the interface font.",
+      "Applies to the conversation markdown (paragraphs, tables, headings); code surfaces keep the code font.",
     "dialogWest.label": "Conversation · Western",
     "dialogEast.label": "Conversation · CJK",
 
@@ -371,14 +377,17 @@ var DICTS = {
       "给界面文字统一加 {offset}，与设置里的「字号大小」叠加；0 表示保持原样。",
     "size.dialogLabel": "对话字号偏移",
     "size.dialogHint":
-      "给对话文字统一加 {offset}，与设置里的「字号大小」叠加；未设置时跟随界面偏移。",
+      "给对话文字统一加 {offset}，与设置里的「字号大小」叠加；0 表示保持 DSH 原样。",
     "size.codeLabel": "代码字号偏移",
     "size.codeHint":
       "只作用于代码块与行内代码，与界面字号互不影响；0 表示保持原样。",
     "size.unit": "px",
 
+    "weight.uiLabel": "界面字重",
+    "weight.uiHint":
+      "设置整个界面的字重（侧栏、设置、按钮、标题）；对话 Markdown 不受影响。",
     "weight.dialogLabel": "对话字重",
-    "weight.dialogHint": "覆盖对话 Markdown 的粗细；未设置时跟随界面字重。",
+    "weight.dialogHint": "设置对话 Markdown 的粗细；未设置时保持 DSH 原本的粗细。",
     "weight.codeLabel": "代码字重",
     "weight.codeHint":
       "只覆盖代码块、行内代码与终端输出；400 或未设置表示保持 DSH 原样。",
@@ -386,7 +395,7 @@ var DICTS = {
     "line.bodyLabel": "界面行高",
     "line.bodyHint": "把界面行高整体缩放为 {ratio}；100% 表示保持原样。",
     "line.dialogLabel": "对话行高",
-    "line.dialogHint": "把对话行高整体缩放为 {ratio}；未设置时跟随界面比例。",
+    "line.dialogHint": "把对话行高整体缩放为 {ratio}；100% 表示保持 DSH 原样。",
     "line.codeLabel": "代码行高",
     "line.codeHint": "只给代码行高加 {offset}px；0 表示保持原样。",
     "line.unit": "%",
@@ -432,12 +441,13 @@ var DICTS = {
     "theme.mismatch": "当前页面是{active}主题，下方预览显示的是正在编辑的那套数值。",
 
     "ui.follow": "跟随对话设置",
+    "ui.followHint": "字体与字重",
     "ui.own": "独立数值",
     "dialog.default": "DSH 默认",
 
     "dialog.label": "对话字体",
     "dialog.hint":
-      "作用于会话里的 Markdown（段落、表格、标题）；代码表面仍用代码字体。留空表示跟随界面字体。",
+      "作用于会话里的 Markdown（段落、表格、标题）；代码表面仍用代码字体。",
     "dialogWest.label": "对话 · 西文字体",
     "dialogEast.label": "对话 · 中文字体",
 
@@ -772,6 +782,15 @@ function readBaseTokens() {
 
 /**
  * Create the writer that keeps one `<style>` element in sync.
+ *
+ * The host half renders the same declarations into the served index so the
+ * first frame is already correct, and that element carries this plugin's
+ * `data-plugin-css` stamp. This half ADOPTS it instead of appending a second
+ * copy: the served copy is only rebuilt on the next index render, so two
+ * elements could never stay in sync — a rule a configuration no longer
+ * produces (unset a weight, drop a size offset) would keep applying from the
+ * stale copy until the user reloaded the page.
+ *
  * @param {() => Record<string, string>} tokens - reads the current base tokens.
  * @returns {(config: unknown) => void} the applier.
  */
@@ -781,9 +800,13 @@ function createStylesheet(tokens) {
   return function apply(config) {
     if (typeof document === "undefined") return;
     var css = buildFontCss(config, tokens());
-    if (css === lastCss) return;
+    if (css === lastCss && tag !== null && tag.isConnected) return;
     lastCss = css;
-    if (tag === null) {
+    if (tag === null || !tag.isConnected) {
+      // The served row first (it is already in the document), then our own.
+      tag = document.querySelector('style[data-plugin-css="' + STYLE_TAG + '"]');
+    }
+    if (tag === null || !tag.isConnected) {
       tag = document.createElement("style");
       tag.dataset.plugin = "dsh-fonttune";
       tag.dataset.pluginCss = STYLE_TAG;
@@ -1928,6 +1951,7 @@ function sectionSummaries(axis, uiFollows, t) {
   if (!uiFollows) {
     var family = axis[SANS_FIELD] === "" ? null : firstFamily(axis[SANS_FIELD]);
     if (family !== null) uiParts.push(family);
+    if (axis[WEIGHT_FIELD] !== WEIGHT_UNSET) uiParts.push(String(axis[WEIGHT_FIELD]));
   }
   var codeParts = [];
   if (axis[MONO_FIELD] !== "") codeParts.push(firstFamily(axis[MONO_FIELD]));
@@ -1961,9 +1985,9 @@ function firstFamily(stack) {
  *
  * Structure: a top bar (edit mode), the preset bar (dropdown select +
  * rename/import/export — with a preset selected every edit auto-saves into
- * it), and four collapsed accordion sections — interface / conversation /
+ * it), and four collapsed accordion sections — conversation / interface /
  * code / global fine-tuning. Only one section is open at a time, so the card
- * never sprawls; the conversation section leads with a follow switch, and an
+ * never sprawls; the interface section leads with the follow switch, and an
  * expanded section ends with its own inline preview of just that part. Light
  * and dark themes share one value set (the per-theme editor ships in a later
  * release).
@@ -2780,7 +2804,7 @@ function FontCard(props) {
               h("div", { className: "dfp-previewCaption" }, t("preview.dialogCaption")),
               h(
                 "div",
-                { className: "dfp-previewText", style: previewDialogStyle },
+                { className: "dfp-previewText dfp-previewDialog", style: previewDialogStyle },
                 t("preview.sample")
               )
             )
@@ -2796,9 +2820,9 @@ function FontCard(props) {
                 setExpanded(expanded === "ui" ? null : "ui");
               },
             },
-            // The interface has two axes to give (family and weight), so it
-            // follows the conversation: while it does, only this row shows and
-            // both controls come from the conversation section above.
+            // The interface owns a family and a weight. While it follows the
+            // conversation both come from the section above and only this row
+            // shows; with the switch off its own two controls appear.
             h(
               "div",
               { className: "dfp-field" + (uiFollows ? " dfp-fieldLast" : "") },
@@ -2818,11 +2842,30 @@ function FontCard(props) {
                     ],
                     disabled: !writable,
                     onChange: function (next) {
-                      setField(UI_FOLLOWS_FIELD, next === "on");
+                      if (next === "on") {
+                        setField(UI_FOLLOWS_FIELD, true);
+                        return;
+                      }
+                      // Turning the switch off must not change what the page
+                      // shows: the interface keeps the values it was following,
+                      // written into its own two fields, and the sliders start
+                      // from there. An axis the conversation does not set
+                      // (empty family, unset weight) clears the interface's own
+                      // field instead, so it stays on DSH's defaults.
+                      if (editing[SANS_FIELD] === "") resetField(SANS_FIELD);
+                      else if (editing[SANS_FIELD] !== config[SANS_FIELD]) {
+                        setField(SANS_FIELD, editing[SANS_FIELD]);
+                      }
+                      if (editing[WEIGHT_FIELD] === WEIGHT_UNSET) resetField(WEIGHT_FIELD);
+                      else if (editing[WEIGHT_FIELD] !== config[WEIGHT_FIELD]) {
+                        setField(WEIGHT_FIELD, editing[WEIGHT_FIELD]);
+                      }
+                      setField(UI_FOLLOWS_FIELD, false);
                     },
                   })
                 )
-              )
+              ),
+              h("p", { className: "dfp-hint" }, t("ui.followHint"))
             ),
             uiFollows
               ? null
@@ -2832,6 +2875,14 @@ function FontCard(props) {
                   hintKey: "sans.hint",
                   westLabel: "sansWest.label",
                   eastLabel: "sansEast.label",
+                }),
+            uiFollows
+              ? null
+              : weightField({
+                  field: WEIGHT_FIELD,
+                  labelKey: "weight.uiLabel",
+                  hintKey: "weight.uiHint",
+                  value: editing[WEIGHT_FIELD],
                 }),
             h(
               "div",

@@ -236,7 +236,7 @@ function createScope(initial = {}) {
  * functions are rendered through the same hook runtime the card used.
  */
 function walk(node, runtime, out) {
-  out = out ?? { text: [], classes: [], tags: [] };
+  out = out ?? { text: [], classes: [], tags: [], props: [] };
   if (node === null || node === undefined || node === false || node === true) return out;
   if (typeof node === "string" || typeof node === "number") {
     out.text.push(String(node));
@@ -248,6 +248,9 @@ function walk(node, runtime, out) {
   }
   if (typeof node !== "object" || node.type === undefined) return out;
   if (typeof node.type === "function") {
+    if (node.props) {
+      (out.props ?? (out.props = [])).push({ tag: node.type.name || "component", props: node.props });
+    }
     runtime.rewind();
     walk(node.type(node.props ?? {}), runtime, out);
     return out;
@@ -255,6 +258,7 @@ function walk(node, runtime, out) {
   if (typeof node.type === "string") {
     out.tags.push(node.type);
     if (node.props && node.props.className) out.classes.push(node.props.className);
+    if (node.props) (out.props ?? (out.props = [])).push({ tag: node.type, props: node.props });
   }
   walk(node.children, runtime, out);
   return out;
@@ -405,7 +409,7 @@ await test("an expanded interface section leads with the follow row while follow
   // While following, the two axes it would own come from the conversation, so
   // their controls stay hidden.
   assert.equal(text.includes("sans.label"), false, "no interface family field while following");
-  assert.equal(text.includes("weight.bodyLabel"), false, "no interface weight slider while following");
+  assert.equal(text.includes("weight.uiLabel"), false, "no interface weight slider while following");
   assert.ok(text.includes("preview.sansCaption"), "the interface preview stays available");
   assert.ok(out.classes.includes("dfp-previewBox"), "an inline preview box renders");
   // The retired interface size and line-height axes must not come back.
@@ -424,10 +428,63 @@ await test("with the follow row off, the interface's own controls appear", async
   walk(card.component({ scope, t: (key) => key }), runtime, out);
   const text = out.text.join("\n");
   assert.ok(text.includes("sans.label"), "the interface family field renders");
-  assert.equal(text.includes("weight.bodyLabel"), false, "the retired interface weight is gone");
+  assert.ok(text.includes("weight.uiLabel"), "the interface weight slider renders");
   assert.ok(text.includes("preview.sansCaption"), "the interface preview renders");
   assert.equal(text.includes("preview.dialogCaption"), false, "the conversation preview stays closed");
   assert.equal(text.includes("preview.monoCaption"), false, "the code preview stays closed");
+  // The follow row says what it covers; the copy check for "follows the
+  // interface" lives in run.mjs, where the dictionaries are readable.
+  assert.ok(text.includes("ui.followHint"), "the follow row carries its scope hint");
+});
+
+await test("switching the follow switch off carries the values it was showing", async () => {
+  // The page is showing the conversation's family and weight through the
+  // interface; turning the switch off must not change that, and the interface's
+  // own fields must start from those values.
+  const scope = createScope({
+    value: {
+      stackDialog: "Inter",
+      weightDialog: 480,
+      uiFollowsDialog: true,
+    },
+  });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true); // card open
+  runtime.seed(2, "ui"); // expanded section id
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  const follow = out.props.find((entry) => entry.props.label === "ui.follow");
+  assert.ok(follow, "the follow control renders");
+  assert.equal(follow.props.value, "on");
+  follow.props.onChange("off");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const written = scope.getSnapshot().value;
+  assert.equal(written.uiFollowsDialog, false, "the switch is off");
+  assert.equal(written.sans, "Inter", "the family it was showing becomes its own");
+  assert.equal(written.weight, 480, "the weight it was showing becomes its own");
+});
+
+await test("an unset follow target leaves the interface on DSH's own values", async () => {
+  // Nothing in the conversation sets either axis, so switching off must clear
+  // the interface's own fields rather than pin them to a neutral number.
+  const scope = createScope({
+    value: { stackDialog: "", weightDialog: 0, uiFollowsDialog: true, sans: "", weight: 0 },
+  });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true);
+  runtime.seed(2, "ui");
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  out.props.find((entry) => entry.props.label === "ui.follow").props.onChange("off");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const snapshot = scope.getSnapshot();
+  assert.equal(snapshot.value.uiFollowsDialog, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(snapshot.user, "weight"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(snapshot.user, "sans"), false);
 });
 
 await test("an expanded dialog section shows all four of its axes", async () => {

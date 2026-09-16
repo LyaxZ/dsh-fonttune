@@ -10,13 +10,25 @@
  * configuration produces, and the sanitizing that keeps user-typed font names
  * from breaking out of the injected stylesheet.
  *
- * 0.2.0 shape: the axes are grouped into three SURFACES — interface (the UI
- * chrome), dialog (the conversation markdown) and code. Interface and dialog
- * each carry a family, a size offset, a weight and a line-height ratio; code
- * carries a family, a size offset, a weight, an additive line-height offset
- * and the ligature/feature controls. A dialog field left at its neutral value
- * (empty stack, 0, 100) FOLLOWS the interface value. `perTheme` enables a
- * second value set for the dark theme, stored as a sparse override map.
+ * 0.2.x shape: the axes are grouped into three SURFACES — interface (the UI
+ * chrome), dialog (the conversation markdown) and code. The CONVERSATION owns
+ * every axis: a family, a size offset, a weight and a line-height ratio. The
+ * interface owns a family and a weight, and by default FOLLOWS the conversation
+ * on both (the switch turns that off and reveals its own controls); DSH exposes
+ * no interface size or line-height hook at all, so those two axes are retired
+ * and the durable fields inject nothing. Code carries a family, a size offset,
+ * a weight, an additive line-height offset and the ligature/feature controls.
+ * `perTheme` enables a second value set for the dark theme, stored as a sparse
+ * override map.
+ *
+ * The interface weight is the one axis that has to reach the WHOLE page (DSH
+ * pins its labels with literal weights on class rules, so nothing narrower can
+ * move them), which is why it is a `body, body *` rule with an exclusion for
+ * the conversation markdown subtree: the conversation's own weight rule then
+ * owns that subtree completely and neither axis can disturb the other. That
+ * exclusion is what makes the axis safe — measured on a live page (computed
+ * styles, `test/weight-verify.mjs`): every text element outside the markdown
+ * subtree takes the weight, and not one element inside it moves.
  *
  * @module dsh-fonttune/shared
  */
@@ -32,7 +44,12 @@ var NAMESPACE = "dsh-fonttune";
 /** Field carrying the interface CSS font-family stack (empty = leave DSH). */
 var SANS_FIELD = "sans";
 
-/** Field carrying the dialog stack; empty = follow the interface. */
+/**
+ * Field carrying the dialog stack. The conversation owns the family: empty
+ * means DSH's own default family. A document written before 0.2.0 only has the
+ * interface family, so an empty dialog takes it (see `expandFollow`) — that is
+ * a migration bridge, not a live rule the card describes.
+ */
 var STACK_DIALOG_FIELD = "stackDialog";
 
 /** Field carrying the code CSS font-family stack (empty = leave DSH). */
@@ -41,16 +58,20 @@ var MONO_FIELD = "mono";
 /** Field carrying the interface font-size offset in px (0 = leave DSH alone). */
 var SIZE_FIELD = "sizeOffset";
 
-/** Field carrying the dialog font-size offset in px (0 = follow the interface). */
+/** Field carrying the dialog font-size offset in px (0 = DSH's own sizes). */
 var SIZE_DIALOG_FIELD = "sizeOffsetDialog";
 
 /** Field carrying the code font-size offset in px (0 = leave DSH alone). */
 var CODE_SIZE_FIELD = "sizeOffsetCode";
 
-/** Field carrying the interface font weight (0 = leave DSH alone). */
+/**
+ * Field carrying the interface font weight (0 = leave DSH alone). While the
+ * interface follows the conversation this is the fallback for a conversation
+ * that sets no weight of its own.
+ */
 var WEIGHT_FIELD = "weight";
 
-/** Field carrying the dialog font weight (0 = follow the interface). */
+/** Field carrying the dialog font weight (0 = DSH's own weights). */
 var WEIGHT_DIALOG_FIELD = "weightDialog";
 
 /** Field carrying the code font weight (0 = leave DSH alone). */
@@ -63,7 +84,7 @@ var CODE_WEIGHT_FIELD = "weightCode";
  */
 var LINE_HEIGHT_FIELD = "lineHeight";
 
-/** Field carrying the dialog line-height ratio in percent (100 = follow). */
+/** Field carrying the dialog line-height ratio in percent (100 = DSH's own). */
 var LINE_HEIGHT_DIALOG_FIELD = "lineHeightDialog";
 
 /** Field carrying the code line-height offset in px (0 = leave DSH alone). */
@@ -98,10 +119,10 @@ var ACTIVE_PRESET_FIELD = "activePreset";
 
 /**
  * Whether the INTERFACE follows the conversation. The conversation owns every
- * axis; the interface only has a family and a weight to give (DSH exposes no
+ * axis; the interface has a family and a weight of its own (DSH exposes no
  * interface size or line-height hook), so on — the default — the conversation's
- * family and weight win and the interface's own values stay as the fallback for
- * axes the conversation does not set.
+ * family and weight win and the interface's own values stand as the fallback
+ * for an axis the conversation does not set.
  */
 var UI_FOLLOWS_FIELD = "uiFollowsDialog";
 
@@ -1243,6 +1264,28 @@ var MARKDOWN_SELECTOR =
 var DARK_ATTR = "body[data-ds-dark-theme]";
 
 /**
+ * Everything the INTERFACE weight rule must stay out of.
+ *
+ * A weight can only be expressed as a `body, body *` rule: DSH pins its labels
+ * with literal weights on class rules (`…_label{font-weight:500}`,
+ * `…_heading{font-weight:600}`) that nothing narrower reaches. That rule would
+ * otherwise cover the conversation too, so the conversation markdown subtree is
+ * excluded here — and with it every code surface, because the code axis owns
+ * those and the two rules would otherwise fight over the same elements (the
+ * `:not()` arguments raise this rule's specificity above a single class).
+ *
+ * `dfp-previewDialog` is the card's conversation preview: it carries the
+ * conversation's own weight, so the interface rule must not flatten it. The
+ * interface's own preview stays inside the rule, and `dfp-previewCode` is a
+ * code surface like any other.
+ */
+var INTERFACE_EXCLUDES =
+  CODE_EXCLUDES +
+  ":not(.cm-editor):not(.cm-editor *):not(.dfp-previewCode):not(.dfp-previewCode *)" +
+  ':not([class*="_markdown_" i]):not([class*="_markdown_" i] *)' +
+  ":not(.dfp-previewDialog):not(.dfp-previewDialog *)";
+
+/**
  * Prefix every selector in a comma list, for the per-theme rules.
  * @param {string} selectorList - a comma-separated selector list.
  * @param {string} prefix - the prefix to prepend to each selector.
@@ -1262,10 +1305,17 @@ function prefixSelector(selectorList, prefix) {
  * ------------------------------------------------------------------ */
 
 /**
- * Expand the FOLLOW semantics over one normalized configuration: the interface
- * borrows the conversation's family (and an unset conversation family falls back
- * to the interface's own). The interface's size, line-height and weight axes are
- * retired and render nothing, so no other axis follows.
+ * Expand the FOLLOW semantics over one normalized configuration.
+ *
+ * The conversation owns every axis. Follow — the default — makes the interface
+ * take the conversation's family and weight, keeping its own value only for an
+ * axis the conversation leaves unset. Follow off leaves both of the interface's
+ * axes standing on their own; the conversation is never touched either way,
+ * because the interface's rules exclude the markdown subtree.
+ *
+ * The interface's size and line-height axes are retired and render nothing, so
+ * nothing follows for them (see `buildAxisCss` for the measurement).
+ *
  * @param {Record<string, unknown>} raw - a normalized configuration.
  * @returns {Record<string, unknown>} the set with the follow rule applied.
  */
@@ -1274,19 +1324,16 @@ function expandFollow(raw) {
   for (var field in raw) {
     if (Object.prototype.hasOwnProperty.call(raw, field)) out[field] = raw[field];
   }
-  // The conversation inherits the interface's FAMILY for as long as it does not
-  // set one itself. That is the whole of the old "follow" behaviour that is
-  // left: the interface's size, line height and weight axes are retired (DSH
-  // exposes no interface hook for the first two, and a body-wide weight rule
-  // cannot help but reach the conversation), so the conversation's own values
-  // are the only ones that render for them.
-  out[STACK_DIALOG_FIELD] = raw[STACK_DIALOG_FIELD] !== "" ? raw[STACK_DIALOG_FIELD] : raw[SANS_FIELD];
+  // Migration bridge, not a live rule: a document written before 0.2.0 carries
+  // the family on the interface only, so an empty conversation family takes it.
+  // The card never describes an empty field as "follows the interface".
+  out[STACK_DIALOG_FIELD] =
+    raw[STACK_DIALOG_FIELD] !== "" ? raw[STACK_DIALOG_FIELD] : raw[SANS_FIELD];
   out[WEIGHT_DIALOG_FIELD] = raw[WEIGHT_DIALOG_FIELD];
-  // The interface follows the conversation: the conversation's family wins
-  // whenever the conversation sets one, and the interface's own family stands as
-  // the fallback otherwise.
   if (raw[UI_FOLLOWS_FIELD] !== false) {
     out[SANS_FIELD] = out[STACK_DIALOG_FIELD];
+    out[WEIGHT_FIELD] =
+      raw[WEIGHT_DIALOG_FIELD] !== WEIGHT_UNSET ? raw[WEIGHT_DIALOG_FIELD] : raw[WEIGHT_FIELD];
   }
   return out;
 }
@@ -1339,14 +1386,16 @@ function isDormant(config) {
     }
   }
   return (
-    // The retired interface axes (size, line height, weight) are deliberately
-    // absent: a configuration that only sets them renders nothing, so it is
-    // dormant like an empty one.
+    // The retired interface size and line-height axes are deliberately absent:
+    // a configuration that only sets them renders nothing, so it is dormant like
+    // an empty one. The interface WEIGHT is not retired — it renders a blanket
+    // rule — so it counts.
     sanitize(axis[SANS_FIELD]) === "" &&
     sanitize(axis[STACK_DIALOG_FIELD]) === "" &&
     sanitize(axis[MONO_FIELD]) === "" &&
     clampOffset(axis[SIZE_DIALOG_FIELD]) === 0 &&
     clampOffset(axis[CODE_SIZE_FIELD]) === 0 &&
+    clampWeight(axis[WEIGHT_FIELD]) === WEIGHT_UNSET &&
     clampWeight(axis[WEIGHT_DIALOG_FIELD]) === WEIGHT_UNSET &&
     clampWeight(axis[CODE_WEIGHT_FIELD]) === WEIGHT_UNSET &&
     clampRatio(axis[LINE_HEIGHT_DIALOG_FIELD]) === LINE_HEIGHT_MIN &&
@@ -1380,8 +1429,14 @@ function buildAxisCss(axis, baseTokens, isDark) {
   var mono = formatStack(parseStack(axis[MONO_FIELD]));
   var declarations = [];
 
-  function blanket(declarations) {
-    var selector = isDark ? DARK_ATTR + "," + DARK_ATTR + " *" : "body,body *";
+  function blanket(declarations, excludes) {
+    // The exclusion reaches the descendants only: `body` itself inherits
+    // nothing, and neither the body element nor its dark attribute can be a
+    // markdown container or a code surface.
+    var suffix = excludes === undefined ? "" : excludes;
+    var selector = isDark
+      ? DARK_ATTR + "," + DARK_ATTR + " *" + suffix
+      : "body,body *" + suffix;
     return selector + "{" + declarations + "}";
   }
   function codeRule(declarations) {
@@ -1439,22 +1494,33 @@ function buildAxisCss(axis, baseTokens, isDark) {
   // literals inside their own CSS modules. There is therefore no interface
   // size or line-height hook: scaling the ladder from these fields moved
   // nothing a user could recognise as "interface", and scaling the content
-  // chain from them moved the conversation — the exact cross-talk this release
-  // removes. The durable fields stay in the schema (old documents keep
-  // parsing, presets keep round-tripping) but inject nothing at all.
-  //
-  // The interface axis that DOES work is kept above: the family (a page-wide
-  // `font-family` on body plus the theme variable) and the weight (a
-  // `body, body *` rule).
+  // chain from them moved the conversation. The durable fields stay in the
+  // schema (old documents keep parsing, presets keep round-tripping) but inject
+  // nothing at all. The interface axis that DOES work is the family (a
+  // page-wide `font-family` on body plus the theme variable) and the weight
+  // (below).
 
-  // ---- interface weight: RETIRED ----
-  // A weight is only expressible as a `body, body *` rule, which cannot help
-  // but reach the conversation's markdown (narrowing it off the markdown
-  // subtree is possible, but it would then also strip the theme's own heading
-  // weights). The conversation owns the weight axis instead: its rule is scoped
-  // to the markdown subtree, so it moves the conversation and nothing else.
-  // The durable field stays in the schema (old documents and presets keep
-  // parsing) but injects nothing.
+  // ---- interface weight ----
+  // Measured on rc.2 (live page, computed styles): a `body{font-weight}` rule
+  // only reaches the elements that INHERIT their weight, while `body, body *`
+  // also reaches the labels DSH pins with a literal weight on a class rule —
+  // which is why the axis has to be blanket, and why the rule without the
+  // markdown exclusion drags the conversation along with it. With the
+  // exclusion the interface still moves and the markdown subtree does not.
+  var interfaceWeight = axis[WEIGHT_FIELD];
+  var codeWeight = axis[CODE_WEIGHT_FIELD];
+  if (interfaceWeight !== WEIGHT_UNSET) {
+    declarations.push(
+      blanket("font-weight:" + interfaceWeight + " !important", INTERFACE_EXCLUDES)
+    );
+    if (codeWeight === WEIGHT_UNSET) {
+      // Code surfaces are excluded from the blanket rule, so without this they
+      // would inherit the interface weight from body. `normal` is what DSH
+      // computes for them (the code `font` shorthands carry no weight), so an
+      // unset code weight keeps code exactly as DSH shipped it.
+      declarations.push(codeRule("font-weight:normal !important"));
+    }
+  }
 
   // ---- dialog family (scoped; skipped when it equals the interface) ----
   var dialog = formatStack(parseStack(axis[STACK_DIALOG_FIELD]));
@@ -1466,10 +1532,18 @@ function buildAxisCss(axis, baseTokens, isDark) {
     }
   }
 
-  // ---- dialog weight (scoped; skipped when it equals the interface) ----
+  // ---- dialog weight (uniform inside the conversation) ----
   var dialogWeight = axis[WEIGHT_DIALOG_FIELD];
   if (dialogWeight !== WEIGHT_UNSET) {
     declarations.push(dialogRule("font-weight:" + dialogWeight + " !important"));
+    // The card's conversation preview simulates this surface, so it takes the
+    // same weight (and is excluded from the interface rule above).
+    declarations.push(
+      (isDark ? DARK_ATTR + " " : "") +
+        ".dfp-previewDialog{font-weight:" +
+        dialogWeight +
+        " !important}"
+    );
   }
 
   // ---- dialog size offset (additive, on the official content-size source) ----
@@ -1565,9 +1639,9 @@ function buildAxisCss(axis, baseTokens, isDark) {
     );
     if (codeScaled.length > 0) declarations.push(blanket(codeScaled.join(";")));
   }
-  var codeWeight = axis[CODE_WEIGHT_FIELD];
-  if (codeWeight !== WEIGHT_UNSET) {
-    declarations.push(codeRule("font-weight:" + codeWeight + " !important"));
+  var codeWeightRule = axis[CODE_WEIGHT_FIELD];
+  if (codeWeightRule !== WEIGHT_UNSET) {
+    declarations.push(codeRule("font-weight:" + codeWeightRule + " !important"));
   }
   var ligatures = axis[LIGATURES_FIELD];
   if (ligatures === LIGATURES_ON) {

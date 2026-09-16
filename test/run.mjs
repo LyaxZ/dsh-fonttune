@@ -110,6 +110,23 @@ class El {
     this.parentNode = null;
   }
 
+  /** An element is connected when its ancestor chain reaches head or body. */
+  get isConnected() {
+    let node = this;
+    while (node.parentNode !== null) node = node.parentNode;
+    return node.tagName === "HEAD" || node.tagName === "BODY" || node.tagName === "HTML";
+  }
+
+  /** Query this subtree, so a served row can be found the way the browser does. */
+  querySelector(selector) {
+    for (const child of this.children) {
+      if (child.matches(selector)) return child;
+      const found = child.querySelector(selector);
+      if (found) return found;
+    }
+    return null;
+  }
+
   /**
    * Match the element against the selector forms the plugin uses.
    * @param {string} selector - a tag or `tag[attr="value"]`.
@@ -485,8 +502,8 @@ await test("an empty configuration is dormant", () => {
   // dormant rather than counting as a change.
   assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffset: 1 })), true);
   assert.equal(shared.isDormant(shared.normalizeConfig({ lineHeight: 130 })), true);
-  assert.equal(shared.isDormant(shared.normalizeConfig({ weight: 480 })), true);
   // The axes that do render are not dormant.
+  assert.equal(shared.isDormant(shared.normalizeConfig({ weight: 480 })), false);
   assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffsetCode: -1 })), false);
   assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffsetDialog: 1 })), false);
   assert.equal(shared.isDormant(shared.normalizeConfig({ weightDialog: 480 })), false);
@@ -726,9 +743,74 @@ await test("the conversation weight is written verbatim inside the dialog scope"
   assert.ok(css.includes('[class*="_markdown_" i]'), "the rule is markdown-scoped");
   assert.ok(css.includes("font-weight:300 !important"));
   assert.ok(shared.buildFontCss({ weightDialog: 520 }).includes("font-weight:520 !important"));
-  // The retired interface weight injects nothing at all.
-  assert.equal(shared.buildFontCss({ weight: 480 }), "");
-  assert.equal(shared.buildFontCss({ weight: 300 }), "");
+  // The card's conversation preview simulates the same surface.
+  assert.ok(css.includes(".dfp-previewDialog{font-weight:300 !important}"));
+});
+
+await test("the interface weight is one blanket rule that skips the conversation", () => {
+  const css = shared.buildFontCss({ weight: 480, uiFollowsDialog: false });
+  assert.ok(css.includes("font-weight:480 !important"), "the weight is written");
+  assert.ok(css.includes("body,body *:not("), "it reaches every element");
+  // The conversation subtree is what makes the two axes independent.
+  assert.ok(css.includes(':not([class*="_markdown_" i])'), "the markdown container is excluded");
+  assert.ok(css.includes(':not([class*="_markdown_" i] *)'), "its descendants are excluded too");
+  assert.ok(css.includes(":not(.cm-editor)"), "code surfaces stay on the code axis");
+  assert.ok(css.includes(":not(.dfp-previewCode)"), "the code preview stays on the code axis");
+  assert.ok(css.includes(":not(.dfp-previewDialog)"), "the conversation preview is not flattened");
+});
+
+await test("an interface weight takes code back out when the code axis is unset", () => {
+  const css = shared.buildFontCss({ weight: 480, uiFollowsDialog: false });
+  assert.ok(
+    css.includes("{font-weight:normal !important}"),
+    "code surfaces are excluded from the blanket, so they need their own reset"
+  );
+  assert.ok(shared.CODE_SELECTOR.split(",").every((selector) => css.includes(selector)));
+  // With a code weight of its own the reset is skipped: the axis rule stands.
+  const both = shared.buildFontCss({ weight: 480, weightCode: 450, uiFollowsDialog: false });
+  assert.equal(both.includes("{font-weight:normal !important}"), false);
+  assert.ok(both.includes("font-weight:450 !important"));
+});
+
+await test("following hands the conversation's family and weight to the interface", () => {
+  const following = shared.resolveAxes({ stackDialog: "Inter", weightDialog: 480 });
+  assert.equal(following.light.sans, "Inter", "the family follows");
+  assert.equal(following.light.weight, 480, "the weight follows");
+  // Off: the interface keeps its own two axes and the conversation keeps its own.
+  const independent = shared.resolveAxes({
+    stackDialog: "Inter",
+    weightDialog: 480,
+    sans: "Georgia",
+    weight: 380,
+    uiFollowsDialog: false,
+  });
+  assert.equal(independent.light.sans, "Georgia");
+  assert.equal(independent.light.weight, 380);
+  assert.equal(independent.light.stackDialog, "Inter");
+  assert.equal(independent.light.weightDialog, 480);
+  // Following only where the conversation sets a value.
+  const fallback = shared.resolveAxes({ weight: 380 });
+  assert.equal(fallback.light.weight, 380, "the interface's own weight stands as the fallback");
+});
+
+await test("the interface and conversation weights never share a rule", () => {
+  const light = shared.buildAxisCss(
+    shared.resolveAxes({ weight: 380, weightDialog: 520, uiFollowsDialog: false }).light,
+    {},
+    false
+  );
+  const interfaceRule = light
+    .split("\n")
+    .find((rule) => rule.includes(":not([class*=\"_markdown_\" i])"));
+  const dialogRule = light.split("\n").find((rule) => rule.startsWith('[class*="_markdown_" i]'));
+  assert.ok(interfaceRule.includes("font-weight:380 !important"));
+  assert.equal(interfaceRule.includes("520"), false);
+  assert.ok(dialogRule.includes("font-weight:520 !important"));
+  assert.equal(dialogRule.includes("380"), false);
+  // Dark gets the same pair, prefixed with the theme attribute.
+  const dark = shared.buildAxisCss({ weight: 380, weightDialog: 520 }, {}, true);
+  assert.ok(dark.includes("body[data-ds-dark-theme] *:not("));
+  assert.ok(dark.includes("font-weight:380 !important"));
 });
 
 await test("an unset code weight injects nothing of its own", () => {
@@ -739,15 +821,27 @@ await test("an unset code weight injects nothing of its own", () => {
 });
 
 await test("the conversation and code weight axes are independent", () => {
-  const css = shared.buildFontCss({ weightDialog: 560, weightCode: 320, weight: 700 });
+  // Following is the default, so the conversation's weight is the one the
+  // interface carries: the interface's own 580 is overridden, not added.
+  const css = shared.buildFontCss({ weightDialog: 560, weightCode: 320, weight: 580 });
   assert.ok(css.includes('[class*="_markdown_" i]'), "the conversation rule is scoped");
   assert.ok(css.includes("font-weight:560 !important"));
   assert.ok(css.includes("font-weight:320 !important"));
-  assert.equal(
-    css.includes("font-weight:700 !important"),
-    false,
-    "the retired interface weight is inert"
+  assert.equal(css.includes("font-weight:580 !important"), false, "follow wins");
+  assert.ok(
+    css.includes(':not([class*="_markdown_" i])'),
+    "and the interface rule is the one carrying the exclusion"
   );
+  // With follow off, all three axes render their own value.
+  const own = shared.buildFontCss({
+    weightDialog: 560,
+    weightCode: 320,
+    weight: 580,
+    uiFollowsDialog: false,
+  });
+  for (const value of [560, 320, 580]) {
+    assert.ok(own.includes(`font-weight:${value} !important`), `${value} must render`);
+  }
   // code only: nothing touches the conversation
   const codeOnly = shared.buildFontCss({ weightCode: 600 });
   assert.match(codeOnly, /font-weight:600 !important/);
@@ -919,15 +1013,22 @@ await test("the fallback token map covers every scalable family", () => {
 
 section("host half: settings section and index injection");
 
-await test("registers the namespace and injects a style row", async () => {
+await test("registers the namespace and injects the first-frame style row", async () => {
   const host = await loadHostHalf(undefined);
   assert.equal(host.section.namespace, "dsh-fonttune");
   assert.equal(host.table.length, 1);
   const rows = [];
   host.table[0](rows);
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].kind, "style");
-  assert.equal(rows[0].text, "");
+  // An `html` row, not a `style` row: the served element has to carry the same
+  // stamp the browser half writes, so the browser half can adopt it instead of
+  // appending a second copy that could never be kept in sync.
+  assert.equal(rows[0].kind, "html");
+  assert.equal(rows[0].placement, "head");
+  assert.equal(
+    rows[0].html,
+    '<style data-plugin="dsh-fonttune" data-plugin-css="dsh-fonttune"></style>'
+  );
 });
 
 await test("a configured base layer is rendered into the row", async () => {
@@ -941,20 +1042,26 @@ await test("a configured base layer is rendered into the row", async () => {
   });
   const rows = [];
   host.table[0](rows);
-  assert.match(rows[0].text, /body\{font-family:"Inter" !important\}/);
-  assert.ok(rows[0].text.includes("font-weight:460 !important"), "the conversation weight renders");
-  assert.match(rows[0].text, /font-weight:300 !important/);
+  const html = rows[0].html;
+  assert.ok(html.startsWith('<style data-plugin="dsh-fonttune" data-plugin-css="dsh-fonttune">'));
+  assert.ok(html.endsWith("</style>"));
+  assert.match(html, /body\{font-family:"Inter" !important\}/);
+  // Following is the default, so the interface carries the conversation's 460.
+  assert.ok(html.includes("font-weight:460 !important"), "the conversation weight renders");
   assert.equal(
-    rows[0].text.includes("font-weight:500 !important"),
+    html.includes("font-weight:500 !important"),
     false,
-    "the retired interface weight renders nothing"
+    "the interface's own 500 is overridden while following"
   );
-  assert.match(rows[0].text, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 0\.875\)/);
+  assert.match(html, /font-weight:300 !important/);
+  assert.match(html, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 0\.875\)/);
   assert.equal(
-    rows[0].text.includes("--dsw-font-s-14-font-size:"),
+    html.includes("--dsw-font-s-14-font-size:"),
     false,
     "the retired interface size axis injects nothing into the row"
   );
+  // The interface weight rule is the one that carries the markdown exclusion.
+  assert.ok(html.includes(':not([class*="_markdown_" i])'));
 });
 
 await test("the host schema accepts real stacks and refuses bad ones", async () => {
@@ -1050,6 +1157,57 @@ await test("a live Host change reaches the page", async () => {
   scope.publish({ value: { sans: '"Inter"', mono: "", sizeOffset: 0, weight: 0 } });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.match(tag().textContent, /font-family:"Inter"/);
+});
+
+await test("the browser half adopts the served first-frame stylesheet", async () => {
+  const scope = createScope({
+    value: { sans: '"Inter"', sizeOffset: 0, weightDialog: 0, weight: 0 },
+  });
+  resetDom();
+  // Stand in for the host row the served index carries: same stamp, and a rule
+  // the current settings no longer produce (the interface weight of a config
+  // that was following when the page was rendered).
+  const served = globalThis.document.createElement("style");
+  served.dataset.plugin = "dsh-fonttune";
+  served.dataset.pluginCss = "dsh-fonttune";
+  served.textContent = "body,body *{font-weight:480 !important}";
+  globalThis.document.head.append(served);
+  const { ctx } = cardContext(scope);
+  await loadClientBundle(ctx);
+  const tags = [];
+  const collect = (node) => {
+    for (const child of node.children) {
+      if (child.tagName === "STYLE" && child.dataset.pluginCss === "dsh-fonttune") tags.push(child);
+      collect(child);
+    }
+  };
+  collect(globalThis.document.head);
+  assert.equal(tags.length, 1, "one element, not a second copy beside the served row");
+  assert.equal(tags[0], served, "the served element is the one that gets rewritten");
+  assert.equal(
+    tags[0].textContent.includes("font-weight"),
+    false,
+    "the stale first-frame rule must not survive the browser half's first apply"
+  );
+  assert.match(tags[0].textContent, /body\{font-family:"Inter" !important\}/);
+});
+
+await test("dropping a rule actually removes it from the page", async () => {
+  const scope = createScope({ value: { weight: 480, uiFollowsDialog: false } });
+  resetDom();
+  const { ctx } = cardContext(scope);
+  await loadClientBundle(ctx);
+  const tag = () => globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
+  assert.ok(tag().textContent.includes("font-weight:480 !important"));
+  // The user resets the interface weight: with the two-copy layout this is the
+  // exact case that used to keep applying the old value until a reload.
+  scope.publish({ value: { weight: 0, uiFollowsDialog: false } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    tag().textContent.includes("font-weight:480 !important"),
+    false,
+    "the reset must empty the injected rule"
+  );
 });
 
 await test("the card exposes its scope and a working translate seat", async () => {
@@ -1197,6 +1355,23 @@ await test("both dictionaries carry the same keys, and every rendered key exists
   for (const key of used) {
     assert.ok(en.includes(key), `en is missing "${key}"`);
     assert.ok(zh.includes(key), `zh is missing "${key}"`);
+  }
+  // No conversation field may claim to follow the interface: the follow
+  // direction is one-way (the interface follows the conversation).
+  for (const locale of ["en", "zh"]) {
+    const start = source.indexOf(`\n  ${locale}: {`);
+    const end = source.indexOf("\n  },", start);
+    const block = source.slice(start, end);
+    for (const key of ["size.dialogHint", "weight.dialogHint", "line.dialogHint", "dialog.hint"]) {
+      const at = block.indexOf(`"${key}"`);
+      assert.ok(at > 0, `${locale} is missing "${key}"`);
+      const copy = block.slice(at, block.indexOf("\n", at));
+      assert.equal(
+        /跟随界面|follows the interface/i.test(copy),
+        false,
+        `${locale} "${key}" must not claim to follow the interface`
+      );
+    }
   }
 });
 
