@@ -1,16 +1,21 @@
 /**
  * Keep the awesome-dsh-plugin entry in sync and open the listing PR.
  *
- *   node test/market-pr.mjs update    # rebuild the branch on upstream main and push the entry
  *   node test/market-pr.mjs status    # report repo age / existing PR / branch diff
+ *   node test/market-pr.mjs update    # rebuild the branch on upstream main and push the entry
+ *   node test/market-pr.mjs refresh   # rewrite an already-open PR's title and body
+ *   node test/market-pr.mjs reopen    # put back a PR upstream closed (empty diff window)
  *   node test/market-pr.mjs open      # sync, then open the PR once upstream CI's
  *                                     # "repository is at least one day old"
  *                                     # prerequisite is satisfied
+ *   node test/market-pr.mjs about     # write the repository About line and topics
  *
  * The entry lives at `data/plugins/<owner>__<repo>.yml` in the upstream repo
  * and is a single-file contribution: whatever `description` says there is what
  * the market shows, so it has to be re-pushed when the plugin's description
- * changes. `update` force-resets the branch to upstream `main` first, so the
+ * changes. The same prose also lives in the PR title/body and in the
+ * repository's About line — three independent copies, so `about` writes the
+ * third one from the same constants `update`/`refresh` push. `update` force-resets the branch to upstream `main` first, so the
  * result is always "current main + exactly one added file" — a branch that has
  * been sitting around would otherwise drift hundreds of commits behind. The
  * token comes from git's credential helper (this machine's GitHub login);
@@ -29,9 +34,36 @@ name: LyaxZ/dsh-fonttune
 category: ui
 tarball: https://github.com/LyaxZ/dsh-fonttune/releases/latest/download/dsh-fonttune.tgz
 description:
-  en: 'Font plugin for the DeepSeek Harness Web GUI: body and code font families, a separate font-size offset for each, a global font weight, and a West/CJK split picker.'
-  zh: 'DeepSeek Harness 字体插件：正文/代码字体族、正文与代码各自的字号偏移、字重，以及西文/中文分栏选择。'
+  en: 'Font plugin for the DeepSeek Harness Web GUI: the conversation gets its own font, size, line height and weight, the interface font follows the conversation, code keeps its own axis with ligature control, and whole setups save as presets.'
+  zh: 'DeepSeek Harness 字体插件：对话拥有字体、字号、行高与字重，界面字体默认跟随对话，代码独立成轴并支持连字，整套配置可存为预设方案。'
 `;
+
+const PR_TITLE = "Add dsh-fonttune: typography for the conversation, the interface and code";
+
+const PR_BODY = [
+  "Adds one plugin entry, `data/plugins/LyaxZ__dsh-fonttune.yml`, and touches nothing else.",
+  "",
+  "**dsh-fonttune** — a font plugin for the DeepSeek Harness Web GUI: the conversation gets",
+  "its own font, size, line height and weight, the interface font follows the conversation,",
+  "code keeps its own axis with ligature control, and whole setups can be saved as presets.",
+  "Host + client halves, zero-dependency build, MIT.",
+  "",
+  "Repository: https://github.com/LyaxZ/dsh-fonttune",
+].join("\n");
+
+/** The repository About line — the third copy of the listing prose. */
+const ABOUT =
+  "DeepSeek Harness 字体插件：对话可独立设置字体、字号、行高与字重，界面字体默认跟随对话，代码独立成轴并支持连字，整套配置可存为预设方案。";
+
+const TOPICS = [
+  "deepseek-harness",
+  "dsh",
+  "dsh-plugin",
+  "font",
+  "font-family",
+  "font-weight",
+  "typography",
+];
 
 /** The GitHub token git already holds for this machine. */
 function token() {
@@ -116,24 +148,37 @@ async function status() {
 /**
  * Point the fork branch at upstream `main` and push the entry on top of it.
  *
- * The force-reset is what keeps the PR a clean "current main + one added file":
- * a branch created days ago would otherwise show up hundreds of commits behind,
- * which is both noisy to review and a risk if the entry schema moved on.
- * @returns {Promise<string>} the branch commit that carries the entry.
+ * The commit is built through the git data API (blob → tree → commit) and the
+ * branch ref is moved **once**. Resetting the ref first and pushing the file
+ * afterwards leaves the branch momentarily identical to `main`, and upstream
+ * closes a PR whose diff is empty in that window — that is exactly how the
+ * first listing PR got closed, so the single ref update is not a nicety.
+ * @returns {Promise<string>} the commit that carries the entry.
  */
 async function sync() {
   const upstreamRef = await api("GET", `/repos/${UPSTREAM}/git/ref/heads/main`);
   const base = upstreamRef.object.sha;
   console.log(`upstream main: ${base}`);
-  await api("PATCH", `/repos/${FORK}/git/refs/heads/${BRANCH}`, { sha: base, force: true });
-  console.log(`reset ${FORK}:${BRANCH} to upstream main`);
-  const result = await api("PUT", `/repos/${FORK}/contents/${PATH}`, {
-    message: "fonttune: add the plugin entry",
+  const baseCommit = await api("GET", `/repos/${UPSTREAM}/git/commits/${base}`);
+  const blob = await api("POST", `/repos/${FORK}/git/blobs`, {
     content: Buffer.from(ENTRY, "utf8").toString("base64"),
-    branch: BRANCH,
+    encoding: "base64",
   });
-  console.log(`pushed ${result.commit.sha} to ${FORK}:${BRANCH}`);
-  return result.commit.sha;
+  const tree = await api("POST", `/repos/${FORK}/git/trees`, {
+    base_tree: baseCommit.tree.sha,
+    tree: [{ path: PATH, mode: "100644", type: "blob", sha: blob.sha }],
+  });
+  const commit = await api("POST", `/repos/${FORK}/git/commits`, {
+    message: "fonttune: add the plugin entry",
+    tree: tree.sha,
+    parents: [base],
+  });
+  await api("PATCH", `/repos/${FORK}/git/refs/heads/${BRANCH}`, {
+    sha: commit.sha,
+    force: true,
+  });
+  console.log(`moved ${FORK}:${BRANCH} to ${commit.sha} (one ref update, no empty window)`);
+  return commit.sha;
 }
 
 async function update() {
@@ -155,6 +200,66 @@ async function update() {
   await sync();
 }
 
+/** The PR opened from this fork branch, if it exists. */
+async function findPr() {
+  const prs = await api("GET", `/repos/${UPSTREAM}/pulls?state=all&per_page=100`);
+  return prs.find((pr) => pr.head?.label === `${FORK.split("/")[0]}:${BRANCH}`) ?? null;
+}
+
+/**
+ * Rewrite an already-open PR's title and body to match this file (the entry
+ * file alone is not enough: the title and body carry the same description, and
+ * they go stale the same way).
+ */
+async function refresh() {
+  const pr = await findPr();
+  if (pr === null) {
+    console.log("no PR from this branch — run `open` first");
+    process.exitCode = 1;
+    return;
+  }
+  if (pr.title === PR_TITLE && pr.body === PR_BODY) {
+    console.log(`PR #${pr.number} is already up to date: ${pr.html_url}`);
+    return;
+  }
+  const updated = await api("PATCH", `/repos/${UPSTREAM}/pulls/${pr.number}`, {
+    title: PR_TITLE,
+    body: PR_BODY,
+  });
+  console.log(`updated PR #${updated.number}: ${updated.html_url}`);
+}
+
+/**
+ * Reopen the PR from this branch. Upstream closes a listing PR whose diff goes
+ * empty, so a rebased branch can come back as a closed-but-unmerged PR; this
+ * puts it back in the review queue without opening a duplicate.
+ */
+async function reopen() {
+  const pr = await findPr();
+  if (pr === null) {
+    console.log("no PR from this branch — run `open` first");
+    process.exitCode = 1;
+    return;
+  }
+  if (pr.state === "open") {
+    console.log(`PR #${pr.number} is already open: ${pr.html_url}`);
+    return;
+  }
+  const diff = await api(
+    "GET",
+    `/repos/${UPSTREAM}/compare/main...${FORK.split("/")[0]}:${BRANCH}`
+  );
+  if (diff.ahead_by === 0) {
+    console.log("the branch carries no commits over main — run `update` first");
+    process.exitCode = 1;
+    return;
+  }
+  const updated = await api("PATCH", `/repos/${UPSTREAM}/pulls/${pr.number}`, {
+    state: "open",
+  });
+  console.log(`reopened #${updated.number} (ahead=${diff.ahead_by}): ${updated.html_url}`);
+}
+
 async function open() {
   const eligible = await status();
   if (!eligible) {
@@ -162,10 +267,16 @@ async function open() {
     process.exitCode = 1;
     return;
   }
-  const prs = await api("GET", `/repos/${UPSTREAM}/pulls?state=all&per_page=100`);
-  const existing = prs.find((pr) => pr.head?.label === `${FORK.split("/")[0]}:${BRANCH}`);
+  const existing = await findPr();
   if (existing) {
-    console.log(`PR already exists: #${existing.number} ${existing.state} ${existing.html_url}`);
+    if (existing.state === "open") {
+      console.log(`PR already exists: #${existing.number} ${existing.state} ${existing.html_url}`);
+      return;
+    }
+    // A PR whose diff went empty (a two-step branch reset does that) is closed
+    // by upstream: reopen it instead of opening a duplicate.
+    console.log(`PR #${existing.number} exists but is ${existing.state} — reopening it`);
+    await reopen();
     return;
   }
   await sync();
@@ -183,25 +294,39 @@ async function open() {
     return;
   }
   const pr = await api("POST", `/repos/${UPSTREAM}/pulls`, {
-    title: "Add dsh-fonttune: body/code font families, sizes and weight",
+    title: PR_TITLE,
     head: `${FORK.split("/")[0]}:${BRANCH}`,
     base: "main",
-    body: [
-      "Adds one plugin entry, `data/plugins/LyaxZ__dsh-fonttune.yml`, and touches nothing else.",
-      "",
-      "**dsh-fonttune** — a font plugin for the DeepSeek Harness Web GUI: body and code font",
-      "families, a separate font-size offset for each of them, a global font weight, and a",
-      "West/CJK split picker. Host + client halves, zero-dependency build, MIT.",
-      "",
-      "Repository: https://github.com/LyaxZ/dsh-fonttune",
-    ].join("\n"),
+    body: PR_BODY,
   });
   console.log(`opened #${pr.number}: ${pr.html_url}`);
 }
 
-const run = { status, update, sync, open }[action];
+/**
+ * Write the repository's About line and topics. GitHub keeps the repo About
+ * separate from the market entry and from the PR, and nothing syncs them, so
+ * this is the only way the repo header stops advertising the previous release.
+ */
+async function about() {
+  const repo = await api("GET", `/repos/${REPO}`);
+  if (repo.description === ABOUT) {
+    console.log(`about already current: ${ABOUT}`);
+  } else {
+    await api("PATCH", `/repos/${REPO}`, { description: ABOUT });
+    console.log(`about:\n  was: ${repo.description ?? "(none)"}\n  now: ${ABOUT}`);
+  }
+  const current = repo.topics ?? [];
+  if (current.length === TOPICS.length && TOPICS.every((topic) => current.includes(topic))) {
+    console.log(`topics already current: ${current.join(", ")}`);
+  } else {
+    const updated = await api("PUT", `/repos/${REPO}/topics`, { names: TOPICS });
+    console.log(`topics: ${(updated.names ?? []).join(", ")}`);
+  }
+}
+
+const run = { status, update, refresh, reopen, sync, open, about }[action];
 if (!run) {
-  console.error("usage: node test/market-pr.mjs [status|update|sync|open]");
+  console.error("usage: node test/market-pr.mjs [status|update|refresh|reopen|sync|open|about]");
   process.exit(2);
 }
 run().catch((error) => {

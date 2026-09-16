@@ -4,14 +4,18 @@
  * Runs inside the DSH web client as a lazy-CJS module bundle (see `build.mjs`).
  * It owns one card in Settings -> Plugins -> Plugin configuration, keyed by the
  * settings namespace the host half registers, and it applies the saved
- * configuration by rewriting a single `<style>` element.
+ * configuration by rewriting a single `<style>` element plus the official
+ * `theme.overrideTokens` layer for the family variables.
  *
- * Why a style element rather than per-element inline styles: the plugin has to
- * reach elements DSH renders later, and DSH's own font-size slider writes a
- * custom property on `body` at runtime. Reading DSH's typography tokens and
- * re-declaring them multiplied by one ratio keeps the offset composed with
- * that slider instead of replacing it, and keeps every size proportional
- * without compounding through nesting.
+ * 0.2.0 shape: the card is an accordion — four sections (interface / dialog /
+ * code / global fine-tuning), each collapsed to a title plus a summary of the
+ * current values, at most one open at a time; an expanded section ends with an
+ * inline preview of just that part. The preset bar sits under the edit mode: a
+ * dropdown of the presets plus rename/import/export, and with a preset
+ * selected every edit auto-saves into it. The dialog section leads with a
+ * follow switch (on: an unset dialog axis uses the interface value). Light and
+ * dark themes share one value set; the per-theme editor ships in a later
+ * release.
  *
  * Module scope stays side-effect free: the loader materializes the factory
  * only when the plugin is first used, and everything that touches the document
@@ -35,27 +39,52 @@ var useSyncExternalStore = React.useSyncExternalStore;
 var shared = require("./shared.cjs");
 var NAMESPACE = shared.NAMESPACE;
 var SANS_FIELD = shared.SANS_FIELD;
+var STACK_DIALOG_FIELD = shared.STACK_DIALOG_FIELD;
 var MONO_FIELD = shared.MONO_FIELD;
-var SIZE_FIELD = shared.SIZE_FIELD;
+var SIZE_DIALOG_FIELD = shared.SIZE_DIALOG_FIELD;
 var CODE_SIZE_FIELD = shared.CODE_SIZE_FIELD;
-var WEIGHT_FIELD = shared.WEIGHT_FIELD;
+var WEIGHT_DIALOG_FIELD = shared.WEIGHT_DIALOG_FIELD;
 var CODE_WEIGHT_FIELD = shared.CODE_WEIGHT_FIELD;
+var LINE_HEIGHT_DIALOG_FIELD = shared.LINE_HEIGHT_DIALOG_FIELD;
+var CODE_LINE_HEIGHT_FIELD = shared.CODE_LINE_HEIGHT_FIELD;
+var LIGATURES_FIELD = shared.LIGATURES_FIELD;
+var FEATURES_FIELD = shared.FEATURES_FIELD;
+var NO_SYNTHETIC_ITALIC_FIELD = shared.NO_SYNTHETIC_ITALIC_FIELD;
+var NO_SYNTHETIC_BOLD_FIELD = shared.NO_SYNTHETIC_BOLD_FIELD;
+var PER_THEME_FIELD = shared.PER_THEME_FIELD;
+var DARK_VALUES_FIELD = shared.DARK_VALUES_FIELD;
+var PRESETS_FIELD = shared.PRESETS_FIELD;
+var ACTIVE_PRESET_FIELD = shared.ACTIVE_PRESET_FIELD;
+var UI_FOLLOWS_FIELD = shared.UI_FOLLOWS_FIELD;
+var VALUE_FIELDS = shared.VALUE_FIELDS;
 var SIZE_MIN = shared.SIZE_MIN;
 var SIZE_MAX = shared.SIZE_MAX;
 var WEIGHT_MIN = shared.WEIGHT_MIN;
 var WEIGHT_MAX = shared.WEIGHT_MAX;
 var WEIGHT_UNSET = shared.WEIGHT_UNSET;
+var LINE_HEIGHT_MIN = shared.LINE_HEIGHT_MIN;
+var LINE_HEIGHT_MAX = shared.LINE_HEIGHT_MAX;
+var CODE_LINE_HEIGHT_MIN = shared.CODE_LINE_HEIGHT_MIN;
+var CODE_LINE_HEIGHT_MAX = shared.CODE_LINE_HEIGHT_MAX;
+var LIGATURES_DEFAULT = shared.LIGATURES_DEFAULT;
+var LIGATURES_ON = shared.LIGATURES_ON;
+var LIGATURES_OFF = shared.LIGATURES_OFF;
 var CARD_STYLE_TAG = shared.CARD_STYLE_TAG;
 var STYLE_TAG = shared.STYLE_TAG;
 var FALLBACK_TOKENS = shared.FALLBACK_TOKENS;
 var PRESETS = shared.PRESETS;
+var DEFAULTS = shared.DEFAULTS;
 var buildFontCss = shared.buildFontCss;
 var formatStack = shared.formatStack;
 var isFontToken = shared.isFontToken;
 var isScaledToken = shared.isScaledToken;
 var normalizeConfig = shared.normalizeConfig;
+var normalizeDarkValues = shared.normalizeDarkValues;
+var normalizePresets = shared.normalizePresets;
+var normalizeValueSet = shared.normalizeValueSet;
 var parseStack = shared.parseStack;
 var quoteFamily = shared.quoteFamily;
+var resolveAxes = shared.resolveAxes;
 var sanitizeFamily = shared.sanitizeFamily;
 var isGenericFamilyName = shared.isGenericFamilyName;
 var isCJKFamilyName = shared.isCJKFamilyName;
@@ -107,7 +136,7 @@ var DICTS = {
   en: {
     "card.title": "Font tune",
     "card.description":
-      "Body and code fonts, a size and a weight for each, and a West/CJK split",
+      "Interface and conversation fonts, a size, a weight and a line height for each, code extras and presets",
     "card.expand": "Expand",
     "card.collapse": "Collapse",
     "card.resetAll": "Reset all",
@@ -115,8 +144,10 @@ var DICTS = {
 
     "common.overridden": "Changed",
     "common.reset": "Reset",
+    "common.on": "On",
+    "common.off": "Off",
 
-    "sans.label": "Body font",
+    "sans.label": "Interface font",
     "sans.hint":
       "Each family is tried in order: put a Latin face first and CJK faces after it. Empty leaves DSH's own stack.",
     "mono.label": "Code font",
@@ -150,8 +181,8 @@ var DICTS = {
     "mode.advanced": "Advanced",
     "mode.simpleHint":
       "Manages only the front two slots of the stack — Western, then CJK. Everything you ordered in Advanced stays untouched.",
-    "sansWest.label": "Body · Western",
-    "sansEast.label": "Body · CJK",
+    "sansWest.label": "Interface · Western",
+    "sansEast.label": "Interface · CJK",
     "monoWest.label": "Code · Western",
     "monoEast.label": "Code · CJK",
     "split.pick": "Choose…",
@@ -159,35 +190,131 @@ var DICTS = {
     "split.remove": "Remove {name}",
     "split.rest": "Other fallbacks (reorder them in Advanced): {names}",
 
-    "size.bodyLabel": "Body font size offset",
+    "size.bodyLabel": "Interface font size offset",
     "size.bodyHint":
-      "Adds {offset} to text and interface sizes, on top of DSH's own font-size setting. 0 keeps DSH's sizes.",
+      "Adds {offset} to interface text sizes, on top of DSH's own font-size setting. 0 keeps DSH's sizes.",
+    "size.dialogLabel": "Conversation font size offset",
+    "size.dialogHint":
+      "Adds {offset} to the conversation text sizes, on top of DSH's own font-size setting; unset follows the interface offset.",
     "size.codeLabel": "Code font size offset",
     "size.codeHint":
-      "Adds {offset} to code blocks and inline code only; the body offset does not reach them. 0 keeps DSH's sizes.",
+      "Adds {offset} to code blocks and inline code only; the interface offset does not reach them. 0 keeps DSH's sizes.",
     "size.unit": "px",
 
-    "weight.bodyLabel": "Body font weight",
-    "weight.bodyHint":
-      "Overrides the weight of text and interface copy, headings included. Code keeps its own weight. Default weight is 400.",
+    "weight.dialogLabel": "Conversation font weight",
+    "weight.dialogHint":
+      "Overrides the weight of the conversation markdown; unset follows the interface weight.",
     "weight.codeLabel": "Code font weight",
     "weight.codeHint":
-      "Overrides code blocks, inline code and terminal output only. 400 or unset keeps DSH's own weight and takes code out of the body weight.",
-    "weight.unset": "Unset",
+      "Overrides code blocks, inline code and terminal output only. 400 or unset keeps DSH's own weight.",
+
+    "line.bodyLabel": "Interface line height",
+    "line.bodyHint":
+      "Scales every interface line height by {ratio}. 100% keeps DSH's own line heights.",
+    "line.dialogLabel": "Conversation line height",
+    "line.dialogHint":
+      "Scales every conversation line height by {ratio}; unset follows the interface ratio.",
+    "line.codeLabel": "Code line height",
+    "line.codeHint":
+      "Adds {offset} to code line heights only; 0 keeps DSH's own line heights.",
+    "line.unit": "%",
+
+    "lig.label": "Code ligatures",
+    "lig.hint":
+      "Programming ligatures render multiple characters as one glyph (=> as an arrow, != as ≠). Browsers enable them by default.",
+    "lig.default": "Default",
+    "lig.on": "On",
+    "lig.off": "Off",
+    "feat.label": "Feature settings",
+    "feat.hint":
+      "Advanced font-feature-settings value, e.g. \"ss01\" on, \"cv01\" 1. Invalid values are ignored.",
+    "feat.placeholder": "\"ss01\" on",
+
+    "synth.label": "Refuse synthetic styles",
+    "synth.italic": "No faux italic",
+    "synth.italicHint":
+      "CJK faces have no italic, so the browser tilts them. On keeps marked text upright.",
+    "synth.bold": "No faux bold",
+    "synth.boldHint":
+      "For faces without a real bold: bold text stops being thickened artificially.",
+    "synth.simple": "No faux italic / faux bold",
+    "synth.simpleHint":
+      "Stops synthetic italic and synthetic bold everywhere; switch to Advanced to set them apart.",
+
+    "section.ui": "Interface",
+    "section.dialog": "Conversation",
+    "section.code": "Code",
+    "section.fine": "Global fine-tuning",
+    "section.presets": "Presets",
+    "section.uiHint":
+      "Sidebars, headings, buttons and every other chrome text.",
+    "section.dialogHint":
+      "The conversation markdown: paragraphs, tables and headings.",
+    "section.codeHint": "Code blocks, inline code and terminal output.",
+    "section.fineHint":
+      "Settings that apply to the whole page.",
+    "section.open": "Expand {name}",
+    "section.close": "Collapse {name}",
+
+    "ui.follow": "Follows the conversation",
+    "ui.own": "Own values",
+    "dialog.default": "DSH defaults",
+
+    "theme.label": "Per-theme values",
+    "theme.on": "Light and dark keep separate values",
+    "theme.edit": "Editing theme",
+    "theme.light": "Light",
+    "theme.dark": "Dark",
+    "theme.mismatch":
+      "The page is in {active} mode; the preview below shows the values being edited.",
+
+    "dialog.label": "Conversation font",
+    "dialog.hint":
+      "Applies to the conversation markdown (paragraphs, tables, headings); code surfaces keep the code font. Empty follows the interface font.",
+    "dialogWest.label": "Conversation · Western",
+    "dialogEast.label": "Conversation · CJK",
+
+    "preset.save": "Save current",
+    "preset.namePlaceholder": "Preset name",
+    "preset.apply": "Apply",
+    "preset.overwrite": "Overwrite",
+    "preset.delete": "Delete",
+    "preset.export": "Export",
+    "preset.import": "Import",
+    "preset.importPlaceholder": "Paste an exported preset JSON here",
+    "preset.label": "Presets",
+    "preset.select": "Choose a preset",
+    "preset.rename": "Rename",
+    "preset.renamePlaceholder": "New name",
+    "preset.renamed": "Renamed to “{name}”.",
+    "preset.autoSave": "With a preset selected, every change saves into it automatically.",
+    "preset.nameUsed": "That name is already taken.",
+    "preset.saved": "Saved “{name}”.",
+    "preset.applied": "Applied “{name}”.",
+    "preset.deleted": "Deleted “{name}”.",
+    "preset.updated": "Overwrote “{name}”.",
+    "preset.exported": "Presets copied to the clipboard.",
+    "preset.imported": "Imported {count} preset(s).",
+    "preset.importBad": "That text is not a valid preset export.",
+    "preset.full": "The preset list is full ({max}).",
+    "preset.empty": "No presets saved yet.",
+    "preset.nameTaken": "“{name}” already exists — saving overwrites it.",
 
     "preview.label": "Preview",
-    "preview.sansCaption": "Body",
+    "preview.sansCaption": "Interface",
+    "preview.dialogCaption": "Conversation",
     "preview.monoCaption": "Code",
     "preview.sample":
       "The quick brown fox jumps over the lazy dog — 中文排版预览，标点符号，数字 0123456789。",
-    "preview.code": "const greet = (name) => `hello ${name}`; // 代码预览",
+    "preview.code": "const greet = (name) => `hello ${name}`; // => != >= -> 代码预览",
 
     "footnote.local":
       "Stored in the Host settings document. Every change applies immediately.",
   },
   zh: {
     "card.title": "字体增强",
-    "card.description": "正文与代码字体、各自的字号与字重、中西文分栏",
+    "card.description":
+      "界面与对话字体、各自的字号/字重/行高，代码增强与预设方案",
     "card.expand": "展开",
     "card.collapse": "收起",
     "card.resetAll": "全部重置",
@@ -195,8 +322,10 @@ var DICTS = {
 
     "common.overridden": "已修改",
     "common.reset": "重置",
+    "common.on": "开启",
+    "common.off": "关闭",
 
-    "sans.label": "正文字体",
+    "sans.label": "界面字体",
     "sans.hint":
       "按顺序回退：拉丁字体放前面、中文字体放后面；留空表示沿用 DSH 的字体栈。",
     "mono.label": "代码字体",
@@ -228,8 +357,8 @@ var DICTS = {
     "mode.advanced": "高级",
     "mode.simpleHint":
       "只管理栈最前面的西文/中文两项；你在高级模式里排好的其余回退原样保留。",
-    "sansWest.label": "正文 · 西文字体",
-    "sansEast.label": "正文 · 中文字体",
+    "sansWest.label": "界面 · 西文字体",
+    "sansEast.label": "界面 · 中文字体",
     "monoWest.label": "代码 · 西文字体",
     "monoEast.label": "代码 · 中文字体",
     "split.pick": "选择…",
@@ -237,28 +366,114 @@ var DICTS = {
     "split.remove": "移除 {name}",
     "split.rest": "其余回退项（在高级模式中排序）：{names}",
 
-    "size.bodyLabel": "正文字号偏移",
+    "size.bodyLabel": "界面字号偏移",
     "size.bodyHint":
-      "给正文与界面文字统一加 {offset}，与设置里的「字号大小」叠加；0 表示保持原样。",
+      "给界面文字统一加 {offset}，与设置里的「字号大小」叠加；0 表示保持原样。",
+    "size.dialogLabel": "对话字号偏移",
+    "size.dialogHint":
+      "给对话文字统一加 {offset}，与设置里的「字号大小」叠加；未设置时跟随界面偏移。",
     "size.codeLabel": "代码字号偏移",
     "size.codeHint":
-      "只作用于代码块与行内代码，与正文字号互不影响；0 表示保持原样。",
+      "只作用于代码块与行内代码，与界面字号互不影响；0 表示保持原样。",
     "size.unit": "px",
 
-    "weight.bodyLabel": "正文字重",
-    "weight.bodyHint":
-      "覆盖正文与界面文字的粗细（含标题）；代码不受它影响。默认字重为400。",
+    "weight.dialogLabel": "对话字重",
+    "weight.dialogHint": "覆盖对话 Markdown 的粗细；未设置时跟随界面字重。",
     "weight.codeLabel": "代码字重",
     "weight.codeHint":
-      "只覆盖代码块、行内代码与终端输出；400 或未设置表示保持 DSH 原样，也就是不被正文字重带着走。",
-    "weight.unset": "未设置",
+      "只覆盖代码块、行内代码与终端输出；400 或未设置表示保持 DSH 原样。",
+
+    "line.bodyLabel": "界面行高",
+    "line.bodyHint": "把界面行高整体缩放为 {ratio}；100% 表示保持原样。",
+    "line.dialogLabel": "对话行高",
+    "line.dialogHint": "把对话行高整体缩放为 {ratio}；未设置时跟随界面比例。",
+    "line.codeLabel": "代码行高",
+    "line.codeHint": "只给代码行高加 {offset}px；0 表示保持原样。",
+    "line.unit": "%",
+
+    "lig.label": "代码连字",
+    "lig.hint":
+      "把多个字符连成一个字形（如 => 变箭头、!= 变 ≠）。浏览器默认就是开启的。",
+    "lig.default": "默认",
+    "lig.on": "开启",
+    "lig.off": "关闭",
+    "feat.label": "特性设置",
+    "feat.hint":
+      "高级的 font-feature-settings 值，例如 ss01 on、cv01 1；非法值会被忽略。",
+    "feat.placeholder": "\"ss01\" on",
+
+    "synth.label": "拒绝合成样式",
+    "synth.italic": "禁用伪斜体",
+    "synth.italicHint":
+      "中文字体没有斜体，浏览器会把标记文本硬掰歪；开启后保持直立。",
+    "synth.bold": "禁用伪粗体",
+    "synth.boldHint": "没有真实粗体的字体不再被人为加粗。",
+    "synth.simple": "禁用伪斜体/伪粗体",
+    "synth.simpleHint":
+      "整页停用合成斜体与合成粗体；切到高级模式可分开设置。",
+
+    "section.ui": "界面",
+    "section.dialog": "对话",
+    "section.code": "代码",
+    "section.fine": "全局微调",
+    "section.presets": "预设方案",
+    "section.uiHint": "侧栏、标题、按钮等界面文字。",
+    "section.dialogHint": "会话里的 Markdown：段落、表格与标题。",
+    "section.codeHint": "代码块、行内代码与终端输出。",
+    "section.fineHint": "作用于整页的选项。",
+    "section.open": "展开{name}",
+    "section.close": "收起{name}",
+
+    "theme.label": "分主题数值",
+    "theme.on": "深浅色各存一套数值",
+    "theme.edit": "正在编辑",
+    "theme.light": "浅色",
+    "theme.dark": "深色",
+    "theme.mismatch": "当前页面是{active}主题，下方预览显示的是正在编辑的那套数值。",
+
+    "ui.follow": "跟随对话设置",
+    "ui.own": "独立数值",
+    "dialog.default": "DSH 默认",
+
+    "dialog.label": "对话字体",
+    "dialog.hint":
+      "作用于会话里的 Markdown（段落、表格、标题）；代码表面仍用代码字体。留空表示跟随界面字体。",
+    "dialogWest.label": "对话 · 西文字体",
+    "dialogEast.label": "对话 · 中文字体",
+
+    "preset.save": "保存当前",
+    "preset.namePlaceholder": "方案名称",
+    "preset.apply": "应用",
+    "preset.overwrite": "覆盖",
+    "preset.delete": "删除",
+    "preset.export": "导出",
+    "preset.import": "导入",
+    "preset.importPlaceholder": "粘贴导出的方案内容",
+    "preset.label": "预设方案",
+    "preset.select": "选择方案",
+    "preset.rename": "改名",
+    "preset.renamePlaceholder": "新名字",
+    "preset.renamed": "已改名为“{name}”。",
+    "preset.autoSave": "选中方案后，所有改动自动存入该方案。",
+    "preset.nameUsed": "这个名字已被占用。",
+    "preset.saved": "已保存“{name}”。",
+    "preset.applied": "已应用“{name}”。",
+    "preset.deleted": "已删除“{name}”。",
+    "preset.updated": "已覆盖“{name}”。",
+    "preset.exported": "方案已复制到剪贴板。",
+    "preset.imported": "已导入 {count} 个方案。",
+    "preset.importBad": "这段内容不是有效的方案导出。",
+    "preset.full": "方案列表已满（{max}）。",
+    "preset.empty": "还没有保存方案。",
+    "preset.nameTaken": "“{name}”已存在，保存将覆盖它。",
 
     "preview.label": "预览",
-    "preview.sansCaption": "正文",
+    "preview.sansCaption": "界面",
+    "preview.dialogCaption": "对话",
     "preview.monoCaption": "代码",
     "preview.sample":
       "The quick brown fox jumps over the lazy dog —— 中文排版预览，标点符号，数字 0123456789。",
-    "preview.code": "const greet = (name) => `hello ${name}`; // 代码预览",
+    "preview.code": "const greet = (name) => `hello ${name}`; // => != >= -> 代码预览",
 
     "footnote.local": "保存在宿主设置文档里；每次改动立即生效。",
   },
@@ -317,14 +532,63 @@ var CARD_CSS = [
   ".dfp-resetAll:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}",
   ".dfp-resetAll:disabled{opacity:.4;cursor:default}",
 
-  ".dfp-field{padding:16px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}",
+  ".dfp-field{padding:14px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}",
   ".dfp-fieldLast{border-bottom:0}",
   ".dfp-fieldHead{align-items:center;gap:8px;display:flex}",
   ".dfp-fieldLabel{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}",
+  // The control that sits in the same row as its label, right-aligned — the
+  // same shape as dsh-quick-toc's settings card (`.dqt-pinline`), so the
+  // cards' rows line up row for row.
+  ".dfp-inline{flex:1;justify-content:flex-end;align-items:center;gap:10px;display:flex}",
   ".dfp-overridden{flex:none;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:999px;padding:1px 8px;font-size:11px;line-height:16px}",
   ".dfp-fieldReset{flex:none;margin-left:auto;appearance:none;font:inherit;cursor:pointer;background:0 0;border:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;padding:0}",
   ".dfp-fieldReset:hover{color:var(--dsw-alias-label-primary)}",
   ".dfp-hint{color:var(--dsw-alias-label-tertiary);margin:4px 0 0;font-size:12px;line-height:18px}",
+
+  // accordion sections
+  ".dfp-section{border-bottom:.5px solid var(--dsw-alias-border-l2)}",
+  ".dfp-sectionLast{border-bottom:0}",
+  ".dfp-sectionHead{appearance:none;width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer;background:0 0;border:0;align-items:center;gap:8px;padding:12px 0;display:flex}",
+  ".dfp-sectionHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}",
+  ".dfp-sectionTitle{flex:none;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600;line-height:22px}",
+  ".dfp-sectionSummary{flex:1;min-width:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}",
+  // While a section is open its summary disappears, so without this spacer the
+  // chevron would slide left and sit next to the title; the spacer keeps the
+  // arrow pinned to the far right in both states.
+  ".dfp-sectionSpacer{flex:1;min-width:0}",
+  ".dfp-sectionBody{padding:0 0 12px}",
+  // The first control may not float away from the section title: the field
+  // rows carry 16px top padding of their own, so the first one is tightened.
+  ".dfp-sectionBody>.dfp-field:first-child{padding-top:10px}",
+  ".dfp-sectionBody>.dfp-hint:first-child{margin-top:10px}",
+
+  // presets: one bar — a dropdown select plus rename/import/export. The
+  // buttons must never wrap their two-character labels: they keep nowrap and
+  // stay flex:none, so compressing the row eats the SELECT's width instead.
+  ".dfp-presetBar{align-items:center;gap:8px;margin-top:8px;display:flex}",
+  ".dfp-selectWrap{display:inline-flex;flex:1;min-width:0}",
+  ".dfp-select{flex:1;min-width:0;height:30px;box-sizing:border-box;appearance:none;font:inherit;cursor:pointer;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;padding:0 6px 0 10px;display:inline-flex;align-items:center;justify-content:space-between;gap:6px}",
+  ".dfp-select:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}",
+  ".dfp-select:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}",
+  ".dfp-select:disabled{opacity:.4;cursor:default}",
+  ".dfp-selectName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;text-align:left}",
+  ".dfp-selectChevron{flex:none;display:block;color:var(--dsw-alias-label-tertiary);transition:transform .16s}",
+  ".dfp-selectChevronOpen{transform:rotate(180deg)}",
+  ".dfp-drop{position:fixed;z-index:1200;box-sizing:border-box;min-width:160px;max-height:260px;overflow-y:auto;padding:4px;background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:10px;box-shadow:var(--dsw-shadow-lv3,0 12px 32px #00000024)}",
+  ".dfp-miniButton{appearance:none;font:inherit;cursor:pointer;white-space:nowrap;flex:none;border-radius:6px;padding:3px 8px;font-size:12px;line-height:16px;color:var(--dsw-alias-label-secondary);background:0 0;border:.5px solid var(--dsw-alias-border-l3)}",
+  ".dfp-miniButton:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-specific-sidebar-nav-item-hover)}",
+  ".dfp-miniButton:disabled{opacity:.4;cursor:default}",
+  ".dfp-presetForm{align-items:center;gap:8px;margin-top:10px;display:flex}",
+  ".dfp-textInput{flex:1;min-width:0;box-sizing:border-box;padding:5px 8px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;font:inherit;font-size:13px;line-height:18px}",
+  // The auto-save hint and the transient message share one row: the hint holds
+  // the left, the message fades in on the right. The row is always mounted and
+  // one line tall, so a message appearing can never push anything down.
+  ".dfp-presetMeta{align-items:center;gap:10px;margin-top:6px;display:flex;overflow:hidden}",
+  // The hint never wraps: if a long message squeezes it, it truncates instead
+  // of growing the row (a two-line row would push everything below it down).
+  ".dfp-presetHint{flex:1;min-width:0;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+  ".dfp-status{flex:none;min-width:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;opacity:0;transition:opacity .24s}",
+  ".dfp-statusOn{opacity:1}",
 
   ".dfp-chips{align-items:center;flex-wrap:wrap;gap:6px;margin-top:10px;display:flex}",
   ".dfp-empty{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
@@ -342,10 +606,7 @@ var CARD_CSS = [
 
   // Segmented / toggle controls follow dsh-quick-toc's settings card colours:
   // the selected option takes the same --dsw-specific-sidebar-nav-item-active
-  // surface (not just darker text). Shape: one joined pill with a divider, as
-  // the card had before — quick-toc is being aligned to this shape instead.
-  ".dfp-modeRow{align-items:center;gap:10px;margin:14px 0 0;display:flex}",
-  ".dfp-modeLabel{flex:1;min-width:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}",
+  // surface (not just darker text). Shape: one joined pill with a divider.
   ".dfp-modeSeg{flex:none;display:inline-flex;overflow:hidden;background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:8px}",
   ".dfp-modeButton{appearance:none;font:inherit;cursor:pointer;height:28px;padding:0 14px;color:var(--dsw-alias-label-secondary);background:0 0;border:none;border-left:.5px solid var(--dsw-alias-border-l3);font-size:13px;line-height:18px}",
   ".dfp-modeButton:first-child{border-left:none}",
@@ -359,6 +620,10 @@ var CARD_CSS = [
   ".dfp-pick:hover:not(:disabled){background:var(--dsw-alias-bg-layer-3)}",
   ".dfp-pick:disabled{opacity:.4;cursor:default}",
   ".dfp-pickEmpty{color:var(--dsw-alias-label-tertiary)}",
+
+  // the per-theme switch is gone (light and dark share one value set); the
+  // on/off controls are all joined segmented controls now, so no pill switch
+  // exists in this card and every row keeps the same 28px control height.
 
   ".dfp-panel{box-sizing:border-box;position:fixed;z-index:1200;flex-direction:column;width:320px;max-height:380px;padding:8px;background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:12px;box-shadow:var(--dsw-shadow-lv3,0 12px 32px #00000024);display:flex;gap:6px}",
   ".dfp-search{width:100%;box-sizing:border-box;padding:5px 8px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;font:inherit;font-size:13px;line-height:18px}",
@@ -376,9 +641,12 @@ var CARD_CSS = [
   ".dfp-value{flex:none;min-width:56px;text-align:right;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;font-variant-numeric:tabular-nums}",
   ".dfp-scale{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;display:flex;justify-content:space-between}",
 
+  // the per-section preview: an inline box at the end of the expanded
+  // section body, showing only that section's own sample
   ".dfp-previewBox{margin-top:10px;padding:10px 12px;background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l2);border-radius:10px}",
   ".dfp-previewCaption{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;margin-bottom:4px}",
   ".dfp-previewText{color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;word-break:break-word}",
+  ".dfp-previewCode{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}",
 ].join("");
 
 /**
@@ -439,9 +707,9 @@ function isOwnSheet(sheet) {
  * rule applies it reports the SCALED values, and feeding those back as bases
  * compounds the offset on every refresh.
  *
- * Code shorthands (`--dsw-font-markdown-code-block` and friends) are collected
- * too: they are `font` values rather than `-font-size` tokens, and they are
- * what the shipped stylesheets actually consume.
+ * `font` shorthand tokens (`--dsw-font-markdown-base` and friends) are
+ * collected too: they are what the shipped stylesheets actually consume, and
+ * the line-height axes rebuild their inline heights.
  *
  * @returns {Record<string, string>} token name to its untouched value.
  */
@@ -525,6 +793,24 @@ function createStylesheet(tokens) {
   };
 }
 
+/**
+ * Read the DSH default of one family variable, for the token override pairs.
+ * @param {string} name - custom property name.
+ * @returns {string} the live value, or "" when unreadable.
+ */
+function readDefaultFamily(name) {
+  if (typeof document === "undefined") return "";
+  try {
+    var value = document.defaultView
+      .getComputedStyle(document.body)
+      .getPropertyValue(name)
+      .trim();
+    return value === "" ? "" : value;
+  } catch (error) {
+    return "";
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * hooks and controls
  * ------------------------------------------------------------------ */
@@ -590,10 +876,52 @@ function FieldShell(props) {
             },
             props.t("common.reset")
           )
-        : null
+          : null
     ),
     h("p", { className: "dfp-hint" }, props.hint),
     props.children
+  );
+}
+
+/**
+ * One accordion section: a title row that reads like a summary line, and the
+ * controls only when expanded. The card keeps at most one section open.
+ * @param {object} props - copy, open state, toggle handler and children.
+ * @returns {object} the section element.
+ */
+function Section(props) {
+  return h(
+    "div",
+    { className: "dfp-section" + (props.last ? " dfp-sectionLast" : ""), ref: props.wrapRef },
+    h(
+      "button",
+      {
+        type: "button",
+        className: "dfp-sectionHead",
+        "aria-expanded": props.open,
+        "aria-label": props.t(props.open ? "section.close" : "section.open", { name: props.title }),
+        onClick: props.onToggle,
+      },
+      h("span", { className: "dfp-sectionTitle" }, props.title),
+      // Collapsed: the summary fills the middle. Expanded: an empty spacer
+      // takes its place so the chevron never leaves the far right edge.
+      props.open
+        ? h("span", { className: "dfp-sectionSpacer", "aria-hidden": "true" })
+        : h("span", { className: "dfp-sectionSummary" }, props.summary),
+      h(
+        "svg",
+        {
+          className: "dfp-chevron" + (props.open ? " dfp-chevronOpen" : ""),
+          width: 14,
+          height: 14,
+          viewBox: "0 0 14 14",
+          fill: "none",
+          "aria-hidden": "true",
+        },
+        h("path", { d: CHEVRON_PATH, fill: "currentColor" })
+      )
+    ),
+    props.open ? h("div", { className: "dfp-sectionBody" }, props.children) : null
   );
 }
 
@@ -602,12 +930,13 @@ function FieldShell(props) {
  * Dragging only moves a local value; the change handler runs once the
  * pointer is released (or on blur/keyup), so intermediate steps never
  * rewrite the settings document — the page does not recompute per pixel.
- * @param {object} props - range, value, labels, change handler and an
+ * @param {object} props - range, step, value, labels, change handler and an
  *   optional pendingText(v) formatting the readout while dragging.
  * @returns {object} the slider element.
  */
 function NumberSlider(props) {
   var [pending, setPending] = useState(null);
+  var step = typeof props.step === "number" && props.step > 0 ? props.step : 1;
   // The value the host has not confirmed yet. Between the release and the
   // settings round-trip the committed prop is still the OLD number — clearing
   // the local value right away would show that old number for one frame
@@ -668,7 +997,7 @@ function NumberSlider(props) {
         className: "dfp-slider",
         min: props.min,
         max: props.max,
-        step: 1,
+        step: step,
         value: shown,
         disabled: props.disabled,
         "aria-label": props.label,
@@ -690,6 +1019,178 @@ function NumberSlider(props) {
       h("span", null, props.minLabel),
       h("span", null, props.maxLabel)
     )
+  );
+}
+
+/**
+ * One joined segmented control over a small fixed option list.
+ * @param {object} props - options [{value,label}], the current value, the
+ *   change handler and an optional aria label.
+ * @returns {object} the segmented control element.
+ */
+function Segmented(props) {
+  var options = props.options;
+  return h(
+    "div",
+    { className: "dfp-modeSeg", role: "group", "aria-label": props.label },
+    options.map(function (option, index) {
+      var active = option.value === props.value;
+      return h(
+        "button",
+        {
+          type: "button",
+          key: option.value,
+          className: "dfp-modeButton" + (active ? " dfp-modeButtonActive" : ""),
+          "aria-pressed": active,
+          disabled: props.disabled,
+          onClick: function () {
+            props.onChange(option.value);
+          },
+        },
+        option.label
+      );
+    })
+  );
+}
+
+/**
+ * The preset dropdown: a trigger styled like a select box — the active
+ * preset's name with the card's own chevron pointing down inside it on the
+ * right — and a portaled menu listing the presets. Picking an entry applies
+ * it, makes it the auto-save target and closes the menu. The menu is
+ * portaled to `body` because the settings sheet's scroll container would
+ * otherwise clip it.
+ * @param {object} props - copy, the preset list, the active name, the pick
+ *   handler and the disabled flag.
+ * @returns {object} the select element.
+ */
+function PresetSelect(props) {
+  var t = props.t;
+  var anchorRef = useRef(null);
+  var panelRef = useRef(null);
+  var [open, setOpen] = useState(false);
+  var [position, setPosition] = useState(null);
+
+  useEffect(
+    function () {
+      if (!open) return undefined;
+      var place = function () {
+        var anchor = anchorRef.current;
+        var view = globalThis;
+        if (!anchor || typeof view.innerWidth !== "number") return;
+        var rect = anchor.getBoundingClientRect();
+        var margin = 10;
+        var left = Math.max(margin, Math.min(rect.left, view.innerWidth - rect.width - margin));
+        var below = rect.bottom + 4;
+        var top = below;
+        if (below + 240 > view.innerHeight - margin) {
+          top = Math.max(margin, rect.top - 244);
+        }
+        setPosition({ left: left, top: top, minWidth: Math.max(rect.width, 160) });
+      };
+      place();
+      var view = globalThis;
+      view.addEventListener("resize", place);
+      view.addEventListener("scroll", place, true);
+      return function () {
+        view.removeEventListener("resize", place);
+        view.removeEventListener("scroll", place, true);
+      };
+    },
+    [open]
+  );
+
+  useEffect(
+    function () {
+      if (!open) return undefined;
+      var onPointerDown = function (event) {
+        var anchor = anchorRef.current;
+        var panel = panelRef.current;
+        if (anchor && anchor.contains(event.target)) return;
+        if (panel && panel.contains(event.target)) return;
+        setOpen(false);
+      };
+      var onKeyDown = function (event) {
+        if (event.key === "Escape") setOpen(false);
+      };
+      document.addEventListener("pointerdown", onPointerDown, true);
+      document.addEventListener("keydown", onKeyDown);
+      return function () {
+        document.removeEventListener("pointerdown", onPointerDown, true);
+        document.removeEventListener("keydown", onKeyDown);
+      };
+    },
+    [open]
+  );
+
+  var menu = null;
+  if (open) {
+    var items = props.presets.map(function (entry, index) {
+      var active = entry.name === props.value;
+      return h(
+        "button",
+        {
+          type: "button",
+          className: "dfp-option",
+          key: entry.name + ":" + index,
+          role: "option",
+          "aria-selected": active,
+          onClick: function () {
+            setOpen(false);
+            props.onPick(entry);
+          },
+        },
+        h("span", { className: "dfp-optionLabel" }, entry.name),
+        active ? h("span", { className: "dfp-optionCheck" }, "✓") : null
+      );
+    });
+    menu = createPortal(
+      h(
+        "div",
+        {
+          className: "dfp-drop",
+          ref: panelRef,
+          role: "listbox",
+          "aria-label": t("preset.select"),
+          style: position === null ? undefined : { left: position.left, top: position.top, minWidth: position.minWidth },
+        },
+        items
+      ),
+      document.body
+    );
+  }
+
+  return h(
+    "span",
+    { className: "dfp-selectWrap", ref: anchorRef },
+    h(
+      "button",
+      {
+        type: "button",
+        className: "dfp-select",
+        "aria-haspopup": "listbox",
+        "aria-expanded": open,
+        "aria-label": t("preset.select"),
+        disabled: props.disabled === true,
+        onClick: function () {
+          setOpen(!open);
+        },
+      },
+      h("span", { className: "dfp-selectName" }, props.value),
+      h(
+        "svg",
+        {
+          className: "dfp-selectChevron" + (open ? " dfp-selectChevronOpen" : ""),
+          width: 14,
+          height: 14,
+          viewBox: "0 0 14 14",
+          fill: "none",
+          "aria-hidden": "true",
+        },
+        h("path", { d: CHEVRON_PATH, fill: "currentColor" })
+      )
+    ),
+    menu
   );
 }
 
@@ -764,7 +1265,7 @@ function measureCJK(name) {
     var context = canvas.getContext("2d");
     if (context === null) return null;
     var probe = "中文字體测试";
-    context.font = '72px ' + quoteFamily(name) + ", monospace";
+    context.font = "72px " + quoteFamily(name) + ", monospace";
     var withFamily = context.measureText(probe).width;
     context.font = "72px monospace";
     var without = context.measureText(probe).width;
@@ -1292,11 +1793,24 @@ function StackPicker(props) {
 }
 
 /* ------------------------------------------------------------------ *
- * the card
+ * card helpers
  * ------------------------------------------------------------------ */
 
 /** localStorage key of the card's view mode. */
 var MODE_KEY = "dsh-fonttune.mode.v1";
+
+/**
+ * The five built-in preset slots, shown (and exported) until any preset has
+ * been saved. They are data, not copy: the names stay as-is in every locale
+ * and can be changed with the rename control.
+ */
+var DEFAULT_PRESET_NAMES = [
+  "默认配置1",
+  "默认配置2",
+  "默认配置3",
+  "默认配置4",
+  "默认配置5",
+];
 
 /**
  * Read the view mode the card opens in. Simple is the default; an unreadable
@@ -1388,9 +1902,71 @@ function SimpleFamilyField(props) {
 }
 
 /**
+ * Summarize one axis set into the short texts the collapsed sections show.
+ * @param {object} axis - the effective (follow-applied) value set.
+ * @param {boolean} uiFollows - whether the interface follows the conversation.
+ * @param {(key: string, params?: object) => string} t - translate seat.
+ * @returns {{ui: string, dialog: string, code: string}}
+ */
+function sectionSummaries(axis, uiFollows, t) {
+  var sign = function (value) {
+    return value > 0 ? "+" + value : String(value);
+  };
+  // The conversation owns every axis, so its summary is always its values.
+  var dialogParts = [];
+  if (axis[STACK_DIALOG_FIELD] !== "") dialogParts.push(firstFamily(axis[STACK_DIALOG_FIELD]));
+  if (axis[SIZE_DIALOG_FIELD] !== 0) dialogParts.push(sign(axis[SIZE_DIALOG_FIELD]) + "px");
+  if (axis[LINE_HEIGHT_DIALOG_FIELD] !== LINE_HEIGHT_MIN) {
+    dialogParts.push(axis[LINE_HEIGHT_DIALOG_FIELD] + "%");
+  }
+  if (axis[WEIGHT_DIALOG_FIELD] !== WEIGHT_UNSET) {
+    dialogParts.push(String(axis[WEIGHT_DIALOG_FIELD]));
+  }
+  // The interface either follows (nothing of its own to report) or shows the
+  // two axes it owns.
+  var uiParts = [];
+  if (!uiFollows) {
+    var family = axis[SANS_FIELD] === "" ? null : firstFamily(axis[SANS_FIELD]);
+    if (family !== null) uiParts.push(family);
+  }
+  var codeParts = [];
+  if (axis[MONO_FIELD] !== "") codeParts.push(firstFamily(axis[MONO_FIELD]));
+  if (axis[CODE_SIZE_FIELD] !== 0) codeParts.push(sign(axis[CODE_SIZE_FIELD]) + "px");
+  if (axis[CODE_LINE_HEIGHT_FIELD] !== 0) codeParts.push(sign(axis[CODE_LINE_HEIGHT_FIELD]) + "px");
+  if (axis[CODE_WEIGHT_FIELD] !== WEIGHT_UNSET) codeParts.push(String(axis[CODE_WEIGHT_FIELD]));
+  if (axis[LIGATURES_FIELD] !== LIGATURES_DEFAULT) {
+    codeParts.push(t(axis[LIGATURES_FIELD] === LIGATURES_OFF ? "lig.off" : "lig.on"));
+  }
+  return {
+    ui: uiFollows ? t("ui.follow") : uiParts.length > 0 ? uiParts.join(" · ") : t("ui.own"),
+    dialog: dialogParts.length > 0 ? dialogParts.join(" · ") : t("dialog.default"),
+    code: codeParts.join(" · "),
+  };
+}
+
+/** The first family of one stack value, or null. */
+function firstFamily(stack) {
+  var families = parseStack(stack);
+  return families.length > 0 ? families[0] : null;
+}
+
+/* ------------------------------------------------------------------ *
+ * the card
+ * ------------------------------------------------------------------ */
+
+/**
  * Render the plugin's card: the settings section dispatches this component
  * under the namespace key, and the host has to serve that namespace for it to
  * appear at all.
+ *
+ * Structure: a top bar (edit mode), the preset bar (dropdown select +
+ * rename/import/export — with a preset selected every edit auto-saves into
+ * it), and four collapsed accordion sections — interface / conversation /
+ * code / global fine-tuning. Only one section is open at a time, so the card
+ * never sprawls; the conversation section leads with a follow switch, and an
+ * expanded section ends with its own inline preview of just that part. Light
+ * and dark themes share one value set (the per-theme editor ships in a later
+ * release).
  * @param {object} props - slot props (the injected face plus the locale seat).
  * @returns {object} the card element.
  */
@@ -1399,10 +1975,50 @@ function FontCard(props) {
   var scope = props.scope;
   var [open, setOpen] = useState(false);
   var [view, setView] = useState(readViewMode);
+  var [expanded, setExpanded] = useState(null);
+  var [presetName, setPresetName] = useState("");
+  // The transient preset message: `{text, id}` — the id makes two identical
+  // messages (two exports in a row) two distinct events, so the auto-hide
+  // effect runs again instead of ignoring the second one.
+  var [presetStatus, setPresetStatus] = useState({ text: "", id: 0 });
+  var [statusShown, setStatusShown] = useState(false);
+  var [renaming, setRenaming] = useState(false);
+  var [importOpen, setImportOpen] = useState(false);
+  /** True while the card itself writes a whole preset's values: the edits
+   * must not mirror back into the very preset being applied. */
+  var applyingRef = useRef(false);
+  /** The pending auto-hide / fade-out timers of the preset message. */
+  var statusIdRef = useRef(0);
+  var statusTimerRef = useRef(null);
   var snapshot = useScopeSnapshot(scope);
   var config = normalizeConfig(snapshot.value);
+  // Light and dark share one value set in this release: the stored flag (if
+  // any) is ignored and the dark fields stay dormant in the document.
+  config[PER_THEME_FIELD] = false;
+  var sets = resolveAxes(config);
   var user = snapshot.user !== null && typeof snapshot.user === "object" ? snapshot.user : {};
   var writable = snapshot.writable === true;
+  var presets = config[PRESETS_FIELD];
+
+  // The preset list the dropdown shows: the stored entries once anything has
+  // been saved, otherwise the five built-in slots. `activePreset` falls back
+  // to the first entry when unset or stale.
+  var presetList =
+    presets.length > 0
+      ? presets
+      : DEFAULT_PRESET_NAMES.map(function (name) {
+          return { name: name, values: {}, savedAt: 0 };
+        });
+  var activeName = config[ACTIVE_PRESET_FIELD];
+  var activeKnown = false;
+  for (var presetIndex = 0; presetIndex < presetList.length; presetIndex += 1) {
+    if (presetList[presetIndex].name === activeName) activeKnown = true;
+  }
+  if (!activeKnown) activeName = presetList[0].name;
+
+  // Which value set the controls below edit and display: light and dark share
+  // one set, so it is always the light (flat) fields.
+  var editing = sets.light;
 
   var changeView = function (next) {
     setView(next);
@@ -1412,28 +2028,47 @@ function FontCard(props) {
       // Unavailable storage only costs the persistence of the preference.
     }
   };
-  // The simple mode edits only the two front slots; the stack value itself is
-  // the single source of truth, and switching views writes nothing at all.
-  var pickSansWest = function (family) {
-    setField(SANS_FIELD, formatStack(setWestEntry(parseStack(config[SANS_FIELD]), family, classifyFamily)));
-  };
-  var pickSansEast = function (family) {
-    setField(SANS_FIELD, formatStack(setEastEntry(parseStack(config[SANS_FIELD]), family, classifyFamily)));
-  };
-  var dropSansEntry = function (family) {
-    setField(SANS_FIELD, formatStack(removeStackEntry(parseStack(config[SANS_FIELD]), family)));
-  };
-  var pickMonoWest = function (family) {
-    setField(MONO_FIELD, formatStack(setWestEntry(parseStack(config[MONO_FIELD]), family, classifyFamily)));
-  };
-  var pickMonoEast = function (family) {
-    setField(MONO_FIELD, formatStack(setEastEntry(parseStack(config[MONO_FIELD]), family, classifyFamily)));
-  };
-  var dropMonoEntry = function (family) {
-    setField(MONO_FIELD, formatStack(removeStackEntry(parseStack(config[MONO_FIELD]), family)));
+
+  /**
+   * Mirror one axis value into the active preset's snapshot — the auto-save
+   * contract: with a preset selected, every change the user makes IS that
+   * preset from now on. Skipped while the card itself applies a whole preset.
+   * @param {string} field - an axis field name.
+   * @param {string|number|boolean} value - the value to store.
+   */
+  var mirrorPreset = function (field, value) {
+    if (!writable || applyingRef.current === true) return;
+    var index = -1;
+    for (var i = 0; i < presetList.length; i += 1) {
+      if (presetList[i].name === activeName) index = i;
+    }
+    if (index < 0) return;
+    var entry = presetList[index];
+    var values = {};
+    for (var key in entry.values) {
+      if (Object.prototype.hasOwnProperty.call(entry.values, key)) values[key] = entry.values[key];
+    }
+    values[field] = value;
+    var next = presetList.slice();
+    next[index] = { name: entry.name, values: values, savedAt: Date.now() };
+    writePresets(next);
   };
 
+  /**
+   * Write one axis field to the durable flat fields, and mirror the same
+   * change into the active preset (the auto-save contract).
+   * @param {string} field - an axis field name.
+   * @param {string|number|boolean} value - the new value.
+   */
   var setField = function (field, value) {
+    submit(field, value);
+    mirrorPreset(field, value);
+  };
+  var resetField = function (field) {
+    clear(field);
+    mirrorPreset(field, DEFAULTS[field]);
+  };
+  var submit = function (field, value) {
     var result = scope.set(field, value);
     if (result && typeof result.catch === "function") {
       result.catch(function () {
@@ -1441,7 +2076,7 @@ function FontCard(props) {
       });
     }
   };
-  var resetField = function (field) {
+  var clear = function (field) {
     var result = scope.unset(field);
     if (result && typeof result.catch === "function") {
       result.catch(function () {});
@@ -1451,18 +2086,18 @@ function FontCard(props) {
     return Object.prototype.hasOwnProperty.call(user, field);
   };
 
-  var offset = config[SIZE_FIELD];
-  var codeOffset = config[CODE_SIZE_FIELD];
-  var weight = config[WEIGHT_FIELD];
-  var codeWeight = config[CODE_WEIGHT_FIELD];
-  var offsetText = offset > 0 ? "+" + offset : String(offset);
-  var codeOffsetText = codeOffset > 0 ? "+" + codeOffset : String(codeOffset);
+  // ---- interface axis handlers (legacy semantics kept) ----
+  var pickWest = function (field, family) {
+    setField(field, formatStack(setWestEntry(parseStack(editing[field]), family, classifyFamily)));
+  };
+  var pickEast = function (field, family) {
+    setField(field, formatStack(setEastEntry(parseStack(edit[field]), family, classifyFamily)));
+  };
+  var dropEntry = function (field, family) {
+    setField(field, formatStack(removeStackEntry(parseStack(edit[field]), family)));
+  };
 
-  /**
-   * One size slider, rendered directly under the family it resizes.
-   * @param {object} props - field, label keys, current value and text.
-   * @returns {object} the field shell wrapping the slider.
-   */
+  // ---- size slider ----
   var sizeField = function (props) {
     return h(
       FieldShell,
@@ -1495,11 +2130,7 @@ function FontCard(props) {
     );
   };
 
-  /**
-   * One weight slider, under the family it reweights.
-   * @param {object} props - field, label keys and current value.
-   * @returns {object} the field shell wrapping the slider.
-   */
+  // ---- weight slider ----
   var weightField = function (props) {
     return h(
       FieldShell,
@@ -1519,7 +2150,10 @@ function FontCard(props) {
         value: props.value === WEIGHT_UNSET ? NEUTRAL_WEIGHT : props.value,
         disabled: !writable,
         label: t(props.labelKey),
-        readout: props.value === WEIGHT_UNSET ? t("weight.unset") : String(props.value),
+        // "Unset" IS 400 here: that is the weight DSH uses for body text, the
+        // slider already sits at 400, and the hint says 400 keeps DSH's own.
+        // Printing "unset" made the readout disagree with the control.
+        readout: String(props.value === WEIGHT_UNSET ? NEUTRAL_WEIGHT : props.value),
         minLabel: String(WEIGHT_MIN),
         maxLabel: String(WEIGHT_MAX),
         onChange: function (value) {
@@ -1531,6 +2165,392 @@ function FontCard(props) {
       })
     );
   };
+
+  // ---- interface/dialog line-height slider (percent ratio) ----
+  var lineField = function (props) {
+    return h(
+      FieldShell,
+      {
+        t: t,
+        label: t(props.labelKey),
+        hint: t(props.hintKey, { ratio: (props.value / LINE_HEIGHT_MIN).toFixed(2) + "×" }),
+        overridden: overridden(props.field) && props.value !== LINE_HEIGHT_MIN,
+        disabled: !writable,
+        onReset: function () {
+          resetField(props.field);
+        },
+      },
+      h(NumberSlider, {
+        min: LINE_HEIGHT_MIN,
+        max: LINE_HEIGHT_MAX,
+        step: 5,
+        value: props.value,
+        disabled: !writable,
+        label: t(props.labelKey),
+        readout: props.value + " " + t("line.unit"),
+        minLabel: LINE_HEIGHT_MIN + " " + t("line.unit"),
+        maxLabel: LINE_HEIGHT_MAX + " " + t("line.unit"),
+        // The unit rides the pending readout too: without it the "%" vanished
+        // while dragging and popped back on release.
+        pendingText: function (pending) {
+          return pending + " " + t("line.unit");
+        },
+        onChange: function (value) {
+          setField(props.field, value);
+        },
+      })
+    );
+  };
+
+  // ---- code line-height slider (additive px) ----
+  var codeLineField = function () {
+    var value = editing[CODE_LINE_HEIGHT_FIELD];
+    return h(
+      FieldShell,
+      {
+        t: t,
+        label: t("line.codeLabel"),
+        hint: t("line.codeHint", { offset: value > 0 ? "+" + value : String(value) }),
+        overridden: overridden(CODE_LINE_HEIGHT_FIELD) && value !== 0,
+        disabled: !writable,
+        onReset: function () {
+          resetField(CODE_LINE_HEIGHT_FIELD);
+        },
+      },
+      h(NumberSlider, {
+        min: CODE_LINE_HEIGHT_MIN,
+        max: CODE_LINE_HEIGHT_MAX,
+        value: value,
+        disabled: !writable,
+        label: t("line.codeLabel"),
+        readout: (value > 0 ? "+" + value : String(value)) + "px",
+        minLabel: CODE_LINE_HEIGHT_MIN + "px",
+        maxLabel: "+" + CODE_LINE_HEIGHT_MAX + "px",
+        pendingText: function (pending) {
+          return (pending > 0 ? "+" + pending : String(pending)) + "px";
+        },
+        onChange: function (next) {
+          setField(CODE_LINE_HEIGHT_FIELD, next);
+        },
+      })
+    );
+  };
+
+  // ---- ligature segmented control ----
+  var ligatureField = function () {
+    var value = editing[LIGATURES_FIELD];
+    return h(
+      FieldShell,
+      {
+        t: t,
+        label: t("lig.label"),
+        hint: t("lig.hint"),
+        overridden: overridden(LIGATURES_FIELD) && value !== LIGATURES_DEFAULT,
+        disabled: !writable,
+        onReset: function () {
+          resetField(LIGATURES_FIELD);
+        },
+      },
+      h(Segmented, {
+        label: t("lig.label"),
+        value: value,
+        options: [
+          { value: LIGATURES_DEFAULT, label: t("lig.default") },
+          { value: LIGATURES_ON, label: t("lig.on") },
+          { value: LIGATURES_OFF, label: t("lig.off") },
+        ],
+        onChange: function (next) {
+          setField(LIGATURES_FIELD, next);
+        },
+      })
+    );
+  };
+
+  // ---- advanced feature-settings text field ----
+  var featuresField = function () {
+    var value = editing[FEATURES_FIELD];
+    return h(
+      FieldShell,
+      {
+        t: t,
+        label: t("feat.label"),
+        hint: t("feat.hint"),
+        overridden: overridden(FEATURES_FIELD) && value !== "",
+        disabled: !writable,
+        onReset: function () {
+          resetField(FEATURES_FIELD);
+        },
+      },
+      h("input", {
+        type: "text",
+        className: "dfp-search",
+        spellCheck: false,
+        value: value,
+        disabled: !writable,
+        "aria-label": t("feat.label"),
+        placeholder: t("feat.placeholder"),
+        onChange: function (event) {
+          setField(FEATURES_FIELD, event.target.value);
+        },
+      })
+    );
+  };
+
+  // ---- synthesis switches ----
+  var synthesisField = function (props) {
+    var value = editing[props.field] === true;
+    return h(
+      "div",
+      { className: "dfp-field" },
+      h(
+        "div",
+        { className: "dfp-fieldHead", role: "group", "aria-label": t(props.labelKey) },
+        h("span", { className: "dfp-fieldLabel" }, t(props.labelKey)),
+        h(
+          "div",
+          { className: "dfp-inline" },
+          h(Segmented, {
+            label: t(props.labelKey),
+            value: value ? "on" : "off",
+            options: [
+              { value: "on", label: t("common.on") },
+              { value: "off", label: t("common.off") },
+            ],
+            disabled: !writable,
+            onChange: function (next) {
+              if (next === "on") setField(props.field, true);
+              else resetField(props.field);
+            },
+          })
+        )
+      ),
+      h("p", { className: "dfp-hint" }, t(props.hintKey))
+    );
+  };
+
+  // ---- presets ----
+  /**
+   * Show a transient preset message: it fades in on the same row as the
+   * auto-save hint and fades out by itself after a moment, so it can never
+   * pile up on screen and never pushes the sections below it down (the row it
+   * lives in is always mounted, only its opacity changes).
+   * @param {string} text - the message.
+   */
+  var showStatus = function (text) {
+    statusIdRef.current += 1;
+    setPresetStatus({ text: text, id: statusIdRef.current });
+  };
+  useEffect(
+    function () {
+      if (presetStatus.text === "") return undefined;
+      setStatusShown(true);
+      var hide = globalThis.setTimeout(function () {
+        setStatusShown(false); // the CSS transition fades it out
+        statusTimerRef.current = globalThis.setTimeout(function () {
+          statusTimerRef.current = null;
+          setPresetStatus({ text: "", id: statusIdRef.current });
+        }, 240);
+      }, 2600);
+      return function () {
+        globalThis.clearTimeout(hide);
+        if (statusTimerRef.current !== null) {
+          globalThis.clearTimeout(statusTimerRef.current);
+          statusTimerRef.current = null;
+        }
+      };
+    },
+    [presetStatus.id]
+  );
+
+  var writePresets = function (next) {
+    if (next.length > shared.MAX_PRESETS) next = next.slice(0, shared.MAX_PRESETS);
+    submit(PRESETS_FIELD, JSON.stringify(next));
+  };
+
+  /**
+   * Switch presets: the entry becomes the auto-save target and its stored
+   * values are applied over the set currently being edited — every axis the
+   * entry does not store falls back to its neutral default, so a slot switch
+   * is exact.
+   * @param {{name: string, values: object}} entry - the picked preset.
+   */
+  var switchPreset = function (entry) {
+    if (!writable || entry.name === activeName) return;
+    applyingRef.current = true;
+    try {
+      for (var index = 0; index < VALUE_FIELDS.length; index += 1) {
+        var field = VALUE_FIELDS[index];
+        var value = Object.prototype.hasOwnProperty.call(entry.values, field)
+          ? entry.values[field]
+          : DEFAULTS[field];
+        setField(field, value);
+      }
+      submit(ACTIVE_PRESET_FIELD, entry.name);
+    } finally {
+      applyingRef.current = false;
+    }
+    showStatus(t("preset.applied", { name: entry.name }));
+  };
+
+  /** Rename the active preset in place; its stored values ride along. */
+  var renamePreset = function () {
+    setRenaming(false);
+    var name = presetName.trim().slice(0, shared.MAX_PRESET_NAME);
+    setPresetName("");
+    if (name === "" || !writable || name === activeName) return;
+    var taken = false;
+    var activeIndex = -1;
+    for (var index = 0; index < presetList.length; index += 1) {
+      if (presetList[index].name.toLowerCase() === name.toLowerCase()) taken = true;
+      if (presetList[index].name === activeName) activeIndex = index;
+    }
+    if (taken || activeIndex < 0) {
+      showStatus(t("preset.nameUsed"));
+      return;
+    }
+    var next = presetList.slice();
+    next[activeIndex] = {
+      name: name,
+      values: presetList[activeIndex].values,
+      savedAt: presetList[activeIndex].savedAt,
+    };
+    writePresets(next);
+    submit(ACTIVE_PRESET_FIELD, name);
+    showStatus(t("preset.renamed", { name: name }));
+  };
+
+  var exportPresets = function () {
+    var text = JSON.stringify(presetList);
+    var navigator = globalThis.navigator;
+    if (navigator !== undefined && navigator.clipboard !== undefined) {
+      navigator.clipboard
+        .writeText(text)
+        .then(function () {
+          showStatus(t("preset.exported"));
+        })
+        .catch(function () {
+          showStatus(text.slice(0, 200) + "…");
+        });
+    } else {
+      showStatus(text.slice(0, 120) + "…");
+    }
+  };
+  var importPresets = function (text) {
+    var parsed = normalizePresets(text);
+    if (parsed.length === 0) {
+      showStatus(t("preset.importBad"));
+      return;
+    }
+    // Imported presets merge into the list by name, imported values win.
+    var merged = presetList.slice();
+    for (var entryIndex = 0; entryIndex < parsed.length; entryIndex += 1) {
+      var entry = parsed[entryIndex];
+      var replaced = false;
+      for (var existingIndex = 0; existingIndex < merged.length; existingIndex += 1) {
+        if (merged[existingIndex].name.toLowerCase() === entry.name.toLowerCase()) {
+          merged[existingIndex] = entry;
+          replaced = true;
+          break;
+        }
+      }
+      if (!replaced) merged.push(entry);
+    }
+    writePresets(merged);
+    setImportOpen(false);
+    showStatus(t("preset.imported", { count: parsed.length }));
+  };
+
+  // the family field, in either mode
+  var familyField = function (props) {
+    var stack = editing[props.field];
+    if (view === "simple") {
+      return h(SimpleFamilyField, {
+        t: t,
+        label: t(props.labelKey),
+        westLabel: props.westLabel,
+        eastLabel: props.eastLabel,
+        slots: deriveSlots(stack),
+        disabled: !writable,
+        onPickWest: function (family) {
+          pickWest(props.field, family);
+        },
+        onPickEast: function (family) {
+          pickEast(props.field, family);
+        },
+        onRemoveWest: function () {
+          var slots = deriveSlots(stack);
+          if (slots.west !== null) dropEntry(props.field, slots.west);
+        },
+        onRemoveEast: function () {
+          var slots = deriveSlots(stack);
+          if (slots.east !== null) dropEntry(props.field, slots.east);
+        },
+      });
+    }
+    return h(
+      FieldShell,
+      {
+        t: t,
+        label: t(props.labelKey),
+        hint: t(props.hintKey),
+        overridden: overridden(props.field),
+        disabled: !writable,
+        onReset: function () {
+          resetField(props.field);
+        },
+      },
+      h(StackPicker, {
+        t: t,
+        label: t(props.labelKey),
+        value: stack,
+        onChange: function (value) {
+          setField(props.field, value);
+        },
+      })
+    );
+  };
+
+  // The interface follows the conversation (default): of the two axes the
+  // interface owns, the conversation's value wins and its own stays the
+  // fallback. The switch lives in the interface section.
+  var uiFollows = config[UI_FOLLOWS_FIELD] !== false;
+
+  var summaries = sectionSummaries(editing, uiFollows, t);
+
+  // The interface owns one axis now (its family); its preview shows that and
+  // nothing else — the weight, size and line height all come from the
+  // conversation section.
+  var previewUiStyle = {};
+  if (editing[SANS_FIELD] !== "") {
+    previewUiStyle.fontFamily = formatStack(parseStack(editing[SANS_FIELD]));
+  }
+  var previewDialogStyle = {};
+  if (editing[STACK_DIALOG_FIELD] !== "") {
+    previewDialogStyle.fontFamily = formatStack(parseStack(editing[STACK_DIALOG_FIELD]));
+  } else {
+    // Independent and unset: the conversation keeps DSH's own family, so the
+    // preview shows the theme's default rather than the interface stack the
+    // page rule would otherwise paint into this box.
+    var dialogFallback = FALLBACK_TOKENS["--dsw-font-family"];
+    if (typeof dialogFallback === "string" && dialogFallback !== "") {
+      previewDialogStyle.fontFamily = dialogFallback;
+    }
+  }
+  previewDialogStyle.fontSize = 13 + editing[SIZE_DIALOG_FIELD] + "px";
+  if (editing[LINE_HEIGHT_DIALOG_FIELD] !== LINE_HEIGHT_MIN) {
+    previewDialogStyle.lineHeight = String(editing[LINE_HEIGHT_DIALOG_FIELD] / 100);
+  }
+  if (editing[WEIGHT_DIALOG_FIELD] !== WEIGHT_UNSET) {
+    previewDialogStyle.fontWeight = editing[WEIGHT_DIALOG_FIELD];
+  }
+  var previewCodeStyle = {};
+  if (editing[MONO_FIELD] !== "") {
+    previewCodeStyle.fontFamily = formatStack(parseStack(editing[MONO_FIELD]));
+  }
+  previewCodeStyle.fontSize = 13 + editing[CODE_SIZE_FIELD] + "px";
+  if (editing[CODE_LINE_HEIGHT_FIELD] !== 0) {
+    previewCodeStyle.lineHeight = "calc(20px + " + editing[CODE_LINE_HEIGHT_FIELD] + "px)";
+  }
 
   return h(
     "li",
@@ -1571,193 +2591,326 @@ function FontCard(props) {
           { className: "dfp-body" },
           writable ? null : h("p", { className: "dfp-readOnly", role: "status" }, t("card.readOnly")),
 
+          // edit mode
           h(
             "div",
-            { className: "dfp-modeRow", role: "group", "aria-label": t("mode.label") },
-            h("span", { className: "dfp-modeLabel" }, t("mode.label")),
+            { className: "dfp-field" },
             h(
               "div",
-              { className: "dfp-modeSeg" },
+              { className: "dfp-fieldHead", role: "group", "aria-label": t("mode.label") },
+              h("span", { className: "dfp-fieldLabel" }, t("mode.label")),
+              h(
+                "div",
+                { className: "dfp-inline" },
+                h(Segmented, {
+                  label: t("mode.label"),
+                  value: view,
+                  options: [
+                    { value: "simple", label: t("mode.simple") },
+                    { value: "advanced", label: t("mode.advanced") },
+                  ],
+                  onChange: changeView,
+                })
+              )
+            )
+          ),
+
+          // the preset bar: a dropdown select plus rename/import/export.
+          // With a preset selected every edit auto-saves into it, so there is
+          // no separate save step — the bar sits right under the edit mode.
+          h(
+            "div",
+            { className: "dfp-field" },
+            h(
+              "div",
+              { className: "dfp-fieldHead" },
+              h("span", { className: "dfp-fieldLabel" }, t("preset.label"))
+            ),
+            h(
+              "div",
+              { className: "dfp-presetBar" },
+              renaming
+                ? h("input", {
+                    type: "text",
+                    className: "dfp-textInput",
+                    autoFocus: true,
+                    spellCheck: false,
+                    value: presetName,
+                    disabled: !writable,
+                    "aria-label": t("preset.rename"),
+                    placeholder: t("preset.renamePlaceholder"),
+                    onChange: function (event) {
+                      setPresetName(event.target.value);
+                    },
+                    onKeyDown: function (event) {
+                      if (event.key === "Enter") renamePreset();
+                      if (event.key === "Escape") {
+                        setRenaming(false);
+                        setPresetName("");
+                      }
+                    },
+                    onBlur: function () {
+                      if (presetName.trim() !== "") renamePreset();
+                      else setRenaming(false);
+                    },
+                  })
+                : h(PresetSelect, {
+                    t: t,
+                    presets: presetList,
+                    value: activeName,
+                    disabled: !writable,
+                    onPick: switchPreset,
+                  }),
               h(
                 "button",
                 {
                   type: "button",
-                  className: "dfp-modeButton" + (view === "simple" ? " dfp-modeButtonActive" : ""),
-                  "aria-pressed": view === "simple",
+                  className: "dfp-miniButton",
+                  disabled: !writable,
                   onClick: function () {
-                    changeView("simple");
+                    setPresetName(activeName);
+                    setRenaming(true);
                   },
                 },
-                t("mode.simple")
+                t("preset.rename")
               ),
               h(
                 "button",
                 {
                   type: "button",
-                  className: "dfp-modeButton" + (view === "advanced" ? " dfp-modeButtonActive" : ""),
-                  "aria-pressed": view === "advanced",
+                  className: "dfp-miniButton",
+                  disabled: !writable,
                   onClick: function () {
-                    changeView("advanced");
+                    setImportOpen(!importOpen);
                   },
                 },
-                t("mode.advanced")
+                t("preset.import")
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "dfp-miniButton",
+                  onClick: exportPresets,
+                },
+                t("preset.export")
+              )
+            ),
+            // the hint and the transient message share one always-mounted row:
+            // the message fades in on the right and never changes the row's
+            // height, so nothing below it moves
+            h(
+              "div",
+              { className: "dfp-presetMeta" },
+              h("p", { className: "dfp-hint dfp-presetHint" }, t("preset.autoSave")),
+              h(
+                "span",
+                {
+                  className: "dfp-status" + (statusShown ? " dfp-statusOn" : ""),
+                  role: "status",
+                  "aria-live": "polite",
+                  // The one-line clamp is deliberate; the full text (a long
+                  // clipboard fallback, say) stays readable on hover.
+                  title: presetStatus.text,
+                },
+                presetStatus.text
+              )
+            ),
+            importOpen
+              ? h("textarea", {
+                  className: "dfp-search",
+                  rows: 3,
+                  "aria-label": t("preset.import"),
+                  placeholder: t("preset.importPlaceholder"),
+                  onBlur: function (event) {
+                    // Import on blur, not per keystroke: typing a partial
+                    // paste must not be parsed as a bad export.
+                    var text = event.target.value.trim();
+                    if (text !== "") importPresets(text);
+                  },
+                })
+              : null
+          ),
+
+          // the accordion, conversation first (it owns every axis), then the
+          // interface (which follows it), then code
+          h(
+            Section,
+            {
+              t: t,
+              title: t("section.dialog"),
+              summary: summaries.dialog,
+              open: expanded === "dialog",
+              onToggle: function () {
+                setExpanded(expanded === "dialog" ? null : "dialog");
+              },
+            },
+            familyField({
+              field: STACK_DIALOG_FIELD,
+              labelKey: "dialog.label",
+              hintKey: "dialog.hint",
+              westLabel: "dialogWest.label",
+              eastLabel: "dialogEast.label",
+            }),
+            sizeField({
+              field: SIZE_DIALOG_FIELD,
+              labelKey: "size.dialogLabel",
+              hintKey: "size.dialogHint",
+              value: editing[SIZE_DIALOG_FIELD],
+              text:
+                editing[SIZE_DIALOG_FIELD] > 0
+                  ? "+" + editing[SIZE_DIALOG_FIELD]
+                  : String(editing[SIZE_DIALOG_FIELD]),
+            }),
+            lineField({
+              field: LINE_HEIGHT_DIALOG_FIELD,
+              labelKey: "line.dialogLabel",
+              hintKey: "line.dialogHint",
+              value: editing[LINE_HEIGHT_DIALOG_FIELD],
+            }),
+            weightField({
+              field: WEIGHT_DIALOG_FIELD,
+              labelKey: "weight.dialogLabel",
+              hintKey: "weight.dialogHint",
+              value: editing[WEIGHT_DIALOG_FIELD],
+            }),
+            h(
+              "div",
+              { className: "dfp-previewBox" },
+              h("div", { className: "dfp-previewCaption" }, t("preview.dialogCaption")),
+              h(
+                "div",
+                { className: "dfp-previewText", style: previewDialogStyle },
+                t("preview.sample")
               )
             )
           ),
-
-          view === "simple"
-            ? h(SimpleFamilyField, {
-                t: t,
-                label: t("sans.label"),
-                westLabel: "sansWest.label",
-                eastLabel: "sansEast.label",
-                slots: deriveSlots(config[SANS_FIELD]),
-                disabled: !writable,
-                onPickWest: pickSansWest,
-                onPickEast: pickSansEast,
-                onRemoveWest: function () {
-                  var slots = deriveSlots(config[SANS_FIELD]);
-                  if (slots.west !== null) dropSansEntry(slots.west);
-                },
-                onRemoveEast: function () {
-                  var slots = deriveSlots(config[SANS_FIELD]);
-                  if (slots.east !== null) dropSansEntry(slots.east);
-                },
-              })
-            : h(
-            FieldShell,
-            {
-              t: t,
-              label: t("sans.label"),
-              hint: t("sans.hint"),
-              overridden: overridden(SANS_FIELD),
-              disabled: !writable,
-              onReset: function () {
-                resetField(SANS_FIELD);
-              },
-            },
-            h(StackPicker, {
-              t: t,
-              label: t("sans.label"),
-              value: config[SANS_FIELD],
-              onChange: function (value) {
-                setField(SANS_FIELD, value);
-              },
-            })
-          ),
-
-          sizeField({
-            field: SIZE_FIELD,
-            labelKey: "size.bodyLabel",
-            hintKey: "size.bodyHint",
-            value: offset,
-            text: offsetText,
-          }),
-
-          weightField({
-            field: WEIGHT_FIELD,
-            labelKey: "weight.bodyLabel",
-            hintKey: "weight.bodyHint",
-            value: weight,
-          }),
-
-          view === "simple"
-            ? h(SimpleFamilyField, {
-                t: t,
-                label: t("mono.label"),
-                westLabel: "monoWest.label",
-                eastLabel: "monoEast.label",
-                slots: deriveSlots(config[MONO_FIELD]),
-                disabled: !writable,
-                onPickWest: pickMonoWest,
-                onPickEast: pickMonoEast,
-                onRemoveWest: function () {
-                  var slots = deriveSlots(config[MONO_FIELD]);
-                  if (slots.west !== null) dropMonoEntry(slots.west);
-                },
-                onRemoveEast: function () {
-                  var slots = deriveSlots(config[MONO_FIELD]);
-                  if (slots.east !== null) dropMonoEntry(slots.east);
-                },
-              })
-            : h(
-            FieldShell,
-            {
-              t: t,
-              label: t("mono.label"),
-              hint: t("mono.hint"),
-              overridden: overridden(MONO_FIELD),
-              disabled: !writable,
-              onReset: function () {
-                resetField(MONO_FIELD);
-              },
-            },
-            h(StackPicker, {
-              t: t,
-              label: t("mono.label"),
-              value: config[MONO_FIELD],
-              onChange: function (value) {
-                setField(MONO_FIELD, value);
-              },
-            })
-          ),
-
-          sizeField({
-            field: CODE_SIZE_FIELD,
-            labelKey: "size.codeLabel",
-            hintKey: "size.codeHint",
-            value: codeOffset,
-            text: codeOffsetText,
-          }),
-
-          weightField({
-            field: CODE_WEIGHT_FIELD,
-            labelKey: "weight.codeLabel",
-            hintKey: "weight.codeHint",
-            value: codeWeight,
-          }),
-
           h(
-            "div",
-            { className: "dfp-field dfp-fieldLast" },
+            Section,
+            {
+              t: t,
+              title: t("section.ui"),
+              summary: summaries.ui,
+              open: expanded === "ui",
+              onToggle: function () {
+                setExpanded(expanded === "ui" ? null : "ui");
+              },
+            },
+            // The interface has two axes to give (family and weight), so it
+            // follows the conversation: while it does, only this row shows and
+            // both controls come from the conversation section above.
             h(
               "div",
-              { className: "dfp-fieldHead" },
-              h("span", { className: "dfp-fieldLabel" }, t("preview.label"))
+              { className: "dfp-field" + (uiFollows ? " dfp-fieldLast" : "") },
+              h(
+                "div",
+                { className: "dfp-fieldHead", role: "group", "aria-label": t("ui.follow") },
+                h("span", { className: "dfp-fieldLabel" }, t("ui.follow")),
+                h(
+                  "div",
+                  { className: "dfp-inline" },
+                  h(Segmented, {
+                    label: t("ui.follow"),
+                    value: uiFollows ? "on" : "off",
+                    options: [
+                      { value: "on", label: t("common.on") },
+                      { value: "off", label: t("common.off") },
+                    ],
+                    disabled: !writable,
+                    onChange: function (next) {
+                      setField(UI_FOLLOWS_FIELD, next === "on");
+                    },
+                  })
+                )
+              )
             ),
+            uiFollows
+              ? null
+              : familyField({
+                  field: SANS_FIELD,
+                  labelKey: "sans.label",
+                  hintKey: "sans.hint",
+                  westLabel: "sansWest.label",
+                  eastLabel: "sansEast.label",
+                }),
             h(
               "div",
               { className: "dfp-previewBox" },
               h("div", { className: "dfp-previewCaption" }, t("preview.sansCaption")),
+              h("div", { className: "dfp-previewText", style: previewUiStyle }, t("preview.sample"))
+            )
+          ),
+          h(
+            Section,
+            {
+              t: t,
+              title: t("section.code"),
+              summary: summaries.code,
+              open: expanded === "code",
+              onToggle: function () {
+                setExpanded(expanded === "code" ? null : "code");
+              },
+            },
+            familyField({
+              field: MONO_FIELD,
+              labelKey: "mono.label",
+              hintKey: "mono.hint",
+              westLabel: "monoWest.label",
+              eastLabel: "monoEast.label",
+            }),
+            sizeField({
+              field: CODE_SIZE_FIELD,
+              labelKey: "size.codeLabel",
+              hintKey: "size.codeHint",
+              value: editing[CODE_SIZE_FIELD],
+              text:
+                editing[CODE_SIZE_FIELD] > 0
+                  ? "+" + editing[CODE_SIZE_FIELD]
+                  : String(editing[CODE_SIZE_FIELD]),
+            }),
+            codeLineField(),
+            weightField({
+              field: CODE_WEIGHT_FIELD,
+              labelKey: "weight.codeLabel",
+              hintKey: "weight.codeHint",
+              value: editing[CODE_WEIGHT_FIELD],
+            }),
+            ligatureField(),
+            view === "advanced" ? featuresField() : null,
+            h(
+              "div",
+              { className: "dfp-previewBox" },
+              h("div", { className: "dfp-previewCaption" }, t("preview.monoCaption")),
               h(
                 "div",
-                {
-                  className: "dfp-previewText",
-                  style:
-                    config[SANS_FIELD] === ""
-                      ? undefined
-                      : { fontFamily: formatStack(parseStack(config[SANS_FIELD])) },
-                },
-                t("preview.sample")
-              ),
-              h(
-                "div",
-                { className: "dfp-previewCaption", style: { marginTop: 10 } },
-                t("preview.monoCaption")
-              ),
-              h(
-                "div",
-                {
-                  className: "dfp-previewText dfp-previewCode",
-                  style:
-                    config[MONO_FIELD] === ""
-                      ? undefined
-                      : { fontFamily: formatStack(parseStack(config[MONO_FIELD])) },
-                },
+                { className: "dfp-previewText dfp-previewCode", style: previewCodeStyle },
                 t("preview.code")
               )
             )
           ),
+          // global fine-tuning, without an accordion: it is one switch (two in
+          // advanced mode), so it sits directly below the three font sections
+          view === "simple"
+            ? synthesisField({
+                field: NO_SYNTHETIC_ITALIC_FIELD,
+                labelKey: "synth.simple",
+                hintKey: "synth.simpleHint",
+                simple: true,
+              })
+            : h(
+                "div",
+                null,
+                synthesisField({
+                  field: NO_SYNTHETIC_ITALIC_FIELD,
+                  labelKey: "synth.italic",
+                  hintKey: "synth.italicHint",
+                }),
+                synthesisField({
+                  field: NO_SYNTHETIC_BOLD_FIELD,
+                  labelKey: "synth.bold",
+                  hintKey: "synth.boldHint",
+                })
+              ),
 
           h(
             "div",
@@ -1769,12 +2922,27 @@ function FontCard(props) {
                 className: "dfp-resetAll",
                 disabled: !writable,
                 onClick: function () {
-                  resetField(SANS_FIELD);
-                  resetField(MONO_FIELD);
-                  resetField(SIZE_FIELD);
-                  resetField(CODE_SIZE_FIELD);
-                  resetField(WEIGHT_FIELD);
-                  resetField(CODE_WEIGHT_FIELD);
+                  for (var index = 0; index < VALUE_FIELDS.length; index += 1) {
+                    clear(VALUE_FIELDS[index]);
+                  }
+                  clear(DARK_VALUES_FIELD);
+                  // Auto-save: the reset IS a change to the active preset, so
+                  // its snapshot follows back to the neutral defaults.
+                  if (writable && applyingRef.current !== true) {
+                    var activeIndex = -1;
+                    for (var i = 0; i < presetList.length; i += 1) {
+                      if (presetList[i].name === activeName) activeIndex = i;
+                    }
+                    if (activeIndex >= 0) {
+                      var next = presetList.slice();
+                      next[activeIndex] = {
+                        name: presetList[activeIndex].name,
+                        values: {},
+                        savedAt: Date.now(),
+                      };
+                      writePresets(next);
+                    }
+                  }
                 },
               },
               t("card.resetAll")
@@ -1801,11 +2969,58 @@ export function apply(ctx) {
     return tokens;
   });
   var scope = ctx.settingsScope.bind({ namespace: NAMESPACE });
+  var appliedOverrides = "";
+
+  /**
+   * Hand the family variables to the official theme layer, so the presenter
+   * owns them on body's inline style and nothing — theme switches included —
+   * can delete them. Only the two family pairs ride this; the size/weight
+   * axes stay on the stylesheet, where their `!important` rules already win.
+   * @param {unknown} config - the current configuration.
+   */
+  var applyTokenOverrides = function (config) {
+    if (typeof ctx.get !== "function") return;
+    var theme = ctx.get("theme");
+    if (theme === undefined || theme === null) return;
+    if (typeof theme.overrideTokens !== "function") return;
+    var sets = resolveAxes(config);
+    var tokens = {};
+    var uiLight = formatStack(parseStack(sets.light[SANS_FIELD]));
+    var uiDark = formatStack(parseStack(sets.dark[SANS_FIELD]));
+    if (uiLight !== "" && uiDark !== "") {
+      tokens["--dsw-font-family"] = { light: uiLight, dark: uiDark };
+    }
+    var monoLight = formatStack(parseStack(sets.light[MONO_FIELD]));
+    var monoDark = formatStack(parseStack(sets.dark[MONO_FIELD]));
+    if (monoLight !== "" || monoDark !== "") {
+      var fallback = readDefaultFamily("--ds-font-family-code");
+      var light = monoLight !== "" ? monoLight : fallback;
+      var dark = monoDark !== "" ? monoDark : fallback;
+      if (light !== "" && dark !== "") {
+        tokens["--dsw-font-mono"] = { light: light, dark: dark };
+        tokens["--ds-font-family-code"] = { light: light, dark: dark };
+      }
+    }
+    var signature = JSON.stringify(tokens);
+    if (signature === appliedOverrides) return;
+    appliedOverrides = signature;
+    try {
+      theme.overrideTokens("dsh-fonttune", tokens);
+    } catch (error) {
+      // A teaching error (a bad pair shape) must not break the page; the
+      // stylesheet rules below still apply the same values.
+    }
+  };
 
   var sync = function () {
     var snapshot = scope.getSnapshot();
     if (snapshot.value === undefined) return;
-    applyCss(snapshot.value);
+    // Light and dark share one value set in this release: the stored flag (if
+    // any) is ignored, so no prefixed dark rules are ever emitted.
+    var unified = normalizeConfig(snapshot.value);
+    unified[PER_THEME_FIELD] = false;
+    applyCss(unified);
+    applyTokenOverrides(unified);
   };
   ctx.effect(
     function () {
@@ -1817,7 +3032,11 @@ export function apply(ctx) {
 
   // DSH writes its tokens (and its content font size) after this bundle
   // activates, and the host's own boot row only covers the first frame; the
-  // size axis therefore re-reads the live values and reapplies when they moved.
+  // size axis therefore re-reads the live values and reapplies when they
+  // moved. The theme/change event makes that immediate: the official
+  // font-size preference flows through it, so a slider change is followed
+  // within a frame instead of the polling interval.
+  var scheduleRecheck = null;
   ctx.effect(
     function () {
       if (typeof document === "undefined") return undefined;
@@ -1838,6 +3057,7 @@ export function apply(ctx) {
         }
         sync();
       };
+      scheduleRecheck = recheck;
       var timer = globalThis.setTimeout(recheck, 500);
       var interval = globalThis.setInterval(recheck, 4000);
       return function () {
@@ -1846,6 +3066,17 @@ export function apply(ctx) {
       };
     },
     "dsh-fonttune: token refresh"
+  );
+  ctx.effect(
+    function () {
+      // Compositions without an event seat (the offline stand-ins) simply skip
+      // this hook; the polling recheck still covers theme changes there.
+      if (typeof ctx.on !== "function") return undefined;
+      return ctx.on("theme/change", function () {
+        if (scheduleRecheck !== null) scheduleRecheck();
+      });
+    },
+    "dsh-fonttune: theme change adoption"
   );
 
   var t = function (key, params) {
@@ -1877,3 +3108,6 @@ export function apply(ctx) {
     );
   });
 }
+
+exports.apply = apply;
+exports.inject = inject;

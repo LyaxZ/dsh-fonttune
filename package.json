@@ -1,7 +1,7 @@
 {
   "name": "dsh-fonttune",
-  "version": "0.1.6",
-  "description": "Font plugin for the DeepSeek Harness Web GUI: body and code font families, a separate font size and weight for each, and a West/CJK split picker.",
+  "version": "0.2.0",
+  "description": "Font plugin for the DeepSeek Harness Web GUI: the conversation gets its own font, size, line height and weight, the interface font follows it, code keeps its own axis with ligature control, and whole setups save as presets.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -46,8 +46,8 @@
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
-    "test": "node test/run.mjs",
-    "prepublishOnly": "node build.mjs && node test/run.mjs"
+    "test": "node test/run.mjs && node test/render-card.mjs",
+    "prepublishOnly": "node build.mjs && node test/run.mjs && node test/render-card.mjs"
   },
   "license": "MIT",
   "keywords": [

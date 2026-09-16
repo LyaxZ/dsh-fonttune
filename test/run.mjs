@@ -481,8 +481,16 @@ await test("clamps the size offsets and the weight", () => {
 
 await test("an empty configuration is dormant", () => {
   assert.equal(shared.isDormant(shared.normalizeConfig({})), true);
-  assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffset: 1 })), false);
+  // The retired interface axes render nothing, so setting only them is still
+  // dormant rather than counting as a change.
+  assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffset: 1 })), true);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ lineHeight: 130 })), true);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ weight: 480 })), true);
+  // The axes that do render are not dormant.
   assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffsetCode: -1 })), false);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffsetDialog: 1 })), false);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ weightDialog: 480 })), false);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ lineHeightDialog: 120 })), false);
 });
 
 await test("the scale is uniform and bounded", () => {
@@ -514,10 +522,10 @@ await test("families are declared at the source variables, code rule last", () =
   );
   assert.match(
     css,
-    /pre,code,kbd,samp,var,tt,textarea,\.cm-editor \.cm-content\{font-family:"JetBrains Mono" !important\}/
+    /pre,pre \*,code,code \*,kbd,kbd \*,samp,samp \*,var,var \*,tt,tt \*,textarea,textarea \*,\.cm-editor,\.cm-editor \*,\.dfp-previewCode,\.dfp-previewCode \*,\[class\*="code" i\],\[class\*="code" i\] \*,\[class\*="terminal" i\],\[class\*="terminal" i\] \*\{font-family:"JetBrains Mono" !important\}/
   );
   assert.ok(
-    css.indexOf("pre,code") > css.indexOf("body{font-family"),
+    css.indexOf("pre,pre *") > css.indexOf("body{font-family"),
     "the code rule must come after the body rule so it wins on equal specificity"
   );
 });
@@ -531,31 +539,34 @@ await test("an unset family overrides none of its variables", () => {
   assert.equal(sansOnly.includes("--dsw-font-family:"), true);
 });
 
-await test("the body offset scales tokens by one ratio", () => {
-  const css = shared.buildFontCss(
-    { sizeOffset: 2 },
-    { "--dsw-font-s-14-font-size": "14px", "--dsw-font-s-14-line-height": "24px" }
-  );
-  assert.match(css, /--dsw-font-s-14-font-size:calc\(\(14px\) \* 1\.125\)/);
-  assert.match(css, /--dsw-font-s-14-line-height:calc\(\(24px\) \* 1\.125\)/);
-  assert.match(css, /^body,body \*\{/);
-});
-
-await test("the body offset leaves the code tokens to their own axis", () => {
+await test("the retired interface size offset injects nothing", () => {
+  // DSH exposes no interface size hook: the settings sheet, the sidebars and
+  // the workspace size their text with literals, and the interface ladder
+  // tokens only reach conversation-area widgets. The durable field is kept so
+  // old documents and presets still parse, but it must never emit a rule.
   const css = shared.buildFontCss(
     { sizeOffset: 2 },
     {
       "--dsw-font-s-14-font-size": "14px",
-      "--dsw-font-markdown-code": "12px/19px var(--ds-font-family-code)",
-      "--dsw-font-markdown-code-block-small-font-size": "11px",
+      "--dsw-font-s-14-line-height": "24px",
+      "--dsh-content-font-size": "14px",
     }
   );
-  assert.match(css, /--dsw-font-s-14-font-size:calc\(\(14px\) \* 1\.125\)/);
-  assert.equal(
-    css.includes("--dsw-font-markdown-code"),
-    false,
-    "code answers to the code offset only"
-  );
+  assert.equal(css, "", "no interface rule and no conversation rule");
+});
+
+await test("the retired interface offset leaves every token to its own axis", () => {
+  const base = {
+    "--dsw-font-s-14-font-size": "14px",
+    "--dsw-font-markdown-code": "12px/19px var(--ds-font-family-code)",
+    "--dsh-content-font-size": "14px",
+  };
+  assert.equal(shared.buildFontCss({ sizeOffset: 2 }, base), "");
+  // The code axis and the dialog axis are untouched by that retirement.
+  const code = shared.buildFontCss({ sizeOffsetCode: 2 }, base);
+  assert.match(code, /--dsw-font-markdown-code:calc\(\(12px\) \* 1\.125\)/);
+  const dialog = shared.buildFontCss({ sizeOffsetDialog: 2 }, base);
+  assert.match(dialog, /--dsh-content-font-size:calc\(\(14px\) \+ 2px\) !important/);
 });
 
 await test("the code offset scales the code shorthand and its parts", () => {
@@ -572,49 +583,82 @@ await test("the code offset scales the code shorthand and its parts", () => {
   // its size and line height must both ride the ratio and the family must not.
   assert.match(
     css,
-    /--dsw-font-markdown-code-block-small:calc\(\(11px\) \* 1\.125\)\/calc\(\(16px\) \* 1\.125\) var\(--ds-font-family-code\) !important/
+    /--dsw-font-markdown-code-block-small:calc\(\(11px\) \* 1\.125\) \/ calc\(\(16px\) \* 1\.125\) var\(--ds-font-family-code\) !important/
   );
   assert.match(css, /--dsw-font-markdown-code-block-small-font-size:calc\(\(11px\) \* 1\.125\) !important/);
   assert.match(css, /--dsw-font-markdown-code-block-small-line-height:calc\(\(16px\) \* 1\.125\) !important/);
   assert.equal(
     css.includes("--dsw-font-s-14-font-size:"),
     false,
-    "the body axis stays out of the code rule"
+    "the retired interface axis stays out of the rule"
   );
 });
 
-await test("the two size axes are independent in one stylesheet", () => {
+await test("the code and dialog size axes stay independent", () => {
   const base = {
     "--dsh-content-font-size": "14px",
+    "--dsh-content-font-delta": "calc(var(--dsh-content-font-size,14px) - 14px)",
     "--dsw-font-markdown-code-block": "11px/19px var(--ds-font-family-code)",
   };
-  const up = shared.buildFontCss({ sizeOffset: 2, sizeOffsetCode: -2 }, base);
-  assert.match(up, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\)/);
-  assert.match(up, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 0\.875\)/);
-  const flipped = shared.buildFontCss({ sizeOffset: -2, sizeOffsetCode: 2 }, base);
-  assert.match(flipped, /--dsh-content-font-size:calc\(\(14px\) \* 0\.875\)/);
-  assert.match(flipped, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 1\.125\)/);
-});
-
-await test("the content size composes with DSH's own slider", () => {
-  const css = shared.buildFontCss(
-    { sizeOffset: 1 },
-    { "--dsh-content-font-size": "17px", "--dsh-content-font-size-secondary": "16px" }
-  );
-  assert.match(css, /--dsh-content-font-size:calc\(\(17px\) \* 1\.0625\)/);
-  assert.match(css, /--dsh-content-font-size-secondary:calc\(\(16px\) \* 1\.0625\)/);
-});
-
-await test("the embedded fallback map alone drives a real size rule", () => {
-  const css = shared.buildFontCss({ sizeOffset: 2 }, shared.FALLBACK_TOKENS);
-  assert.match(css, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\)/);
-  assert.match(css, /--dsh-content-font-size-secondary:calc\(\(13px\) \* 1\.125\)/);
-  assert.match(css, /--dsw-font-s-14-line-height:calc\(\(24px\) \* 1\.125\)/);
-  assert.match(css, /--dsw-font-markdown-h1-font-size:calc\(\(21px\) \* 1\.125\)/);
+  const css = shared.buildFontCss({ sizeOffsetCode: -2, sizeOffsetDialog: 2 }, base);
+  assert.match(css, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 0\.875\)/);
+  assert.match(css, /--dsh-content-font-size:calc\(\(14px\) \+ 2px\) !important/);
+  // The retired interface offset changes nothing, alone or combined.
+  assert.equal(shared.buildFontCss({ sizeOffset: 3 }, base), "");
   assert.equal(
-    css.includes("--dsw-font-markdown-code"),
+    shared.buildFontCss({ sizeOffset: 3, sizeOffsetDialog: 0 }, base),
+    "",
+    "the interface offset is inert even beside a dialog offset"
+  );
+});
+
+await test("the interface offset never scales the conversation chain", () => {
+  // The official "conversation font size" setting owns --dsh-content-font-size
+  // and the markdown ladder derives from it. Scaling that chain from the
+  // interface axis was exactly what made an interface size change move the
+  // conversation; with no interface hook left, the conversation size is the
+  // dialog axis's business alone.
+  const base = {
+    "--dsh-content-font-size": "17px",
+    "--dsh-content-font-size-secondary":
+      "min(calc(var(--dsh-content-font-size,14px) - 1px), max(13px, calc(var(--dsh-content-font-size,14px) - 2px)))",
+    "--dsh-content-font-delta": "calc(var(--dsh-content-font-size,14px) - 14px)",
+    "--dsh-content-font-delta-secondary": "calc(var(--dsh-content-font-size-secondary) - 13px)",
+  };
+  assert.equal(shared.buildFontCss({ sizeOffset: 2 }, base), "");
+  assert.equal(shared.buildFontCss({ sizeOffset: 2, followDialog: false }, base), "");
+  // The conversation's own axis shifts the SOURCE once and nothing else.
+  const dialog = shared.buildFontCss({ sizeOffsetDialog: 2 }, base);
+  assert.match(dialog, /--dsh-content-font-size:calc\(\(17px\) \+ 2px\) !important/);
+  assert.equal(
+    dialog.includes("--dsh-content-font-size-secondary:"),
     false,
-    "the fallback map's code tokens belong to the code axis"
+    "the derived secondary size follows the source"
+  );
+  assert.equal(
+    dialog.includes("--dsh-content-font-delta:"),
+    false,
+    "the delta derives from the shifted source, never shifted itself"
+  );
+});
+
+await test("the embedded fallback map alone drives the code size rule", () => {
+  const code = shared.buildFontCss({ sizeOffsetCode: 2 }, shared.FALLBACK_TOKENS);
+  assert.match(code, /--dsw-font-markdown-code-font-size:calc\(\(12px\) \* 1\.125\)/);
+  assert.equal(
+    code.includes("--dsh-content-font-size:"),
+    false,
+    "the conversation chain belongs to the dialog axis"
+  );
+  assert.equal(
+    code.includes("--dsw-font-s-14-font-size:"),
+    false,
+    "the interface ladder belongs to no size axis any more"
+  );
+  assert.equal(
+    shared.buildFontCss({ sizeOffset: 2 }, shared.FALLBACK_TOKENS),
+    "",
+    "the interface offset is retired even against the fallback map"
   );
 });
 
@@ -622,7 +666,7 @@ await test("the fallback map sizes code through the code axis alone", () => {
   const css = shared.buildFontCss({ sizeOffsetCode: 3 }, shared.FALLBACK_TOKENS);
   assert.match(
     css,
-    /--dsw-font-markdown-code-block-small:calc\(\(11px\) \* 1\.1875\)\/calc\(\(16px\) \* 1\.1875\) var\(--ds-font-family-code\) !important/
+    /--dsw-font-markdown-code-block-small:calc\(\(11px\) \* 1\.1875\) \/ calc\(\(16px\) \* 1\.1875\) var\(--ds-font-family-code\) !important/
   );
   assert.match(css, /--dsw-font-markdown-code-font-size:calc\(\(12px\) \* 1\.1875\)/);
   assert.equal(css.includes("--dsh-content-font-size:"), false, "the body axis stays dormant");
@@ -630,23 +674,22 @@ await test("the fallback map sizes code through the code axis alone", () => {
 
 await test("only typography tokens are scaled", () => {
   const css = shared.buildFontCss(
-    { sizeOffset: 2 },
+    { sizeOffsetCode: 2 },
     {
-      "--dsw-font-family": "Inter",
-      "--dsw-font-s-14-font-family": "Inter",
-      "--dsw-font-s-14-font-weight": "400",
+      "--dsw-font-markdown-code": "12px",
+      "--dsw-font-markdown-code-font-size": "12px",
       "--dsw-alias-bg-base": "#fff",
-      "--dsh-content-font-delta": "0px",
     }
   );
-  assert.equal(css.includes("--dsw-font-family:"), false);
   assert.equal(css.includes("--dsw-alias-bg-base"), false);
-  assert.equal(css.includes("--dsh-content-font-delta"), false);
+  assert.match(css, /--dsw-font-markdown-code-font-size:calc\(\(12px\) \* 1\.125\)/);
+  assert.match(css, /--dsw-font-markdown-code:calc\(\(12px\) \* 1\.125\)/);
 });
 
 await test("a size offset without tokens injects no size rule", () => {
-  assert.equal(shared.buildFontCss({ sizeOffset: 3 }, {}), "");
   assert.equal(shared.buildFontCss({ sizeOffsetCode: 3 }, {}), "");
+  assert.equal(shared.buildFontCss({ sizeOffsetDialog: 3 }, {}), "");
+  assert.equal(shared.buildFontCss({ sizeOffset: 3 }, {}), "");
 });
 
 await test("a value a ratio cannot multiply is left alone", () => {
@@ -658,58 +701,57 @@ await test("a value a ratio cannot multiply is left alone", () => {
   );
   assert.match(css, /--dsw-font-markdown-code:calc\(\(12px\) \* 1\.125\) !important/);
   assert.equal(css.includes("--dsw-font-markdown-code-block:"), false);
-  const body = shared.buildFontCss(
-    { sizeOffset: 2 },
-    { "--dsw-font-s-14-font-size": "unset", "--dsw-font-s-14-line-height": "24px" }
-  );
-  assert.equal(body.includes("--dsw-font-s-14-font-size:"), false);
-  assert.match(body, /--dsw-font-s-14-line-height:calc\(\(24px\) \* 1\.125\)/);
 });
 
 await test("tokens that derive from others via var() are skipped", () => {
   const css = shared.buildFontCss(
-    { sizeOffset: 2 },
+    { sizeOffsetCode: 2 },
     {
-      "--dsh-content-font-size": "14px",
-      "--dsh-content-font-size-secondary": "min(calc(var(--dsh-content-font-size,14px) - 1px), 13px)",
-      "--dsw-font-markdown-base-font-size": "var(--dsh-content-font-size,14px)",
-      "--dsw-font-markdown-h1-font-size": "calc(21px + var(--dsh-content-font-delta))",
+      "--dsw-font-markdown-code-font-size": "12px",
+      "--dsw-font-markdown-code-block-font-size": "var(--dsw-font-markdown-code-font-size)",
+      "--dsw-font-markdown-code-block": "11px/19px var(--ds-font-family-code)",
     }
   );
-  assert.match(css, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\) !important/);
-  assert.equal(css.includes("--dsh-content-font-size-secondary:"), false, "derived tokens inherit through the chain");
-  assert.equal(css.includes("--dsw-font-markdown-base-font-size:"), false);
-  assert.equal(css.includes("--dsw-font-markdown-h1-font-size:"), false);
-});
-
-await test("the body weight rule writes the chosen integer verbatim", () => {
-  assert.match(shared.buildFontCss({ weight: 300 }), /body,body \*\{font-weight:300 !important\}/);
-  assert.match(shared.buildFontCss({ weight: 520 }), /font-weight:520 !important/);
-  assert.match(shared.buildFontCss({ weight: 590 }), /font-weight:590 !important/);
-  assert.equal(shared.buildFontCss({ weight: 0 }), "");
-});
-
-await test("an unset code weight still keeps code out of the body weight", () => {
-  const css = shared.buildFontCss({ weight: 480 });
-  assert.match(css, /body,body \*\{font-weight:480 !important\}/);
-  // Without this, the blanket `body, body *` rule would pull code to 480 too.
-  assert.match(css, /font-weight:normal !important/);
-  assert.ok(
-    css.indexOf("font-weight:normal") > css.indexOf("font-weight:480"),
-    "the code rule must come after the body rule to win the specificity tie"
+  assert.match(css, /--dsw-font-markdown-code-font-size:calc\(\(12px\) \* 1\.125\) !important/);
+  assert.equal(
+    css.includes("--dsw-font-markdown-code-block-font-size:"),
+    false,
+    "derived tokens inherit through the chain"
   );
+  assert.match(css, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 1\.125\)/);
 });
 
-await test("the weight axes are independent in one stylesheet", () => {
-  const css = shared.buildFontCss({ weight: 560, weightCode: 320 });
-  assert.match(css, /body,body \*\{font-weight:560 !important\}/);
-  assert.match(css, /font-weight:320 !important/);
-  assert.equal(css.includes("font-weight:normal"), false);
-  // code only: nothing touches the body
+await test("the conversation weight is written verbatim inside the dialog scope", () => {
+  const css = shared.buildFontCss({ weightDialog: 300 });
+  assert.ok(css.includes('[class*="_markdown_" i]'), "the rule is markdown-scoped");
+  assert.ok(css.includes("font-weight:300 !important"));
+  assert.ok(shared.buildFontCss({ weightDialog: 520 }).includes("font-weight:520 !important"));
+  // The retired interface weight injects nothing at all.
+  assert.equal(shared.buildFontCss({ weight: 480 }), "");
+  assert.equal(shared.buildFontCss({ weight: 300 }), "");
+});
+
+await test("an unset code weight injects nothing of its own", () => {
+  assert.equal(shared.buildFontCss({ weightCode: 0 }), "");
+  const css = shared.buildFontCss({ weightCode: 300, weightDialog: 480 });
+  assert.ok(css.includes("font-weight:300 !important"), "the code weight rule exists");
+  assert.ok(css.includes("font-weight:480 !important"), "the conversation weight rule exists");
+});
+
+await test("the conversation and code weight axes are independent", () => {
+  const css = shared.buildFontCss({ weightDialog: 560, weightCode: 320, weight: 700 });
+  assert.ok(css.includes('[class*="_markdown_" i]'), "the conversation rule is scoped");
+  assert.ok(css.includes("font-weight:560 !important"));
+  assert.ok(css.includes("font-weight:320 !important"));
+  assert.equal(
+    css.includes("font-weight:700 !important"),
+    false,
+    "the retired interface weight is inert"
+  );
+  // code only: nothing touches the conversation
   const codeOnly = shared.buildFontCss({ weightCode: 600 });
-  assert.equal(codeOnly.includes("font-weight:normal"), false);
   assert.match(codeOnly, /font-weight:600 !important/);
-  assert.equal(codeOnly.includes("body,body *{font-weight"), false);
+  assert.equal(codeOnly.includes('[class*="_markdown_" i]'), false);
 });
 
 await test("the code weight selector names the code surfaces", () => {
@@ -894,15 +936,25 @@ await test("a configured base layer is rendered into the row", async () => {
     sizeOffset: 2,
     sizeOffsetCode: -2,
     weight: 500,
+    weightDialog: 460,
     weightCode: 300,
   });
   const rows = [];
   host.table[0](rows);
   assert.match(rows[0].text, /body\{font-family:"Inter" !important\}/);
-  assert.match(rows[0].text, /body,body \*\{font-weight:500 !important\}/);
+  assert.ok(rows[0].text.includes("font-weight:460 !important"), "the conversation weight renders");
   assert.match(rows[0].text, /font-weight:300 !important/);
-  assert.match(rows[0].text, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\)/);
+  assert.equal(
+    rows[0].text.includes("font-weight:500 !important"),
+    false,
+    "the retired interface weight renders nothing"
+  );
   assert.match(rows[0].text, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 0\.875\)/);
+  assert.equal(
+    rows[0].text.includes("--dsw-font-s-14-font-size:"),
+    false,
+    "the retired interface size axis injects nothing into the row"
+  );
 });
 
 await test("the host schema accepts real stacks and refuses bad ones", async () => {
@@ -950,6 +1002,7 @@ await test("applies the saved configuration to one style tag", async () => {
       sizeOffset: 2,
       sizeOffsetCode: 1,
       weight: 500,
+      weightDialog: 460,
       weightCode: 300,
     },
     user: { sans: '"Inter"' },
@@ -960,10 +1013,19 @@ await test("applies the saved configuration to one style tag", async () => {
   const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
   assert.ok(tag, "the plugin must inject its stylesheet");
   assert.match(tag.textContent, /body\{font-family:"Inter" !important\}/);
-  assert.match(tag.textContent, /body,body \*\{font-weight:500 !important\}/);
+  assert.ok(tag.textContent.includes("font-weight:460 !important"), "the conversation weight renders");
   assert.match(tag.textContent, /font-weight:300 !important/);
-  assert.match(tag.textContent, /--dsh-content-font-size:calc\(\(14px\) \* 1\.125\)/);
+  assert.equal(
+    tag.textContent.includes("font-weight:500 !important"),
+    false,
+    "the retired interface weight renders nothing"
+  );
   assert.match(tag.textContent, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 1\.0625\)/);
+  assert.equal(
+    tag.textContent.includes("--dsw-font-s-14-font-size:"),
+    false,
+    "the retired interface size axis injects nothing"
+  );
 });
 
 await test("the injected family rule survives the DSH token context", async () => {
@@ -1007,7 +1069,7 @@ await test("localized copy follows the active locale", async () => {
   await loadClientBundle(ctx);
   const t = registered[0].options.inject().t;
   assert.equal(t("card.title"), "字体增强");
-  assert.equal(t("sans.label"), "正文字体");
+  assert.equal(t("sans.label"), "界面字体");
   assert.equal(t("size.unit"), "px");
 });
 
@@ -1136,6 +1198,297 @@ await test("both dictionaries carry the same keys, and every rendered key exists
     assert.ok(en.includes(key), `en is missing "${key}"`);
     assert.ok(zh.includes(key), `zh is missing "${key}"`);
   }
+});
+
+section("0.2.0: dialog axis, code extras, per-theme values and presets");
+
+await test("an unset dialog follows the interface family without extra rules", () => {
+  const css = shared.buildFontCss({ sans: '"Inter"', sizeOffset: 2 }, shared.FALLBACK_TOKENS);
+  // Family (and weight) FOLLOW: no dialog-scoped family rule may appear. The
+  // retired interface size offset still reaches nothing at all.
+  assert.equal(css.includes('font-family:"Inter" !important}'), true);
+  assert.equal(css.includes("[class*=\"_markdown_\" i]"), false, "no dialog scope while following");
+  assert.equal(
+    css.includes("--dsh-content-font-size:"),
+    false,
+    "the conversation size never follows a retired axis"
+  );
+});
+
+await test("a conversation stack leads the interface while following", () => {
+  // Following (the default): the conversation's family IS the interface family,
+  // so one rule covers the whole page.
+  const following = shared.buildFontCss({ sans: '"Inter"', stackDialog: '"Noto Serif SC"' });
+  assert.ok(
+    following.includes('--dsw-font-family:"Noto Serif SC"'),
+    "the shared variable carries the conversation family"
+  );
+  assert.ok(following.includes('body{font-family:"Noto Serif SC" !important}'));
+  assert.equal(
+    following.includes("[class*=\"_markdown_\" i]"),
+    false,
+    "no dialog scope is needed when the two are equal"
+  );
+  // Not following: the interface keeps its own family and the conversation is
+  // scoped to the markdown subtree.
+  const split = shared.buildFontCss({
+    sans: '"Inter"',
+    stackDialog: '"Noto Serif SC"',
+    uiFollowsDialog: false,
+  });
+  assert.ok(split.includes('--dsw-font-family:"Inter"'), "the interface keeps its variable");
+  assert.ok(split.includes('[class*="_markdown_" i]:not('), "the dialog rule is markdown-scoped");
+  assert.ok(split.includes('font-family:"Noto Serif SC" !important'));
+  assert.ok(!split.includes('--dsw-font-family:"Noto Serif SC"'), "the dialog never owns the sans variable");
+  // An identical dialog stack adds nothing in either mode.
+  const same = shared.buildFontCss({
+    sans: '"Inter"',
+    stackDialog: '"Inter"',
+    uiFollowsDialog: false,
+  });
+  assert.equal(same.includes("[class*=\"_markdown_\" i]"), false, "an equal dialog stack is a no-op");
+});
+
+await test("the dialog weight stays out of code surfaces", () => {
+  const css = shared.buildFontCss({
+    sans: '"Inter"',
+    stackDialog: '"Noto Serif SC"',
+    weight: 500,
+    weightDialog: 430,
+  });
+  assert.ok(css.includes("font-weight:430 !important"), "the dialog weight rule exists");
+  assert.ok(css.indexOf("font-weight:430") > css.indexOf("font-weight:500"), "dialog wins over interface");
+});
+
+await test("the retired interface line-height injects nothing", () => {
+  const css = shared.buildFontCss(
+    { lineHeight: 130 },
+    {
+      "--dsw-font-s-14-line-height": "22px",
+      "--dsw-font-s-14": "14px/22px var(--dsw-font-family)",
+      "--dsw-font-markdown-h1":
+        "700 calc(21px + var(--dsh-content-font-delta)) / calc(30px + var(--dsh-content-font-delta)) var(--dsw-font-family)",
+    }
+  );
+  assert.equal(css, "", "no interface line-height rule, and none for the markdown ladder");
+  // The line-height that DOES work is the conversation's own axis.
+  const dialog = shared.buildFontCss(
+    { sizeOffsetDialog: 0, lineHeightDialog: 140 },
+    {
+      "--dsw-font-markdown-h1":
+        "700 calc(21px + var(--dsh-content-font-delta)) / calc(30px + var(--dsh-content-font-delta)) var(--dsw-font-family)",
+    }
+  );
+  assert.match(dialog, /--dsw-font-markdown-h1:700 calc\(21px \+ var\(--dsh-content-font-delta\)\) \/ calc\(\(calc\(30px \+ var\(--dsh-content-font-delta\)\)\) \* 1\.4\)/);
+});
+
+await test("the dialog line-height rebuilds the markdown shorthands", () => {
+  const css = shared.buildFontCss(
+    { stackDialog: '"Noto Serif SC"', lineHeightDialog: 140 },
+    {
+      "--dsw-font-markdown-h1":
+        "700 calc(21px + var(--dsh-content-font-delta)) / calc(30px + var(--dsh-content-font-delta)) var(--dsw-font-family)",
+    }
+  );
+  assert.match(
+    css,
+    /--dsw-font-markdown-h1:700 calc\(21px \+ var\(--dsh-content-font-delta\)\) \/ calc\(\(calc\(30px \+ var\(--dsh-content-font-delta\)\)\) \* 1\.4\) var\(--dsw-font-family\) !important/
+  );
+});
+
+await test("the feature settings value is sanitized", () => {
+  assert.equal(shared.sanitizeFeatures('"ss01" on, "cv01" 1'), '"ss01" on, "cv01" 1');
+  assert.equal(shared.sanitizeFeatures('"ss01"; } body {'), "", "a hostile value is dropped");
+  assert.equal(shared.sanitizeFeatures("ss01, calt"), "ss01, calt");
+  const css = shared.buildFontCss({ codeFeatures: '"ss01" on' });
+  assert.match(css, /font-feature-settings:"ss01" on !important/);
+});
+
+await test("dark per-theme values prefix their own rules", () => {
+  const css = shared.buildFontCss({
+    sans: '"Inter"',
+    perTheme: true,
+    darkValues: JSON.stringify({ weightDialog: 500, sizeOffsetDialog: 2 }),
+  });
+  assert.ok(
+    css.includes("body[data-ds-dark-theme] [class*=\"_markdown_\""),
+    "the dark conversation weight is prefixed"
+  );
+  assert.ok(css.includes("font-weight:500 !important"), "the dark weight value renders");
+  assert.match(
+    css,
+    /body\[data-ds-dark-theme\],body\[data-ds-dark-theme\] \*\{[^}]*--dsh-content-font-size:calc\(\(14px\) \+ 2px\)/,
+    "the dark conversation size is prefixed"
+  );
+  // No dark rules at all when the dark map is empty.
+  const none = shared.buildFontCss({ sans: '"Inter"', perTheme: true, darkValues: "{}" });
+  assert.equal(none.includes("body[data-ds-dark-theme]"), false);
+  // Per-theme off ignores the stored map entirely.
+  const off = shared.buildFontCss({ sans: '"Inter"', perTheme: false, darkValues: JSON.stringify({ weightDialog: 500 }) });
+  assert.equal(off.includes("body[data-ds-dark-theme]"), false);
+});
+
+await test("the dark family pair rides the sans variable per theme", () => {
+  const css = shared.buildFontCss({
+    sans: '"Inter"',
+    perTheme: true,
+    darkValues: JSON.stringify({ sans: '"Serif Dark"' }),
+  });
+  assert.ok(css.includes("body[data-ds-dark-theme]{--dsw-font-family:"));
+  assert.ok(css.includes('--dsw-font-family:"Serif Dark"'));
+});
+
+await test("the active preset name normalizes like a preset name", () => {
+  const config = shared.normalizeConfig({ activePreset: "默认配置1" });
+  assert.equal(config.activePreset, "默认配置1");
+  const hostile = shared.normalizeConfig({ activePreset: 'a"; } body {' });
+  assert.equal(hostile.activePreset.includes(";"), false, "a hostile name is stripped");
+  assert.equal(shared.normalizeConfig({}).activePreset, "");
+});
+
+await test("the interface-follow flag defaults on and stores off", () => {
+  assert.equal(shared.normalizeConfig({}).uiFollowsDialog, true, "absent means follow");
+  assert.equal(shared.normalizeConfig({ uiFollowsDialog: false }).uiFollowsDialog, false);
+  assert.equal(shared.normalizeConfig({ uiFollowsDialog: "false" }).uiFollowsDialog, false);
+  // The follow flag rides the preset value sets too.
+  const set = shared.normalizeValueSet({ uiFollowsDialog: false });
+  assert.equal(set.uiFollowsDialog, false);
+});
+
+await test("the interface borrows the conversation's family", () => {
+  const tokens = { "--dsw-font-family": "system-ui" };
+  const config = {
+    sans: '"Inter"',
+    stackDialog: '"Noto Serif SC"',
+    weight: 500,
+    weightDialog: 430,
+    sizeOffset: 2,
+  };
+  // Following (the default): the conversation leads the shared family.
+  const following = shared.buildFontCss(config, tokens);
+  assert.ok(
+    following.includes('--dsw-font-family:"Noto Serif SC"'),
+    "the interface takes the conversation family"
+  );
+  assert.equal(
+    following.includes("font-weight:500 !important"),
+    false,
+    "the retired interface weight is inert"
+  );
+  assert.ok(following.includes("font-weight:430 !important"), "the conversation weight renders");
+  // Not following: the interface keeps its own family, the conversation is scoped.
+  const split = shared.buildFontCss({ ...config, uiFollowsDialog: false }, tokens);
+  assert.ok(split.includes('--dsw-font-family:"Inter"'), "the interface keeps its own family");
+  assert.ok(split.includes('font-family:"Noto Serif SC" !important'), "the conversation is scoped");
+  assert.ok(split.includes("font-weight:430 !important"), "the conversation keeps its own weight");
+  // The retired interface size axis reaches nothing in either mode.
+  assert.equal(split.includes("--dsh-content-font-size:"), false);
+  assert.equal(following.includes("--dsh-content-font-size:"), false);
+});
+
+await test("the conversation offset rides the official content size once", () => {
+  const css = shared.buildFontCss({
+    sizeOffset: 2,
+    sizeOffsetDialog: 3,
+  }, {
+    "--dsh-content-font-size": "14px",
+    "--dsh-content-font-size-secondary": "min(calc(var(--dsh-content-font-size,14px) - 1px), 13px)",
+    "--dsh-content-font-delta": "calc(var(--dsh-content-font-size,14px) - 14px)",
+  });
+  // Only the SOURCE token shifts; the derived secondary size and the delta are
+  // left alone so they resolve from the shifted source (no double count), and
+  // the retired interface offset (+2) never enters.
+  assert.ok(css.includes("--dsh-content-font-size:calc((14px) + 3px) !important"));
+  assert.equal(css.includes("--dsh-content-font-size-secondary:"), false, "derived tokens follow the source");
+  assert.equal(css.includes("--dsh-content-font-delta:"), false, "the delta derives from the source");
+  assert.equal(css.includes("+ 5px"), false, "the retired interface offset is not added on top");
+});
+
+await test("the conversation keeps its own axes while the interface follows", () => {
+  const css = shared.buildFontCss({
+    sans: '"Inter"',
+    stackDialog: '"Noto Serif SC"',
+    weight: 500,
+    weightDialog: 430,
+    sizeOffsetDialog: 2,
+    lineHeightDialog: 140,
+  });
+  assert.ok(css.includes('font-family:"Noto Serif SC" !important'), "the shared family rule exists");
+  assert.ok(css.includes("font-weight:430 !important"), "the conversation weight leads");
+  assert.ok(css.includes("--dsh-content-font-size:calc((14px) + 2px)"), "its own size rides the official base");
+  assert.ok(css.includes("* 1.4)"), "its own line-height rebuilds the shorthand heights");
+});
+
+await test("presets round-trip through the durable JSON", () => {
+  const stored = JSON.stringify([
+    { name: "阅读", values: { sans: "Noto Serif SC", lineHeight: 140 }, savedAt: 5 },
+    { name: "", values: {}, savedAt: 6 }, // dropped: no name
+  ]);
+  const list = shared.normalizePresets(stored);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].values.lineHeight, 140);
+  // A hostile blob yields an empty list, never a crash.
+  assert.deepEqual(shared.normalizePresets("not json"), []);
+  assert.deepEqual(shared.normalizePresets(null), []);
+});
+
+await test("the host schema accepts and refuses the new axes", async () => {
+  const { module } = await loadHostHalf(undefined);
+  const schema = module.Config;
+  const resolved = schema({ lineHeight: 130, lineHeightDialog: 120, lineHeightCode: 3, codeLigatures: 1 });
+  assert.equal(resolved.lineHeight, 130);
+  assert.equal(resolved.lineHeightDialog, 120);
+  assert.equal(resolved.lineHeightCode, 3);
+  assert.equal(resolved.codeLigatures, 1);
+  assert.throws(() => schema({ lineHeight: 99 }));
+  assert.throws(() => schema({ lineHeightCode: 99 }));
+  assert.throws(() => schema({ codeLigatures: 5 }));
+  assert.throws(() => schema({ codeFeatures: '"ss01"; }' }));
+  const defaults = schema({});
+  assert.equal(defaults.lineHeight, shared.LINE_HEIGHT_MIN);
+  assert.equal(defaults.codeLigatures, 0);
+  assert.equal(defaults.uiFollowsDialog, true);
+  assert.equal(schema({ uiFollowsDialog: false }).uiFollowsDialog, false);
+  assert.equal(defaults.perTheme, false);
+  assert.equal(defaults.darkValues, "{}");
+  assert.equal(defaults.presets, "[]");
+  assert.equal(defaults.activePreset, "");
+});
+
+await test("the client hands family variables to the theme override layer", async () => {
+  const scope = createScope({ value: { sans: '"Inter"', mono: '"JetBrains Mono"' } });
+  resetDom();
+  const overrides = [];
+  const ctx = createClientContext({
+    get(name) {
+      if (name !== "theme") return undefined;
+      return {
+        overrideTokens(_source, tokens) {
+          overrides.push(tokens);
+          return () => {};
+        },
+      };
+    },
+    slots: {
+      inject: (name, callback) => callback(),
+      register: () => () => {},
+    },
+    locale: { register: () => () => {} },
+    settingsScope: { bind: () => scope },
+  });
+  await loadClientBundle(ctx);
+  assert.equal(overrides.length, 1, "exactly one override layer");
+  assert.deepEqual(overrides[0]["--dsw-font-family"], { light: '"Inter"', dark: '"Inter"' });
+  assert.equal(overrides[0]["--ds-font-family-code"].light, '"JetBrains Mono"');
+});
+
+await test("a composition without the theme service skips the override layer", async () => {
+  const scope = createScope({ value: { sans: '"Inter"' } });
+  resetDom();
+  const { ctx } = cardContext(scope); // no `get`, no theme service
+  await loadClientBundle(ctx); // must not throw
+  const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
+  assert.ok(tag.textContent.includes('font-family:"Inter"'), "the stylesheet path still applies");
 });
 
 /* ------------------------------------------------------------------ */
