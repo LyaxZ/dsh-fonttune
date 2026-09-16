@@ -20,7 +20,7 @@
 
 | Plugin version | Supported DSH versions |
 | --- | --- |
-| **0.1.5** (latest) | 0.1.5-rc.2 |
+| **0.1.6** (latest) | 0.1.5-rc.2 |
 
 `engines.dsh` requires **0.1.5-rc.2** or newer, and the compatibility declaration lists only the **latest release of the 0.1.5 line**: it carries every fix in that line, which makes it the most stable build of the major version, while older builds of the same major version stay compatible per semantic versioning. Earlier or newer DSH versions are untested and not declared. On install or update, the DSH market runs a host-compatibility preflight against `engines.dsh`, `dsh.compatibility.dshReleases` and `peerDependencies` in `package.json`.
 

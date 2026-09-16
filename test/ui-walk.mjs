@@ -164,6 +164,31 @@ const main = async () => {
     });
   })()`));
 
+  // The expand chevron must be the host PluginCard's own 14×14 SVG icon — the
+  // same path the other cards on this very page render — not a text glyph
+  // (text glyphs are thinner and rotate around the text box, not their own
+  // centre). SVG className is an SVGAnimatedString, so match by attribute.
+  console.log("chevron check:", await evalJs(`(() => {
+    const ours = document.querySelector('svg[class*="dfp-chevron"]');
+    if (!ours) return "our chevron not found";
+    const oursPath = ours.querySelector("path")?.getAttribute("d") ?? null;
+    const rect = ours.getBoundingClientRect();
+    // Host-rendered plugin cards: the chevron is a <path> inside an <svg> that
+    // is not ours. Compare path data byte for byte.
+    const hosts = [...document.querySelectorAll("svg path")]
+      .filter((p) => p.closest('[class*="dfp"]') === null)
+      .map((p) => p.getAttribute("d"))
+      .filter((d) => d && d.startsWith("M11.8486"));
+    const matching = hosts.filter((d) => d === oursPath).length;
+    return JSON.stringify({
+      isSvg: ours.tagName === "svg",
+      size: rect.width + "x" + rect.height,
+      pathLength: (oursPath || "").length,
+      hostChevronsOnPage: hosts.length,
+      byteIdenticalToHost: oursPath !== null && matching > 0,
+    });
+  })()`));
+
   console.log("== console ==");
   for (const line of consoleLines) console.log("  " + line);
 

@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.1.6] - 2026-09-15
+
+### Fixed
+- **The configuration card's expand/collapse chevron matches the host now**: it used to be the text character `⌄`, rendered at text weight so it looked **thinner** than every other card's arrow, and the rotation sat on the text line box — the glyph's ink is off-centre inside that box (it rides the baseline), so `rotate(180deg)` swung the character sideways instead of turning it around its own centre. The chevron is now the host PluginCard's own 14×14 inline SVG (path extracted byte for byte from DSH's frontend bundle, same fix dsh-quick-toc shipped in 0.6.3); the rotation class goes on the `<svg>` itself, so it turns around the icon's own centre. Verified in a real browser: byte-identical path to the 11 host-rendered chevrons on the same page, same 14×14 size.
+
 ## [0.1.5] - 2026-09-15
 
 ### Added
