@@ -34,8 +34,8 @@ name: LyaxZ/dsh-fonttune
 category: ui
 tarball: https://github.com/LyaxZ/dsh-fonttune/releases/latest/download/dsh-fonttune.tgz
 description:
-  en: 'Font plugin for the DeepSeek Harness Web GUI: the conversation gets its own font, size, line height and weight, the interface font follows the conversation, code keeps its own axis with ligature control, and whole setups save as presets.'
-  zh: 'DeepSeek Harness 字体插件：对话拥有字体、字号、行高与字重，界面字体默认跟随对话，代码独立成轴并支持连字，整套配置可存为预设方案。'
+  en: 'Font plugin for the DeepSeek Harness Web GUI: the conversation gets its own font, size, line height and weight, the interface has a font and a weight of its own and follows the conversation by default, code keeps its own axis with ligature control, and whole setups save as presets.'
+  zh: 'DeepSeek Harness 字体插件：对话拥有字体、字号、行高与字重，界面用字体与字重并默认跟随对话（也可独立设置，两边互不影响），代码独立成轴并支持连字，整套配置可存为预设方案。'
 `;
 
 const PR_TITLE = "Add dsh-fonttune: typography for the conversation, the interface and code";
@@ -44,8 +44,9 @@ const PR_BODY = [
   "Adds one plugin entry, `data/plugins/LyaxZ__dsh-fonttune.yml`, and touches nothing else.",
   "",
   "**dsh-fonttune** — a font plugin for the DeepSeek Harness Web GUI: the conversation gets",
-  "its own font, size, line height and weight, the interface font follows the conversation,",
-  "code keeps its own axis with ligature control, and whole setups can be saved as presets.",
+  "its own font, size, line height and weight, the interface has a font and a weight of its",
+  "own and follows the conversation by default (its own values are independent of it), code",
+  "keeps its own axis with ligature control, and whole setups can be saved as presets.",
   "Host + client halves, zero-dependency build, MIT.",
   "",
   "Repository: https://github.com/LyaxZ/dsh-fonttune",
@@ -53,7 +54,7 @@ const PR_BODY = [
 
 /** The repository About line — the third copy of the listing prose. */
 const ABOUT =
-  "DeepSeek Harness 字体插件：对话可独立设置字体、字号、行高与字重，界面字体默认跟随对话，代码独立成轴并支持连字，整套配置可存为预设方案。";
+  "DeepSeek Harness 字体插件：对话可独立设置字体、字号、行高与字重，界面字体与字重默认跟随对话，代码独立成轴并支持连字，整套配置可存为预设方案。";
 
 const TOPICS = [
   "deepseek-harness",
