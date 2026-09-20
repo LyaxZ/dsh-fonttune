@@ -24,10 +24,11 @@
 
 | Plugin version | Supported DSH versions |
 | --- | --- |
-| **0.2.1** (latest) | 0.1.5-rc.2 |
+| **0.2.2** (latest) | 0.1.5-rc.2 |
+| 0.2.1 | 0.1.5-rc.2 |
 | 0.2.0 | 0.1.5-rc.2 |
 
-`engines.dsh` requires **0.1.5-rc.2** or newer, and the compatibility declaration lists only the **latest release of the 0.1.5 line**: it carries every fix in that line, which makes it the most stable build of the major version, while older builds of the same major version stay compatible per semantic versioning. Earlier or newer DSH versions are untested and not declared. On install or update, the DSH market runs a host-compatibility preflight against `engines.dsh`, `dsh.compatibility.dshReleases` and `peerDependencies` in `package.json`.
+`engines.dsh` requires **0.1.5-rc.2** or newer, and the compatibility declaration lists only the **latest release of the 0.1.5 line**: it carries every fix in that line, which makes it the most stable build of the major version, while older builds of the same major version stay compatible per semantic versioning. Earlier or newer DSH versions are untested and not declared. The market entry also states these requirements (`engines.dsh`, `dsh.compatibility.dshReleases` and `peerDependencies` in `package.json`), so the host a version needs can be checked before installing.
 
 ## Install
 
@@ -71,10 +72,10 @@ Restart DSH once afterwards and open the Web UI; changing settings needs no rest
 - `src/index.mjs` — host half: registers the `dsh-fonttune` settings namespace (schemastery schema with length and range validation) and ships a **stamped** `<style>` into the served index through `webserver/index-inject`, so the first paint already uses the saved values; the browser half then **adopts and keeps that element** (there is only ever one copy of the stylesheet, so rules can be added *and* removed)
 - `src/client.js` — browser half: the settings card, the font picker panel, font enumeration and style injection
 - `build.mjs` — zero-dependency build: inlines the shared core, wraps the bundle in the `window.__ModuleLoader__.load({id, factory})` shell, copies the host half, and enforces that the client bundle only requires shell-held modules
-- `test/run.mjs` — offline checks (hand-built DOM / cordis / settings-surface doubles, the real schemastery schema, CSS generation and injection, sanitizer adversarial cases, dictionary key parity); `test/render-card.mjs` renders the card component through a mini React hooks runtime (including forced-open and forced-state renders, covering the 0.1.0 release-blocking crash class); `test/weight-verify.mjs` measures all three weight axes (interface / conversation / code) in a live page, including that there is only one stylesheet element and that switching following off drops the followed weight without a reload; `test/` also holds headless-browser walk scripts plus the market-entry tooling — `test/market-pr.mjs` (status / update / refresh / reopen / open / about) and the diagnostic `test/market-inspect.mjs` (PR state, comments, CI and branch diff)
+- `test/run.mjs` — offline checks (hand-built DOM / cordis / settings-surface doubles, the real schemastery schema, CSS generation and injection, sanitizer adversarial cases, dictionary key parity); `test/render-card.mjs` renders the card component through a mini React hooks runtime (including forced-open and forced-state renders, covering the 0.1.0 release-blocking crash class) and now fires **every control's callback** (an unwired handler only fails when someone actually clicks it); `test/artifacts.mjs` proves `lib/` matches the current `src/` byte for byte (`npm run verify` runs all three); `test/weight-verify.mjs` measures all three weight axes (interface / conversation / code) in a live page, including that there is only one stylesheet element and that switching following off drops the followed weight without a reload; `test/` also holds headless-browser walk scripts plus the market-entry tooling — `test/market-pr.mjs` (status / update / refresh / reopen / open / about) and the diagnostic `test/market-inspect.mjs` (PR state, comments, CI and branch diff)
 - `docs/` — the 0.2.0 [research](docs/research-0.2.0.md) and [specification](docs/spec-0.2.0.md) records (written during design, with the trade-offs of that moment; where they differ from what shipped, README/CHANGELOG win — see the note at the top of each). **Not part of the npm `files` list, so they are not published**
 - The client bundle may only require modules from the shell's static table (`react`, `react/jsx-runtime`, `react-dom`, `@deepseek-ai/cordis`, `@deepseek-ai/dsh-client-*`…); `dsh.client.inject` declares load order, not require permission
-- Editing `src/client.js` is enough after a page refresh (client modules are versioned by content hash and DSH's client HMR pushes reloads); editing the host half (`src/index.mjs`) or `cordis.patch.yml` needs a DSH restart
+- Build before refreshing: `node build.mjs` (or `npm run watch`) turns `src/` into `lib/`, and the browser loads `lib/` — editing `src/client.js` without building leaves the page on the previous bundle. `npm test` only checks behaviour; `node test/artifacts.mjs` (part of `npm run verify`) proves the committed `lib/` is byte-for-byte what the current `src/` produces. Editing the host half (`src/index.mjs`) or `cordis.patch.yml` needs a DSH restart
 
 ## License
 

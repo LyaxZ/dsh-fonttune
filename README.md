@@ -24,10 +24,11 @@
 
 | 插件版本 | 支持的 DSH 版本 |
 | --- | --- |
-| **0.2.1**（最新） | 0.1.5-rc.2 |
+| **0.2.2**（最新） | 0.1.5-rc.2 |
+| 0.2.1 | 0.1.5-rc.2 |
 | 0.2.0 | 0.1.5-rc.2 |
 
-`engines.dsh` 下限为 **0.1.5-rc.2**，兼容声明只列 **0.1.5 线的最新版本**：它包含这条线的全部修复，是同一大版本里最稳的一版，而同一大版本内的旧版本按语义化版本约定向上兼容。更早或更新的 DSH 未经验证，不作声明。安装或更新时，DSH 市场会依据 `package.json` 里的 `engines.dsh`、`dsh.compatibility.dshReleases` 与 `peerDependencies` 做宿主兼容预检。
+`engines.dsh` 下限为 **0.1.5-rc.2**，兼容声明只列 **0.1.5 线的最新版本**：它包含这条线的全部修复，是同一大版本里最稳的一版，而同一大版本内的旧版本按语义化版本约定向上兼容。更早或更新的 DSH 未经验证，不作声明。市场条目同时声明这些兼容信息（`package.json` 的 `engines.dsh`、`dsh.compatibility.dshReleases` 与 `peerDependencies`），安装前可据此判断这一版需要的宿主版本。
 
 ## 安装
 
@@ -71,10 +72,10 @@ dsh plugin --profile web add <插件目录路径>
 - `src/index.mjs` —— 宿主半：注册 `dsh-fonttune` 设置命名空间（schemastery schema，含长度与取值范围校验），并通过 `webserver/index-inject` 把一个打过标记的 `<style>` 随首页下发，首帧即是设置里的字体；那个元素随后由浏览器半**认领并接管**（页面里只有这一份样式表，规则可增可删）
 - `src/client.js` —— 浏览器半：设置卡片、选字体面板、字体枚举与样式注入
 - `build.mjs` —— 零依赖构建：内联共享核心、套上 `window.__ModuleLoader__.load({id, factory})` 外壳、拷贝宿主半，并校验客户端 bundle 只 require shell 预注入的模块
-- `test/run.mjs` —— 离线检查（自建 DOM / cordis / 设置面替身、真实 schemastery schema、CSS 生成与注入、消毒对抗用例、双语文案键一致性）；`test/render-card.mjs` 用 mini React hooks 运行时真实渲染卡片组件（含强制展开态与强制状态，覆盖 0.1.0 那类发布阻断崩溃）；`test/weight-verify.mjs` 在真实页面里量三条字重轴（界面 / 对话 / 代码）的独立性与「样式表只有一份、不刷新关掉跟随立即回落」；`test/` 下另有几个无头浏览器走查脚本，以及市场条目的维护脚本 `test/market-pr.mjs`（status / update / refresh / reopen / open / about）与诊断脚本 `test/market-inspect.mjs`（PR 状态、评论、CI 与分支差异）
+- `test/run.mjs` —— 离线检查（自建 DOM / cordis / 设置面替身、真实 schemastery schema、CSS 生成与注入、消毒对抗用例、双语文案键一致性）；`test/render-card.mjs` 用 mini React hooks 运行时真实渲染卡片组件（含强制展开态与强制状态，覆盖 0.1.0 那类发布阻断崩溃），并把**每个控件的回调都点一遍**（未接线的回调只有真点下去才会暴露）；`test/artifacts.mjs` 校验 `lib/` 与当前 `src/` 逐字节一致（`npm run verify` 跑全部三套）；`test/weight-verify.mjs` 在真实页面里量三条字重轴（界面 / 对话 / 代码）的独立性与「样式表只有一份、不刷新关掉跟随立即回落」；`test/` 下另有几个无头浏览器走查脚本，以及市场条目的维护脚本 `test/market-pr.mjs`（status / update / refresh / reopen / open / about）与诊断脚本 `test/market-inspect.mjs`（PR 状态、评论、CI 与分支差异）
 - `docs/` —— 0.2.0 的[背景调研](docs/research-0.2.0.md)与[功能规格](docs/spec-0.2.0.md)（设计阶段的记录，含当时的取舍理由；与最终实现不同的地方以 README/CHANGELOG 为准，两份文件文首都有说明）。**不在 npm `files` 清单内，不随包发布**
 - 客户端模块能 require 的只有 shell 静态表里的模块（`react`、`react/jsx-runtime`、`react-dom`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-*` 等）；`dsh.client.inject` 只是加载顺序声明，不是 require 许可
-- 改 `src/client.js` 后刷新页面即可看到变化（客户端模块按内容哈希发版，DSH 的客户端 HMR 也会推送重载）；改宿主半（`src/index.mjs`）或 `cordis.patch.yml` 需重启 DSH
+- 改完源码要**先构建再刷新**：`node build.mjs`（或 `npm run watch`）把 `src/` 生成到 `lib/`，浏览器加载的是 `lib/`，只改 `src/client.js` 不构建的话页面看到的还是旧包；`npm test` 只检查功能，`node test/artifacts.mjs`（在 `npm run verify` 里）专门校验 `lib/` 与当前 `src/` 逐字节一致。改宿主半（`src/index.mjs`）或 `cordis.patch.yml` 需重启 DSH
 
 ## License
 

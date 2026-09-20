@@ -2,6 +2,22 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.2.2] - 2026-09-16
+
+### Fixed
+- **Simple mode: picking or clearing the CJK slot threw and lost the change** (introduced in 0.2.0). The two handlers behind that slot read `edit[field]`, and no binding of that name exists in the module (the real one is `editing`). The western slot was fine; only the CJK slot broke — in **any** of the three family sections (conversation / interface / code), picking a family in the 中文 slot or clearing that chip threw `ReferenceError: edit is not defined`, wrote nothing and changed nothing on screen. The fix is those two references. **Why it went unnoticed**: the card tests only ever rendered the tree and never invoked a single control callback, so an unwired handler stayed green offline.
+- **A guard for that whole class of bug**: `test/render-card.mjs` gained two cases that **fire every rendered control's callback with the payload its control passes** (a slider's min/max, every option of a segmented control, the family picker's `onPick`/`onRemove`, the preset select's full preset entry, a text input's DOM event, every `<button>`'s `onClick`) and assert that none throws — plus a separate assertion that the three CJK slots really *wrote* into the settings, not merely failed to throw. Negative control: injecting the 0.2.1 code turns both cases red; restoring the fix turns them green.
+- **`lib/` can no longer drift from `src/` silently**: the new `test/artifacts.mjs` re-renders the build in memory and compares it byte for byte with the committed `lib/client.js`, `lib/shared.cjs` and `lib/index.js` (run by `npm run verify` and by `prepublishOnly`). Every other suite reads `lib/`, so a source-only edit used to be tested — and shipped — as the previous build. `build.mjs` was split into pure functions (`renderArtifacts` / `readSources`) and no longer has side effects when imported.
+- **The release workflow never ran the tests**: `npm pack` does **not** trigger `prepublishOnly` (only `npm publish` does), so the tag-triggered release had always packed an untested artifact. It now installs and runs `npm run verify` before packing — deliberately **without** building first, because `test/artifacts.mjs` is exactly the check that the committed `lib/` is what the current `src/` produces, and a build step would mask that — and asserts that the tag equals the `package.json` version.
+- **The CHANGELOG extraction matched version prefixes**: the release body used `index(line, "## " pat)`, so `0.2.1` also matched a `0.2.10` heading. It now matches `## <version> ` exactly and **fails the job** when the version has no section (it used to fall back to generated notes silently).
+- **Two common CJK family names were not recognised**: `MS PGothic` and `MS PMincho` were treated as non-CJK (while `MS Gothic` and `MS Mincho` were fine), which feeds the simple mode's CJK slot. Fixed to `ms ?p?(?:gothic|mincho)`, the safe direction for a name heuristic.
+- **`shiftTokens` guards zero**: a zero offset used to emit a real `calc((14px) + 0px)` declaration that disagrees with `isDormant` and `sameValueSet`. Unreachable today (the call sites guard), but a trap for the next caller.
+- **`build.mjs --watch` watched files instead of the directory**: after an editor renamed a source, the process kept waiting on a dead inode and never rebuilt. It now watches `src/` and filters by name, and logs each successful rebuild.
+
+### Changed
+- **Documentation corrections**: the README's "editing `src/client.js` is enough after a refresh" omitted the essential step — the browser loads `lib/`, so `node build.mjs` comes first (both languages). The claim that "the DSH market runs a host-compatibility preflight against `engines.dsh` / `dshReleases` / `peerDependencies`" has no implementation anywhere in the local rc.2 distribution, so it now says what is true: the market entry **states** those requirements so the host a version needs can be checked before installing.
+- `package.json`: added the test-only `devDependencies` entry (`@deepseek-ai/schemastery`) and a `verify` script; the compatibility table gained 0.2.2.
+
 ## [0.2.1] - 2026-09-16
 
 ### Fixed

@@ -287,6 +287,139 @@ async function faceOnce() {
   return loadedFaceCache.face;
 }
 
+/**
+ * Invoke one handler and record what happened. Handlers are invoked the way
+ * the DOM would: a component's own callback for the controls the card builds on
+ * top of the shell primitives, and `onClick` for its own buttons.
+ * @param {string} name - a readable handler name for the report.
+ * @param {Function} handler - the callback to exercise.
+ * @param {unknown} argument - the payload that control passes.
+ * @param {{errors: string[], ran: number}} log - the collector.
+ */
+function fire(name, handler, argument, log) {
+  try {
+    handler(argument);
+    log.ran += 1;
+  } catch (error) {
+    log.errors.push(`${name}: ${error && error.message ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Exercise every handler a rendered card exposes: this is the class of check
+ * that catches a control whose callback was never wired up (a typo'd binding
+ * throws only when someone actually clicks it).
+ * @param {object} options - sections to expand and an optional scope factory.
+ * @returns {Promise<{errors: string[], ran: number, written: object}>}
+ */
+async function fireEveryHandler(options) {
+  const log = { errors: [], ran: 0 };
+  const written = {};
+  const sections = options.sections ?? ["dialog", "ui", "code", null];
+  for (const section of sections) {
+    const scope = options.createScope();
+    const { face, runtime } = await loadFace();
+    const card = applyAndRegister(face, scope);
+    runtime.rewind();
+    runtime.seed(0, true); // card open
+    runtime.seed(2, section); // which section is expanded
+    const out = { text: [], classes: [], tags: [], props: [] };
+    walk(card.component({ scope, t: (key) => key }), runtime, out);
+    for (const entry of out.props) {
+      const props = entry.props;
+      const where = `${String(section)}/${entry.tag}/${props.label ?? props.labelKey ?? ""}`;
+      if (entry.tag === "NumberSlider" && typeof props.onChange === "function") {
+        fire(`${where}.onChange(min)`, props.onChange, props.min, log);
+        fire(`${where}.onChange(max)`, props.onChange, props.max, log);
+      } else if (entry.tag === "Segmented" && typeof props.onChange === "function") {
+        for (const option of props.options ?? []) {
+          fire(`${where}.onChange(${option.value})`, props.onChange, option.value, log);
+        }
+      } else if (entry.tag === "StackPicker") {
+        // The CJK slot is the one that broke in 0.2.1: it wrote through an
+        // undefined binding, so a click threw and the pick was lost.
+        if (typeof props.onPick === "function") {
+          fire(`${where}.onPick`, props.onPick, "Microsoft YaHei", log);
+          written[String(props.label)] = scope.getSnapshot().value;
+        }
+        if (typeof props.onRemove === "function") {
+          fire(`${where}.onRemove`, props.onRemove, "Microsoft YaHei", log);
+        }
+      } else if (entry.tag === "PresetSelect" && typeof props.onPick === "function") {
+        // The select hands the whole preset entry to its callback.
+        const presets = props.presets ?? [];
+        if (presets.length > 0) fire(`${where}.onPick`, props.onPick, presets[0], log);
+      } else if (typeof props.onChange === "function") {
+        // Text inputs and textareas take a DOM event.
+        fire(`${where}.onChange(event)`, props.onChange, { target: { value: "" } }, log);
+      }
+      if (entry.tag === "button" && typeof props.onClick === "function") {
+        fire(`${where}.onClick`, props.onClick, {
+          preventDefault() {},
+          stopPropagation() {},
+          currentTarget: { getBoundingClientRect: () => ({}) },
+        }, log);
+      }
+    }
+  }
+  return { ...log, written };
+}
+
+await test("every control's handler runs: picking the CJK slot is not a crash", async () => {
+  // No localStorage in this harness, so the card renders in SIMPLE mode: the
+  // family axes are the two single-pick slots, which is exactly where the
+  // undefined-binding bug lived. Every section gets a fresh scope, because
+  // firing the preset select legitimately resets the whole configuration.
+  const result = await fireEveryHandler({
+    createScope: () =>
+      createScope({
+        value: {
+          sans: "",
+          stackDialog: "",
+          mono: "",
+          uiFollowsDialog: false,
+          sizeOffsetDialog: 1,
+        },
+      }),
+  });
+  assert.deepEqual(result.errors, [], result.errors.join(" | "));
+  assert.ok(result.ran > 25, `expected a broad sweep, ran ${result.ran} handlers`);
+  // The east slot must have *written*, not merely not-thrown.
+  const fieldByLabel = {
+    "sansEast.label": "sans",
+    "dialogEast.label": "stackDialog",
+    "monoEast.label": "mono",
+  };
+  for (const [label, field] of Object.entries(fieldByLabel)) {
+    assert.ok(label in result.written, `${label} picker rendered`);
+    const stack = String(result.written[label][field] ?? "");
+    assert.ok(stack.toLowerCase().includes("yahei"), `${label} wrote ${field}, saw "${stack}"`);
+  }
+});
+
+await test("every control's handler runs with values already configured", async () => {
+  const result = await fireEveryHandler({
+    createScope: () =>
+      createScope({
+        value: {
+          sans: '"Noto Serif SC"',
+          stackDialog: '"Noto Serif SC"',
+          mono: '"Cascadia Code"',
+          sizeOffsetDialog: 1,
+          weightDialog: 480,
+          weightCode: 450,
+          lineHeightDialog: 120,
+          noSyntheticBold: true,
+          codeLigatures: 2,
+          presets: JSON.stringify([{ name: "one", values: { sans: '"Inter"' }, savedAt: 1 }]),
+          activePreset: "one",
+        },
+        user: { sans: '"Noto Serif SC"', weightDialog: 480 },
+      }),
+  });
+  assert.deepEqual(result.errors, [], result.errors.join(" | "));
+});
+
 await test("a collapsed card renders the header only", async () => {
   const out = await renderCard(createScope());
   assert.ok(out.classes.includes("dfp-card"), "the card element renders");

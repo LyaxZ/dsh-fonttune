@@ -2,6 +2,22 @@
 
 **dsh-fonttune** 的重要变更都记录在这里。英文版见 [CHANGELOG.en.md](CHANGELOG.en.md)。
 
+## [0.2.2] - 2026-09-16
+
+### 修复
+- **简单模式下选/清「中文字体」直接报错、改动丢失**（0.2.0 引入）：中文槽的两个处理函数读的是 `edit[field]`，而模块里根本没有 `edit` 这个绑定（真正的变量叫 `editing`）。西文槽正常，只有中文槽踩雷——**任一字体分区**（对话 / 界面 / 代码）在**简单模式**下点中文格子选字体、或点中文 chip 的 ×，都会抛 `ReferenceError: edit is not defined`，设置不写入、界面无变化。修法就是那两处改成 `editing[field]`。**为什么一直没被发现**：卡片测试只渲染、从不触发任何控件回调，所以这类「回调没接线」的错误离线全绿。
+- **补上这一类错误的护栏**：`test/render-card.mjs` 新增两条用例，把渲染出来的**每个控件的回调都按真实载荷调一遍**（滑块的 min/max、分段控件的每个选项、字体选择器的 onPick/onRemove、预设下拉的整条预设对象、文本输入的事件、以及每个 `<button>` 的 onClick），断言「一个都不许抛」；并单独断言三个字体分区的**中文槽确实写进了设置**（不只是没报错）。用 0.2.1 的写法做对照实验：注入旧代码后这两条用例红，恢复后绿。
+- **`lib/` 与 `src/` 不再可能悄悄不同步**：新增 `test/artifacts.mjs`，把 `build.mjs` 的产物在内存里重新渲染一遍，与仓库里的 `lib/client.js`、`lib/shared.cjs`、`lib/index.js` **逐字节比对**（`npm run verify` 跑它，`prepublishOnly` 也跑它）。此前所有测试都只读 `lib/`，只改 `src/` 不构建的话测试照样全绿、发出去的还是旧包。顺带把 `build.mjs` 拆出纯函数（`renderArtifacts` / `readSources`）并加了「被 import 时不产生副作用」的判定。
+- **发布 workflow 从来没跑过测试**：`npm pack` **不会**触发 `prepublishOnly`（只有 `npm publish` 会），所以 tag 触发的发布流程一直在打包未测试的产物。现在加了 `npm install` + `npm run verify` 两步（**放在打包之前、且不先构建**——`test/artifacts.mjs` 要校验的正是「仓库里的 `lib/` 就是当前 `src/` 的产物」，先构建会把这个问题掩盖掉），并补一条「tag 必须等于 `package.json` 版本」。
+- **CHANGELOG 提取的前缀匹配会串版本**：release 正文用 `index(line, "## " pat)` 取章节，`0.2.1` 会命中 `0.2.10`。现在按 `## <版本> ` 精确匹配，并在找不到该版本章节时**直接让 job 失败**（以前会静默退回 GitHub 自动生成的 notes）。
+- **CJK 判定漏了两个常见字体名**：`MS PGothic` / `MS PMincho` 被判成非中文字体（`MS Gothic` / `MS Mincho` 正常），而这会直接影响简单模式的「中文槽」推导，故按名字启发式的方向修成 `ms ?p?(?:gothic|mincho)`。
+- **`shiftTokens` 补上零保护**：偏移为 0 时会写出 `calc((14px) + 0px)` 这种真声明，与 `isDormant` / `sameValueSet` 的语义冲突。当前调用侧都拦着，属于给未来调用者拆雷。
+- **`build.mjs --watch` 盯的是文件而不是目录**：源文件被编辑器改名后，进程还守着已经消失的 inode，永远不再重建。现在监听 `src/` 目录并按文件名过滤，重建成功也会打一行日志。
+
+### 变更
+- **文档纠错**：README 里「改 `src/client.js` 后刷新页面即可」漏了最关键的一步——浏览器加载的是 `lib/`，必须先 `node build.mjs`（中英两份都改了）；「市场会依据 `engines.dsh` / `dshReleases` / `peerDependencies` 做宿主兼容预检」这句在本地 rc.2 全量包里找不到任何对应实现，改成如实描述（市场条目**声明**这些兼容信息，供安装前判断）。
+- `package.json` 增加 `devDependencies`（`@deepseek-ai/schemastery`，测试用）与 `verify` 脚本；兼容表补 0.2.2。
+
 ## [0.2.1] - 2026-09-16
 
 ### 修复

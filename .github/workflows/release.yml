@@ -18,6 +18,17 @@ jobs:
         with:
           node-version: 20
 
+      # `npm pack` does NOT run `prepublishOnly` (only `npm publish` does), so
+      # without this the workflow would ship an untested tarball. The suites run
+      # BEFORE any build on purpose: `test/artifacts.mjs` proves the committed
+      # `lib/` is exactly what the current `src/` produces, and a build step
+      # here would mask a stale artifact instead of failing on it.
+      - name: Install test dependencies
+        run: npm install --no-audit --no-fund --no-package-lock
+
+      - name: Verify (sources, card, artifacts)
+        run: npm run verify
+
       - name: Pack tarball
         run: |
           ASSET=$(npm pack --silent)
@@ -26,6 +37,13 @@ jobs:
           cp "$ASSET" dsh-fonttune.tgz
           echo "STABLE=dsh-fonttune.tgz" >> "$GITHUB_ENV"
 
+      # A tag with no matching CHANGELOG section would silently fall back to
+      # generated notes, so the extraction below fails the job instead.
+      - name: Check the tag matches the package version
+        run: |
+          test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME" \
+            || { echo "tag $GITHUB_REF_NAME does not match package.json"; exit 1; }
+
       # The release body defaults to the CHINESE changelog section for this tag
       # (CHANGELOG.md), with the English section (CHANGELOG.en.md) folded into a
       # collapsible block — Chinese first, English one click away.
@@ -33,11 +51,13 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           extract() {
-            awk -v pat="$VERSION" '
+            # The heading has to be exactly `## [<version>] - …`: matching a
+            # bare prefix would let 0.2.1 pick up the 0.2.10 section.
+            awk -v pat="## $VERSION " '
               /^## / {
                 line = $0
                 gsub(/[\[\]]/, "", line)
-                if (index(line, "## " pat) == 1) { found = 1; next }
+                if (index(line, pat) == 1) { found = 1; next }
                 if (found) exit
               }
               found { print }
@@ -45,21 +65,20 @@ jobs:
           }
           extract CHANGELOG.md > NOTES.zh.md
           if [ -f CHANGELOG.en.md ]; then extract CHANGELOG.en.md > NOTES.en.md; fi
-          if [ -s NOTES.zh.md ]; then
-            {
-              printf '**dsh-fonttune %s**\n' "$VERSION"
-              cat NOTES.zh.md
-              if [ -s NOTES.en.md ]; then
-                printf '\n<details>\n<summary>English</summary>\n\n'
-                cat NOTES.en.md
-                printf '\n</details>\n'
-              fi
-            } > NOTES.full.md
-            echo "HAS_NOTES=1" >> "$GITHUB_ENV"
-          else
-            : > NOTES.full.md
-            echo "HAS_NOTES=" >> "$GITHUB_ENV"
+          if [ ! -s NOTES.zh.md ]; then
+            echo "CHANGELOG.md has no '## [$VERSION]' section — add it before tagging"
+            exit 1
           fi
+          {
+            printf '**dsh-fonttune %s**\n' "$VERSION"
+            cat NOTES.zh.md
+            if [ -s NOTES.en.md ]; then
+              printf '\n<details>\n<summary>English</summary>\n\n'
+              cat NOTES.en.md
+              printf '\n</details>\n'
+            fi
+          } > NOTES.full.md
+          echo "HAS_NOTES=1" >> "$GITHUB_ENV"
 
       - name: Create or update release with tarballs
         env:

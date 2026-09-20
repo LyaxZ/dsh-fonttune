@@ -882,6 +882,25 @@ await test("the CJK name heuristic recognizes the common faces", () => {
   assert.equal(shared.isCJKFamilyName("思源黑体"), true);
   assert.equal(shared.isCJKFamilyName("Inter"), false);
   assert.equal(shared.isCJKFamilyName("JetBrains Mono"), false);
+  // The proportional "P" variants belong to the same families and they feed the
+  // simple mode's CJK slot, so a miss is the harmful direction.
+  for (const name of ["MS Gothic", "MS PGothic", "MS Mincho", "MS PMincho", "Yu Gothic"]) {
+    assert.equal(shared.isCJKFamilyName(name), true, name);
+  }
+});
+
+await test("a zero offset never emits a declaration", () => {
+  // `calc((14px) + 0px)` would be a real declaration that disagrees with
+  // isDormant and with an otherwise identical configuration.
+  const css = shared.buildFontCss({
+    stackDialog: '"Inter"',
+    sizeOffsetDialog: 0,
+    sizeOffsetCode: 0,
+    lineHeightCode: 0,
+    perTheme: true,
+    darkValues: JSON.stringify({ sizeOffsetDialog: 0, lineHeightCode: 0 }),
+  });
+  assert.equal(css.includes("+ 0px"), false, "no zero offset is written");
 });
 
 await test("setting the western slot replaces the front entry and keeps the order", () => {

@@ -2110,15 +2110,15 @@ function FontCard(props) {
     return Object.prototype.hasOwnProperty.call(user, field);
   };
 
-  // ---- interface axis handlers (legacy semantics kept) ----
+  // ---- family stack handlers ----
   var pickWest = function (field, family) {
     setField(field, formatStack(setWestEntry(parseStack(editing[field]), family, classifyFamily)));
   };
   var pickEast = function (field, family) {
-    setField(field, formatStack(setEastEntry(parseStack(edit[field]), family, classifyFamily)));
+    setField(field, formatStack(setEastEntry(parseStack(editing[field]), family, classifyFamily)));
   };
   var dropEntry = function (field, family) {
-    setField(field, formatStack(removeStackEntry(parseStack(edit[field]), family)));
+    setField(field, formatStack(removeStackEntry(parseStack(editing[field]), family)));
   };
 
   // ---- size slider ----

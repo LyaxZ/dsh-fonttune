@@ -16,12 +16,18 @@
  *   node build.mjs            build once and verify
  *   node build.mjs --watch    rebuild whenever a source file changes
  *
+ * The render functions are exported so `test/run.mjs` can prove that the
+ * committed `lib/` artifacts are exactly what the current `src/` produces —
+ * without that check a source-only edit would ship (and be tested) as the old
+ * bundle.
+ *
  * @module dsh-fonttune/build
  */
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+
+import { existsSync, watch } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { watch } from "node:fs";
 
 /** Package root, resolved from this file so the script runs from anywhere. */
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -42,6 +48,9 @@ const HOST_IMPORTS = ["@deepseek-ai/schemastery"];
 
 /** Local specifier rewritten to the inlined shared module. */
 const SHARED_SPECIFIER = "./shared.cjs";
+
+/** Source files, in the order the artifacts are generated. */
+const SOURCES = ["src/shared.cjs", "src/client.js", "src/index.mjs"];
 
 /** Prefix and suffix of the loader registration. */
 const HEAD = `window.__ModuleLoader__.load({
@@ -84,7 +93,7 @@ function rewriteSharedRequire(source, binding) {
  * `export` left in the body would be a syntax error inside a CJS factory.
  * @param {string} body - the wrapped factory body.
  */
-function verify(body) {
+export function verifyClient(body) {
   const required = new Set(
     [...body.matchAll(/\brequire\(\s*["']([^"']+)["']\s*\)/g)].map((match) => match[1])
   );
@@ -105,28 +114,45 @@ function verify(body) {
   if (/^\s*export\s/m.test(body)) {
     throw new Error("the browser bundle still contains an ESM export inside a CJS factory");
   }
-  const idMatches = body.includes(`id: ${JSON.stringify(MODULE_ID)}`);
-  if (!idMatches) {
+  if (!body.includes(`id: ${JSON.stringify(MODULE_ID)}`)) {
     throw new Error(`the loader registration does not use the id ${MODULE_ID}`);
   }
 }
 
 /**
- * Build the browser bundle.
+ * Check the host half imports only packages the DSH installation provides.
+ * @param {string} source - host source text.
+ */
+export function verifyHost(source) {
+  const imports = [...source.matchAll(/^import[\s\S]*?from\s+["']([^"']+)["']/gm)].map(
+    (match) => match[1]
+  );
+  for (const specifier of imports) {
+    if (specifier.startsWith(".")) continue;
+    if (!HOST_IMPORTS.includes(specifier)) {
+      throw new Error(
+        `the host half imports "${specifier}"; only these resolve from the DSH installation: ` +
+          HOST_IMPORTS.join(", ")
+      );
+    }
+  }
+}
+
+/**
+ * Build the browser bundle text.
  *
  * The source is written as an ES module for readability, so the build strips
  * the single `export` keyword and attaches the CJS face the loader reads.
- * @returns {Promise<number>} the written size in bytes.
+ * @param {string} sharedSource - `src/shared.cjs` text.
+ * @param {string} clientSource - `src/client.js` text.
+ * @returns {string} the bundle the loader evaluates.
  */
-async function buildClient() {
-  const sharedSource = await readFile(join(ROOT, "src", "shared.cjs"), "utf8");
-  const clientSource = await readFile(join(ROOT, "src", "client.js"), "utf8");
+export function renderClient(sharedSource, clientSource) {
   const stripped = clientSource.replace(/\bexport function apply\(/, "function apply(");
   if (stripped === clientSource) {
     throw new Error("client source must declare `export function apply(`");
   }
   const rewritten = rewriteSharedRequire(stripped, "__dfpShared");
-
   const body = [
     HEAD,
     "\t\t// ---- inlined from src/shared.cjs ----\n",
@@ -141,67 +167,88 @@ async function buildClient() {
     "\nexports.apply = apply;\nexports.inject = inject;\n",
     TAIL,
   ].join("");
-
-  verify(body);
-  await mkdir(join(ROOT, "lib"), { recursive: true });
-  await writeFile(join(ROOT, "lib", "client.js"), body, "utf8");
-  return Buffer.byteLength(body, "utf8");
+  verifyClient(body);
+  return body;
 }
 
 /**
- * Copy the host half and its shared module into `lib`, then check that the
- * only bare imports left are packages the DSH installation provides.
- * @returns {Promise<number>} the host entry size in bytes.
+ * Render every artifact from the current sources, without touching the disk.
+ * @param {{shared: string, client: string, host: string}} sources - source texts.
+ * @returns {Record<string, string>} artifact path (relative to the root) to text.
  */
-async function buildHost() {
-  const source = await readFile(join(ROOT, "src", "index.mjs"), "utf8");
-  const imports = [...source.matchAll(/^import[\s\S]*?from\s+["']([^"']+)["']/gm)].map(
-    (match) => match[1]
-  );
-  for (const specifier of imports) {
-    if (specifier.startsWith(".")) continue;
-    if (!HOST_IMPORTS.includes(specifier)) {
-      throw new Error(
-        `the host half imports "${specifier}"; only these resolve from the DSH installation: ` +
-          HOST_IMPORTS.join(", ")
-      );
-    }
+export function renderArtifacts(sources) {
+  verifyHost(sources.host);
+  return {
+    "lib/client.js": renderClient(sources.shared, sources.client),
+    "lib/shared.cjs": sources.shared,
+    "lib/index.js": sources.host,
+  };
+}
+
+/**
+ * Read the three source files.
+ * @returns {Promise<{shared: string, client: string, host: string}>} source texts.
+ */
+export async function readSources() {
+  return {
+    shared: await readFile(join(ROOT, "src", "shared.cjs"), "utf8"),
+    client: await readFile(join(ROOT, "src", "client.js"), "utf8"),
+    host: await readFile(join(ROOT, "src", "index.mjs"), "utf8"),
+  };
+}
+
+/**
+ * Write every artifact.
+ * @returns {Promise<Record<string, number>>} artifact path to written bytes.
+ */
+export async function build() {
+  const artifacts = renderArtifacts(await readSources());
+  await mkdir(join(ROOT, "lib"), { recursive: true });
+  const sizes = {};
+  for (const [name, text] of Object.entries(artifacts)) {
+    await writeFile(join(ROOT, name), text, "utf8");
+    sizes[name] = Buffer.byteLength(text, "utf8");
   }
-  await mkdir(join(ROOT, "lib"), { recursive: true });
-  await copyFile(join(ROOT, "src", "index.mjs"), join(ROOT, "lib", "index.js"));
-  await copyFile(join(ROOT, "src", "shared.cjs"), join(ROOT, "lib", "shared.cjs"));
-  return Buffer.byteLength(source, "utf8");
+  return sizes;
 }
 
 /**
- * Run both halves once.
- * @returns {Promise<void>} settlement after both are written and verified.
+ * Whether this module was started as the program (rather than imported by a
+ * test), so importing it never has side effects.
+ * @returns {boolean} true when run as `node build.mjs`.
  */
-async function build() {
-  const clientSize = await buildClient();
-  const hostSize = await buildHost();
-  const stamp = new Date().toISOString().slice(11, 19);
-  console.log(
-    `[${stamp}] built lib/index.js (${hostSize} B), lib/shared.cjs, lib/client.js (${clientSize} B)`
-  );
+function isMain() {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  return resolve(entry) === resolve(fileURLToPath(import.meta.url));
 }
 
-await build();
-
-if (process.argv.includes("--watch")) {
-  const targets = ["src/shared.cjs", "src/client.js", "src/index.mjs"].map((name) =>
-    resolve(ROOT, name)
+if (isMain()) {
+  const stamp = () => new Date().toISOString().slice(11, 19);
+  const sizes = await build();
+  console.log(
+    `[${stamp()}] built lib/index.js (${sizes["lib/index.js"]} B), lib/shared.cjs ` +
+      `(${sizes["lib/shared.cjs"]} B), lib/client.js (${sizes["lib/client.js"]} B)`
   );
-  console.log(`watching ${targets.length} sources; press Ctrl+C to stop`);
-  let pending = null;
-  for (const target of targets) {
-    watch(target, () => {
+
+  if (process.argv.includes("--watch")) {
+    // Watch the directory, not the files: a watcher bound to one inode keeps
+    // waiting on a dead handle after an editor renames the file away.
+    const srcDir = join(ROOT, "src");
+    console.log(`watching ${relative(ROOT, srcDir)}; press Ctrl+C to stop`);
+    let pending = null;
+    watch(srcDir, (_event, name) => {
+      if (name === null || name === undefined) return;
+      if (!SOURCES.some((source) => source.endsWith(String(name)))) return;
+      if (!existsSync(join(srcDir, String(name)))) return;
       if (pending !== null) clearTimeout(pending);
       pending = setTimeout(() => {
         pending = null;
-        build().catch((error) => {
-          console.error(error instanceof Error ? error.message : String(error));
-        });
+        build()
+          .then(() => console.log(`[${stamp()}] rebuilt after ${name}`))
+          .catch((error) => {
+            console.error(error instanceof Error ? error.message : String(error));
+          });
       }, 120);
     });
   }
