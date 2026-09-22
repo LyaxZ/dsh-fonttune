@@ -47,6 +47,7 @@ async function test(name, body) {
  */
 function buildReact() {
   const hooks = [];
+  const sets = [];
   let cursor = 0;
   return {
     react: {
@@ -60,7 +61,15 @@ function buildReact() {
       useState(initial) {
         const i = cursor++;
         hooks[i] = hooks[i] ?? { value: typeof initial === "function" ? initial() : initial };
-        return [hooks[i].value, () => {}];
+        return [
+          hooks[i].value,
+          (next) => {
+            // The setter is a no-op for rendering (this runtime renders once),
+            // but recording it is how a check can see what the card TRIED to
+            // show — the only way to observe a status message offline.
+            sets.push({ index: i, value: next });
+          },
+        ];
       },
       useEffect() {
         cursor += 1;
@@ -92,6 +101,12 @@ function buildReact() {
     },
     seed(index, value) {
       hooks[index] = { value };
+    },
+    /** Everything the card tried to put into a state slot, in call order. */
+    sets,
+    /** How many hooks the last rendered component used. */
+    hooksUsed() {
+      return hooks.length;
     },
   };
 }
@@ -668,8 +683,9 @@ await test("an expanded code section shows the ligature and line-height controls
 
 await test("the preset message rides the hint row and only ever fades", async () => {
   // Slot map: 0 open · 1 view · 2 expanded · 3 presetName · 4 presetStatus ·
-  // 5 statusShown. The message must live in an always-mounted node (so nothing
-  // below it moves) and switch a CSS class (so it can fade, not pop).
+  // 5 statusShown · 6 exportText. The message must live in an always-mounted
+  // node (so nothing below it moves) and switch a CSS class (so it can fade,
+  // not pop).
   const empty = await (async () => {
     const scope = createScope();
     const { face, runtime } = await loadFace();
@@ -711,6 +727,217 @@ await test("the preset message rides the hint row and only ever fades", async ()
     1,
     "still exactly one node — it fades, it is not re-created"
   );
+});
+
+/**
+ * Render an open card with one section expanded and return the walk plus the
+ * runtime (whose `sets` records every state the card tried to write).
+ * @param {object} scope - the settings scope.
+ * @param {string|null} section - the expanded accordion id.
+ * @returns {Promise<{out: object, runtime: object}>} the walk result.
+ */
+async function renderSection(scope, section) {
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true); // card open
+  runtime.seed(2, section); // which section is expanded
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  return { out, runtime };
+}
+
+await test("a refused settings write says so instead of looking saved", async () => {
+  // A write the settings document rejects used to vanish without a word: the
+  // control snapped back to the stored value and the user believed it saved.
+  const scope = createScope();
+  scope.set = () => Promise.reject(new Error("host said no"));
+  const { out, runtime } = await renderSection(scope, "dialog");
+  const slider = out.props.find(
+    (entry) => entry.tag === "NumberSlider" && typeof entry.props.onChange === "function"
+  );
+  assert.ok(slider, "the conversation size slider renders");
+  slider.props.onChange(3);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const status = runtime.sets
+    .map((entry) => entry.value)
+    .find((value) => value && typeof value === "object" && "text" in value);
+  assert.ok(status, `the card set a status message: ${JSON.stringify(runtime.sets)}`);
+  assert.equal(status.text, "preset.writeFailed");
+  assert.ok(status.id > 0, "the message carries a fresh id so the row re-fades");
+});
+
+await test("a refused write through a synchronous throw is caught too", async () => {
+  const scope = createScope();
+  scope.set = () => {
+    throw new Error("read-only scope");
+  };
+  const { out, runtime } = await renderSection(scope, "ui");
+  const follow = out.props.find(
+    (entry) => entry.tag === "Segmented" && entry.props.label === "ui.follow"
+  );
+  assert.ok(follow, "the follow control renders");
+  follow.props.onChange("off");
+  const status = runtime.sets
+    .map((entry) => entry.value)
+    .find((value) => value && typeof value === "object" && "text" in value);
+  assert.ok(status, "the throw is reported, not swallowed");
+  assert.equal(status.text, "preset.writeFailed");
+});
+
+await test("an export the clipboard refuses is handed over selected", async () => {
+  // Node 22 exposes `navigator` as a getter-only global, so a plain
+  // assignment fails; swap the property descriptor and put it back after.
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { clipboard: { writeText: () => Promise.reject(new Error("not allowed")) } },
+  });
+  try {
+    const presets = JSON.stringify([{ name: "one", values: { weight: 480 }, savedAt: 1 }]);
+    const scope = createScope({ value: { presets } });
+    const { out, runtime } = await renderSection(scope, null);
+    const button = out.props.find(
+      (entry) => entry.tag === "button" && entry.props.children === "preset.export"
+    );
+    assert.ok(button, "the export button renders");
+    button.props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const values = runtime.sets.map((entry) => entry.value);
+    // The whole JSON, not a 120-character prefix of it in the status row.
+    const handed = values.find((value) => typeof value === "string" && value.startsWith("["));
+    assert.ok(handed, `the JSON reached the card: ${JSON.stringify(values)}`);
+    assert.deepEqual(JSON.parse(handed), [{ name: "one", values: { weight: 480 }, savedAt: 1 }]);
+    const status = values.find((value) => value && typeof value === "object" && "text" in value);
+    assert.equal(status.text, "preset.exportManual");
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "navigator", descriptor);
+    else delete globalThis.navigator;
+  }
+});
+
+await test("the clipboard-less export box is read-only, selected and dismisses itself", async () => {
+  const scope = createScope();
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true); // card open
+  runtime.seed(6, '[{"name":"one"}]'); // the export text
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  const box = out.props.find((entry) => entry.tag === "textarea" && entry.props.readOnly === true);
+  assert.ok(box, "the box renders");
+  assert.equal(box.props.value, '[{"name":"one"}]');
+  assert.ok(String(box.props.className).includes("dfp-search"), "it reuses the field surface");
+  let selected = false;
+  box.props.onFocus({ target: { select: () => { selected = true; } } });
+  assert.equal(selected, true, "focusing selects the text, so the copy shortcut just works");
+  box.props.onCopy();
+  assert.ok(
+    runtime.sets.some((entry) => entry.index === 6 && entry.value === ""),
+    "copying puts the box away"
+  );
+  // With nothing to hand over there is no box at all.
+  const plain = await renderCard(createScope(), { open: true });
+  assert.equal(
+    plain.props.filter((entry) => entry.tag === "textarea").length,
+    0,
+    "no box unless an export failed"
+  );
+});
+
+await test("resetting every axis clears the retired ones too", async () => {
+  // The interface size and line-height axes no longer render, so a value left
+  // behind would be invisible forever: "reset" has to reach them.
+  const scope = createScope({
+    value: { weightDialog: 480, sizeOffset: 3, lineHeight: 140 },
+    user: { weightDialog: 480, sizeOffset: 3, lineHeight: 140 },
+  });
+  const { out } = await renderSection(scope, null);
+  const reset = out.props.find(
+    (entry) => entry.tag === "button" && String(entry.props.className).includes("dfp-resetAll")
+  );
+  assert.ok(reset, "the reset-everything button renders");
+  reset.props.onClick();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const user = scope.getSnapshot().user;
+  for (const field of ["weightDialog", "sizeOffset", "lineHeight"]) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(user, field),
+      false,
+      `${field} must be cleared`
+    );
+  }
+  // The auto-save contract writes the preset snapshot back; that is expected
+  // and is not an axis.
+  assert.ok(typeof user.presets === "string", "the active preset snapshot follows the reset");
+});
+
+/**
+ * Walk the children a component already returned.
+ *
+ * `walk` renders a component again on its way down, which resets the hook
+ * store; when a check needs the tree the component just produced with a
+ * specific state in place, this walks what it returned instead of re-running
+ * it.
+ * @param {object} tree - the element tree the component returned.
+ * @param {object} runtime - the hooks runtime to render children with.
+ * @returns {object} the walk result.
+ */
+function walkChildrenOf(tree, runtime) {
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(tree.children, runtime, out);
+  return out;
+}
+
+await test("a second render after a state change keeps the hook order", async () => {
+  // React renders the component again whenever a handler sets state, and the
+  // 0.1.0 release shipped a card that crashed on exactly that second render
+  // (a hook count that differed between the two). This walks the card, applies
+  // every state the first pass set, and walks it again.
+  const scope = createScope({
+    value: {
+      stackDialog: '"Noto Serif SC"',
+      mono: '"Cascadia Code"',
+      weightDialog: 480,
+    },
+  });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  const walkOnce = (seeds) => {
+    runtime.rewind();
+    runtime.seed(0, true); // card open
+    runtime.seed(2, "dialog"); // the conversation section expanded
+    for (const [index, value] of seeds ?? []) runtime.seed(index, value);
+    // The card's own hooks are recorded by this call; the nested components
+    // that `walk` renders below rewind the slot store, so read the count now.
+    const tree = card.component({ scope, t: (key) => key });
+    const hooks = runtime.hooksUsed();
+    return { out: walkChildrenOf(tree, runtime), hooks };
+  };
+  const first = walkOnce();
+  assert.ok(first.hooks > 10, `the card uses a real hook list, saw ${first.hooks}`);
+  // Switch the edit mode: that is a state change inside the card.
+  const mode = first.out.props.find(
+    (entry) => entry.tag === "Segmented" && String(entry.props.label).startsWith("mode.")
+  );
+  assert.ok(mode, "the edit-mode control renders");
+  mode.props.onChange("advanced");
+  const seeds = runtime.sets.map((entry) => [entry.index, entry.value]);
+  assert.ok(seeds.length > 0, "the mode switch set state");
+  const second = walkOnce(seeds);
+  assert.equal(
+    second.hooks,
+    first.hooks,
+    "the same hooks run in the same order on the second render"
+  );
+  // The second render really is the advanced card: its family field is the
+  // multi-entry chip stack, which the simple mode never renders.
+  assert.ok(
+    second.out.classes.includes("dfp-chips"),
+    "the advanced chip stack rendered after the state change"
+  );
+  assert.equal(first.out.classes.includes("dfp-chips"), false, "the first render was simple mode");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

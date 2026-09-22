@@ -14,9 +14,9 @@
 - **代码连字** —— 三档开关（默认 / 开启 / 关闭，浏览器默认即开启，关闭可还原 `=>`、`!=` 这类连字），高级模式另有 `font-feature-settings` 特性值输入
 - **拒绝合成样式** —— 禁用浏览器为中文伪造的斜体与粗体（中文字体没有斜体字形，浏览器会硬掰）
 - **界面跟随对话开关** —— 界面分区顶部的「跟随对话设置」开关（默认开启）：开启时界面沿用对话的**字体与字重**，界面自己的两个控件隐藏；关闭后界面用自己的字体与字重，与对话互不影响。字号与行高只属于对话（界面没有这两个接口）
-- **预设方案** —— 编辑模式正下方的下拉选择框：五个默认配置开箱即用，点开选一个即应用；选中方案后所有改动自动存入该方案，右侧「改名 / 导入 / 导出」管理方案（导出 JSON 分享、导入合并）
+- **预设方案** —— 编辑模式正下方的下拉选择框：五个默认配置开箱即用，点开选一个即应用；选中方案后所有改动自动存入该方案，右侧「改名 / 导入 / 导出」管理方案（导出 JSON 分享、导入合并）。剪贴板不可用时（非安全上下文、或没有剪贴板权限）导出不会只给一段被截断的提示，而是把完整 JSON 放进一个已选中、只读的文本框，按复制快捷键即可，复制后自动收起；任何**写设置失败**（宿主拒绝、只读部署等）都会在当前行显示出来，而不是让控件悄悄弹回旧值
 - **西文 / 中文分栏（简单模式）** —— 编辑模式开关：简单模式每套字体只给「西文」「中文」两个单选格，高级模式是完整的字体栈编辑器；两种模式共用同一条栈，来回切换不改动已排好的顺序
-- **选字体面板** —— 内置 等宽 / 中文（CJK）/ 拉丁 / 通用 四组预设，Chromium 下再补上「本机已安装」分组；搜索不到的名字可以直接「使用 xxx」新建
+- **选字体面板** —— 内置 等宽 / 中文（CJK）/ 拉丁 / 通用 四组预设，Chromium 下再补上「本机已安装」分组；四组预设**任何情况下都在**（包括搜索时，也包括枚举本机字体失败时），本机分组只列出预设分组没有的字体，所以同一个字体不会出现两次；搜索不到的名字可以直接「使用 xxx」新建。字体枚举被浏览器拒绝时会在一段时间后自动重试（用户在浏览器里授予字体权限后，重新打开面板即可看到本机字体）
 - **拖拽排序** —— 已选字体是 chip 列表，可拖动调整回退顺序，同时保留前移 / 后移按钮（键盘与触屏可用）
 - **分区预览** —— 对话 / 界面 / 代码分区展开后在分区末尾各有一个预览框，只预览该分区的部分
 
@@ -24,7 +24,8 @@
 
 | 插件版本 | 支持的 DSH 版本 |
 | --- | --- |
-| **0.2.2**（最新） | 0.1.5-rc.2 |
+| **0.2.3**（最新） | 0.1.5-rc.2 |
+| 0.2.2 | 0.1.5-rc.2 |
 | 0.2.1 | 0.1.5-rc.2 |
 | 0.2.0 | 0.1.5-rc.2 |
 
@@ -72,7 +73,9 @@ dsh plugin --profile web add <插件目录路径>
 - `src/index.mjs` —— 宿主半：注册 `dsh-fonttune` 设置命名空间（schemastery schema，含长度与取值范围校验），并通过 `webserver/index-inject` 把一个打过标记的 `<style>` 随首页下发，首帧即是设置里的字体；那个元素随后由浏览器半**认领并接管**（页面里只有这一份样式表，规则可增可删）
 - `src/client.js` —— 浏览器半：设置卡片、选字体面板、字体枚举与样式注入
 - `build.mjs` —— 零依赖构建：内联共享核心、套上 `window.__ModuleLoader__.load({id, factory})` 外壳、拷贝宿主半，并校验客户端 bundle 只 require shell 预注入的模块
-- `test/run.mjs` —— 离线检查（自建 DOM / cordis / 设置面替身、真实 schemastery schema、CSS 生成与注入、消毒对抗用例、双语文案键一致性）；`test/render-card.mjs` 用 mini React hooks 运行时真实渲染卡片组件（含强制展开态与强制状态，覆盖 0.1.0 那类发布阻断崩溃），并把**每个控件的回调都点一遍**（未接线的回调只有真点下去才会暴露）；`test/artifacts.mjs` 校验 `lib/` 与当前 `src/` 逐字节一致（`npm run verify` 跑全部三套）；`test/weight-verify.mjs` 在真实页面里量三条字重轴（界面 / 对话 / 代码）的独立性与「样式表只有一份、不刷新关掉跟随立即回落」；`test/` 下另有几个无头浏览器走查脚本，以及市场条目的维护脚本 `test/market-pr.mjs`（status / update / refresh / reopen / open / about）与诊断脚本 `test/market-inspect.mjs`（PR 状态、评论、CI 与分支差异）
+- `test/run.mjs` —— 离线检查（自建 DOM / cordis / 设置面替身、真实 schemastery schema、CSS 生成与注入、消毒对抗用例、双语文案键一致性、选字体面板的分组规则、令牌轮询的省电闸门）；`test/render-card.mjs` 用 mini React hooks 运行时真实渲染卡片组件（含强制展开态与强制状态，覆盖 0.1.0 那类发布阻断崩溃），把**每个控件的回调都点一遍**（未接线的回调只有真点下去才会暴露），并**渲染第二次**覆盖「状态变化后 hook 顺序改变」这一类崩溃；`test/artifacts.mjs` 校验 `lib/` 与当前 `src/` 逐字节一致（`npm run verify` 跑全部三套）
+- 需要真实页面的检查走 `npm run verify:browser -- "<带 token 的地址>"`（先起一个受管实例：`dsh web --port 0 --no-open`，它会打印地址）。默认只跑**只读**的几支（`browser-probe` / `ui-walk` / `style-verify`）；加 `--writers` 再跑会**写设置命名空间**的几支（`slider-walk` / `split-walk` / `split-verify` / `weight-verify`，各自先快照用户层、退出前还原），`--only a,b` 挑子集；每支的退出码就是判定。`test/set-user-layer.mjs <url> '<json>'` 是在被中断的运行之后还原用户层的工具
+- `test/weight-verify.mjs` 在真实页面里量三条字重轴（界面 / 对话 / 代码）的独立性与「样式表只有一份、不刷新关掉跟随立即回落」；`test/split-verify.mjs` 量对话/代码两条字号轴的独立性，外加**退役的界面字号轴什么都不动**；`test/slider-walk.mjs` 与 `test/split-walk.mjs` 驱动真实卡片（拖动不写、松手才写；简单模式两格与整条栈的往返）；另有市场条目的维护脚本 `test/market-pr.mjs`（status / update / refresh / reopen / open / about）与诊断脚本 `test/market-inspect.mjs`（PR 状态、评论、CI 与分支差异）
 - `docs/` —— 0.2.0 的[背景调研](docs/research-0.2.0.md)与[功能规格](docs/spec-0.2.0.md)（设计阶段的记录，含当时的取舍理由；与最终实现不同的地方以 README/CHANGELOG 为准，两份文件文首都有说明）。**不在 npm `files` 清单内，不随包发布**
 - 客户端模块能 require 的只有 shell 静态表里的模块（`react`、`react/jsx-runtime`、`react-dom`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-*` 等）；`dsh.client.inject` 只是加载顺序声明，不是 require 许可
 - 改完源码要**先构建再刷新**：`node build.mjs`（或 `npm run watch`）把 `src/` 生成到 `lib/`，浏览器加载的是 `lib/`，只改 `src/client.js` 不构建的话页面看到的还是旧包；`npm test` 只检查功能，`node test/artifacts.mjs`（在 `npm run verify` 里）专门校验 `lib/` 与当前 `src/` 逐字节一致。改宿主半（`src/index.mjs`）或 `cordis.patch.yml` 需重启 DSH

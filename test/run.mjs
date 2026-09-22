@@ -96,6 +96,19 @@ class El {
     this._text = String(value);
   }
 
+  /**
+   * Read an attribute, with `style` serialized the way the theme's inline
+   * token writes appear: the plugin's cheap refresh gate watches that string.
+   * @param {string} name - the attribute name.
+   * @returns {string|null} the value, or null when the attribute is absent.
+   */
+  getAttribute(name) {
+    if (name !== "style") return null;
+    const declarations = Object.keys(this).filter((key) => key.startsWith("--"));
+    if (declarations.length === 0) return "";
+    return declarations.map((key) => `${key}: ${this[key]}`).join("; ") + ";";
+  }
+
   append(...nodes) {
     for (const node of nodes) {
       node.parentNode = this;
@@ -747,16 +760,75 @@ await test("the conversation weight is written verbatim inside the dialog scope"
   assert.ok(css.includes(".dfp-previewDialog{font-weight:300 !important}"));
 });
 
+await test("a selector list splits on its top-level commas only", () => {
+  assert.deepEqual(shared.splitSelectorList("a,b"), ["a", "b"]);
+  assert.deepEqual(shared.splitSelectorList(':not(a,b),c'), [":not(a,b)", "c"]);
+  assert.deepEqual(shared.splitSelectorList('body *:not(pre,pre *,[class*="x" i])'), [
+    'body *:not(pre,pre *,[class*="x" i])',
+  ]);
+  assert.deepEqual(shared.splitSelectorList('[class*="," i],d'), ['[class*="," i]', "d"]);
+  // The per-theme prefix has to survive the compact exclusion form.
+  assert.equal(
+    shared.prefixSelector('body *:not(pre,pre *),code', "body[dark]"),
+    "body[dark] body *:not(pre,pre *),body[dark] code"
+  );
+});
+
+await test("every per-theme rule carries the theme attribute", () => {
+  // A per-theme value set renders as a second, prefixed copy. The scoped code
+  // family inside the dialog was the one rule that escaped the prefix: it
+  // would have re-asserted the LIGHT code family inside the dark dialog.
+  const axis = shared.resolveAxes({
+    stackDialog: '"Inter"',
+    mono: '"JetBrains Mono"',
+    sans: '"Georgia"',
+    weightDialog: 460,
+    weightCode: 400,
+    weight: 380,
+    uiFollowsDialog: false,
+  }).light;
+  const dark = shared.buildAxisCss(axis, shared.FALLBACK_TOKENS, true);
+  assert.ok(dark.length > 0, "the dark set renders");
+  for (const rule of dark.split("\n")) {
+    assert.ok(
+      rule.startsWith("body[data-ds-dark-theme]"),
+      `a dark rule escaped the theme attribute: ${rule.slice(0, 90)}`
+    );
+  }
+  assert.ok(
+    dark.includes('body[data-ds-dark-theme] [class*="_markdown_" i] pre'),
+    "the dialog's own code family is scoped too"
+  );
+});
+
 await test("the interface weight is one blanket rule that skips the conversation", () => {
   const css = shared.buildFontCss({ weight: 480, uiFollowsDialog: false });
   assert.ok(css.includes("font-weight:480 !important"), "the weight is written");
   assert.ok(css.includes("body,body *:not("), "it reaches every element");
-  // The conversation subtree is what makes the two axes independent.
-  assert.ok(css.includes(':not([class*="_markdown_" i])'), "the markdown container is excluded");
-  assert.ok(css.includes(':not([class*="_markdown_" i] *)'), "its descendants are excluded too");
-  assert.ok(css.includes(":not(.cm-editor)"), "code surfaces stay on the code axis");
-  assert.ok(css.includes(":not(.dfp-previewCode)"), "the code preview stays on the code axis");
-  assert.ok(css.includes(":not(.dfp-previewDialog)"), "the conversation preview is not flattened");
+  // The conversation subtree is what makes the two axes independent. The
+  // exclusions ride one `:not(…)` selector list, so they are read back out of
+  // it rather than matched as text.
+  const excluded = shared
+    .splitSelectorList(shared.INTERFACE_EXCLUDES.slice(":not(".length, -1));
+  for (const needle of [
+    'code',
+    'code *',
+    '[class*="code" i]',
+    '[class*="code" i] *',
+    ".cm-editor",
+    ".cm-editor *",
+    ".dfp-previewCode",
+    ".dfp-previewCode *",
+    '[class*="_markdown_" i]',
+    '[class*="_markdown_" i] *',
+    ".dfp-previewDialog",
+    ".dfp-previewDialog *",
+  ]) {
+    assert.ok(excluded.includes(needle), `${needle} must be excluded`);
+  }
+  assert.ok(css.includes(shared.INTERFACE_EXCLUDES), "the rule carries exactly that exclusion");
+  // The compact form is the point: one `:not(` per rule, not one per argument.
+  assert.equal(css.includes(":not(pre):not(pre *)"), false, "no repeated :not() chain");
 });
 
 await test("an interface weight takes code back out when the code axis is unset", () => {
@@ -799,9 +871,7 @@ await test("the interface and conversation weights never share a rule", () => {
     {},
     false
   );
-  const interfaceRule = light
-    .split("\n")
-    .find((rule) => rule.includes(":not([class*=\"_markdown_\" i])"));
+  const interfaceRule = light.split("\n").find((rule) => rule.includes("body,body *:not("));
   const dialogRule = light.split("\n").find((rule) => rule.startsWith('[class*="_markdown_" i]'));
   assert.ok(interfaceRule.includes("font-weight:380 !important"));
   assert.equal(interfaceRule.includes("520"), false);
@@ -829,7 +899,7 @@ await test("the conversation and code weight axes are independent", () => {
   assert.ok(css.includes("font-weight:320 !important"));
   assert.equal(css.includes("font-weight:580 !important"), false, "follow wins");
   assert.ok(
-    css.includes(':not([class*="_markdown_" i])'),
+    css.includes("body,body *:not("),
     "and the interface rule is the one carrying the exclusion"
   );
   // With follow off, all three axes render their own value.
@@ -949,6 +1019,148 @@ await test("removing one entry leaves the other slots intact", () => {
     ["Inter", "PingFang SC"]
   );
   assert.deepEqual(shared.removeStackEntry(["Inter"], "宋体"), ["Inter"]);
+});
+
+section("shared: the family picker's groups");
+
+await test("a curated group survives a search, even with a working catalog", () => {
+  // The 0.2.2 shape dropped the curated groups whenever the catalog worked and
+  // a search was running, so a curated family this machine does not have could
+  // not be found by name at all.
+  const groups = shared.pickerGroups({
+    stack: [],
+    single: false,
+    query: "noto",
+    catalog: { status: "ready", families: ["Noto Sans SC", "Internote", "Cascadia Code"] },
+  });
+  const labels = groups.map((group) => group.label);
+  assert.ok(labels.includes("stack.groupCjk"), `curated groups stay: ${labels.join(",")}`);
+  const cjk = groups.find((group) => group.label === "stack.groupCjk");
+  assert.ok(
+    cjk.families.includes("Noto Sans CJK SC"),
+    "an uninstalled curated family is still offered"
+  );
+  assert.deepEqual(cjk.families, ["Noto Sans SC", "Noto Sans CJK SC"]);
+  assert.equal(
+    labels.includes("stack.groupLocal"),
+    false,
+    "the local list does not repeat what a curated heading already shows"
+  );
+});
+
+await test("no family is ever listed twice across the groups", () => {
+  const groups = shared.pickerGroups({
+    stack: [],
+    single: false,
+    query: "",
+    catalog: {
+      status: "ready",
+      families: ["Microsoft YaHei", "Inter", "Cascadia Code", "Some Font"],
+    },
+  });
+  const seen = new Map();
+  for (const group of groups) {
+    for (const name of group.families) {
+      const key = name.toLowerCase();
+      assert.equal(seen.has(key), false, `${name} is in ${seen.get(key)} and ${group.label}`);
+      seen.set(key, group.label);
+    }
+  }
+  // The curated heading wins where it has an opinion; the local list answers
+  // for everything else.
+  assert.equal(seen.get("microsoft yahei"), "stack.groupCjk");
+  assert.equal(seen.get("inter"), "stack.groupLatin");
+  assert.equal(seen.get("cascadia code"), "stack.groupMono");
+  assert.equal(seen.get("some font"), "stack.groupLocal");
+});
+
+await test("multi mode moves the stack's own families into the selected group", () => {
+  const groups = shared.pickerGroups({
+    stack: ["Inter"],
+    single: false,
+    query: "",
+    catalog: { status: "ready", families: ["Inter", "Segoe UI"] },
+  });
+  assert.deepEqual(groups[0], { label: "stack.groupSelected", families: ["Inter"] });
+  const latin = groups.find((group) => group.label === "stack.groupLatin");
+  assert.equal(latin.families.includes("Inter"), false, "already in the stack");
+  assert.ok(latin.families.includes("Segoe UI"), "the curated heading still places it");
+  assert.equal(
+    groups.some((group) => group.label === "stack.groupLocal"),
+    false,
+    "the only enumerated families were the stack's and the curated one"
+  );
+});
+
+await test("single mode keeps the pick visible among its own kind", () => {
+  const groups = shared.pickerGroups({
+    stack: ["Microsoft YaHei"],
+    single: true,
+    query: "",
+    catalog: { status: "denied", families: [] },
+  });
+  assert.deepEqual(groups[0].families, ["Microsoft YaHei"]);
+  const cjk = groups.find((group) => group.label === "stack.groupCjk");
+  assert.ok(cjk.families.includes("Microsoft YaHei"), "the current pick carries its check mark here");
+  assert.equal(
+    groups.some((group) => group.label === "stack.groupLocal"),
+    false,
+    "a refused catalog has no local group to show"
+  );
+});
+
+await test("a refused or loading catalog still offers every curated group", () => {
+  for (const status of ["denied", "loading", "unsupported"]) {
+    const groups = shared.pickerGroups({
+      stack: [],
+      single: false,
+      query: "",
+      catalog: { status, families: [] },
+    });
+    assert.deepEqual(
+      groups.map((group) => group.label),
+      ["stack.groupMono", "stack.groupCjk", "stack.groupLatin", "stack.groupGeneric"],
+      `${status} lists the curated groups`
+    );
+  }
+});
+
+await test("the local group is capped and its names are sanitized", () => {
+  const families = [];
+  for (let index = 0; index < 300; index += 1) {
+    families.push(`Font ${String(index).padStart(3, "0")}`);
+  }
+  const groups = shared.pickerGroups({
+    stack: [],
+    single: false,
+    query: "",
+    catalog: { status: "ready", families },
+    maxLocal: 240,
+  });
+  assert.equal(groups.find((group) => group.label === "stack.groupLocal").families.length, 240);
+  const hostile = shared.pickerGroups({
+    stack: [],
+    single: false,
+    query: "",
+    catalog: { status: "ready", families: ['Foo"; } body{background:red}'] },
+  });
+  const local = hostile.find((group) => group.label === "stack.groupLocal");
+  assert.deepEqual(local.families, [shared.sanitizeFamily('Foo"; } body{background:red}')]);
+  assert.equal(local.families[0].includes("{"), false);
+});
+
+await test("a refusal is retried, a working catalog and a missing API are not", () => {
+  const RETRY = 20000;
+  assert.equal(shared.catalogRefreshDue(null, 1000, RETRY), true, "nothing cached yet");
+  assert.equal(shared.catalogRefreshDue({ status: "ready", at: 0 }, 1e9, RETRY), false);
+  assert.equal(shared.catalogRefreshDue({ status: "denied", at: 1000 }, 5000, RETRY), false);
+  assert.equal(shared.catalogRefreshDue({ status: "denied", at: 1000 }, 21000, RETRY), true);
+  assert.equal(shared.catalogRefreshDue({ status: "unsupported", at: 0 }, 1e9, RETRY), true);
+  assert.equal(
+    shared.catalogRefreshDue({ status: "unsupported", at: 0, permanent: true }, 1e9, RETRY),
+    false,
+    "a browser without the API will never grow one"
+  );
 });
 
 /**
@@ -1080,7 +1292,8 @@ await test("a configured base layer is rendered into the row", async () => {
     "the retired interface size axis injects nothing into the row"
   );
   // The interface weight rule is the one that carries the markdown exclusion.
-  assert.ok(html.includes(':not([class*="_markdown_" i])'));
+  assert.ok(html.includes("body,body *:not("));
+  assert.ok(html.includes('[class*="_markdown_" i]'));
 });
 
 await test("the host schema accepts real stacks and refuses bad ones", async () => {
@@ -1307,6 +1520,98 @@ await test("resetting every axis leaves no user-layer entry", async () => {
   const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(tag.textContent, "", "the reset must empty the injected stylesheet");
+});
+
+await test("the polling refresh walks the CSS only when something moved", async () => {
+  // Reading the base tokens walks every property of every rule of every
+  // stylesheet, so the four-second poll must not do it unconditionally: a
+  // cheap gate watches body's inline style, the root class and the sheet
+  // count, and a full sweep still runs on a slower schedule.
+  const saved = {
+    document: globalThis.document,
+    window: globalThis.window,
+    setInterval: globalThis.setInterval,
+    clearInterval: globalThis.clearInterval,
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout,
+  };
+  const intervals = [];
+  const timeouts = [];
+  globalThis.setInterval = (callback) => {
+    intervals.push(callback);
+    return intervals.length;
+  };
+  globalThis.clearInterval = () => {};
+  globalThis.setTimeout = (callback) => {
+    timeouts.push(callback);
+    return timeouts.length;
+  };
+  globalThis.clearTimeout = () => {};
+  try {
+    let reads = 0;
+    const dom = createDocument({
+      inline: { "--dsh-content-font-size": "14px" },
+    });
+    dom.document.styleSheets.push({
+      ownerNode: null,
+      cssRules: [
+        {
+          style: {
+            length: 1,
+            0: "--dsh-content-font-size",
+            getPropertyValue(name) {
+              if (name !== "--dsh-content-font-size") return "";
+              reads += 1;
+              return "14px";
+            },
+          },
+        },
+      ],
+    });
+    globalThis.document = dom.document;
+    const scope = createScope({
+      value: { stackDialog: '"Inter"', sizeOffsetDialog: 2 },
+    });
+    const { ctx } = cardContext(scope);
+    await loadClientBundle(ctx);
+    const tag = dom.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
+    assert.equal(timeouts.length, 1, "the first frame is refreshed on a timer");
+    assert.equal(intervals.length, 1, "and the poll is installed");
+    const initial = reads;
+    assert.ok(initial >= 1, "applying read the tokens once");
+    assert.equal(timeouts.length, 1, "the boot refresh is the only timer");
+    for (const fire of timeouts) fire(); // the forced first refresh
+    const afterForced = reads;
+    assert.ok(afterForced > initial, "the boot refresh reads them again");
+
+    intervals[0](); // tick 2: nothing moved
+    assert.equal(reads, afterForced, "an unchanged environment is not re-read");
+    assert.ok(tag.textContent.includes("14px"), "the stylesheet carries the base size");
+
+    // The theme moves the content size on body's inline style: the very next
+    // cheap tick has to notice, without waiting for the slow sweep.
+    dom.document.body.style.setProperty("--dsh-content-font-size", "18px");
+    intervals[0](); // tick 3
+    assert.ok(reads > afterForced, "a moved inline token forces a read");
+    assert.ok(tag.textContent.includes("18px"), "and the stylesheet follows it");
+
+    const afterMove = reads;
+    intervals[0](); // tick 4: the gate is quiet again
+    assert.equal(reads, afterMove, "and it goes quiet again");
+    intervals[0](); // tick 5
+    intervals[0](); // tick 6
+    intervals[0](); // tick 7
+    assert.equal(reads, afterMove, "ticks 5 to 7 stay cheap");
+    intervals[0](); // tick 8: the periodic sweep
+    assert.ok(reads > afterMove, "the slow sweep reads even when nothing moved");
+  } finally {
+    globalThis.document = saved.document;
+    globalThis.window = saved.window;
+    globalThis.setInterval = saved.setInterval;
+    globalThis.clearInterval = saved.clearInterval;
+    globalThis.setTimeout = saved.setTimeout;
+    globalThis.clearTimeout = saved.clearTimeout;
+  }
 });
 
 section("integration: contracts that must not regress");
@@ -1615,15 +1920,54 @@ await test("the conversation keeps its own axes while the interface follows", ()
 
 await test("presets round-trip through the durable JSON", () => {
   const stored = JSON.stringify([
-    { name: "阅读", values: { sans: "Noto Serif SC", lineHeight: 140 }, savedAt: 5 },
+    { name: "阅读", values: { sans: "Noto Serif SC", lineHeightDialog: 140 }, savedAt: 5 },
     { name: "", values: {}, savedAt: 6 }, // dropped: no name
   ]);
   const list = shared.normalizePresets(stored);
   assert.equal(list.length, 1);
-  assert.equal(list[0].values.lineHeight, 140);
+  assert.equal(list[0].values.lineHeightDialog, 140);
   // A hostile blob yields an empty list, never a crash.
   assert.deepEqual(shared.normalizePresets("not json"), []);
   assert.deepEqual(shared.normalizePresets(null), []);
+  // A preset written by 0.1.x still parses; the retired axes it carries are
+  // simply no longer value axes, and unknown keys are still dropped.
+  const legacy = shared.normalizePresets(
+    JSON.stringify([
+      { name: "旧", values: { lineHeight: 140, sizeOffset: 3, shadow: 1 }, savedAt: 1 },
+    ])
+  );
+  assert.equal(legacy.length, 1);
+  assert.deepEqual(legacy[0].values, {});
+});
+
+await test("a retired axis is stored but is not a value axis", () => {
+  // The interface's own size and line-height render nothing (see the
+  // measurement in `buildAxisCss`), so they left the value surface: presets no
+  // longer snapshot them and they no longer decide whether the dark set is a
+  // second set. They stay in the schema, so an old document still parses.
+  assert.deepEqual(shared.RETIRED_FIELDS, ["sizeOffset", "lineHeight"]);
+  for (const field of shared.RETIRED_FIELDS) {
+    assert.equal(shared.VALUE_FIELDS.includes(field), false, `${field} is not a value axis`);
+    assert.equal(shared.DURABLE_FIELDS.includes(field), true, `${field} is still durable`);
+    assert.equal(shared.normalizeValueSet({ [field]: 3 })[field], undefined);
+  }
+  const config = shared.normalizeConfig({ sizeOffset: 3, lineHeight: 140, weightDialog: 480 });
+  assert.equal(config.sizeOffset, 3, "an old document keeps its stored value");
+  assert.equal(config.lineHeight, 140);
+  assert.equal(config.weightDialog, 480);
+  assert.equal(shared.buildFontCss({ sizeOffset: 3, lineHeight: 140 }), "", "and renders nothing");
+  // A light/dark pair that differs only in a retired axis is ONE set.
+  const css = shared.buildFontCss({
+    weightDialog: 460,
+    perTheme: true,
+    darkValues: JSON.stringify({ sizeOffset: 5, lineHeight: 150 }),
+  });
+  assert.equal(css.includes("data-ds-dark-theme"), false, "no dark copy is emitted");
+  assert.equal(
+    css.split(".dfp-previewDialog{font-weight:460 !important}").length - 1,
+    1,
+    "exactly one set came out"
+  );
 });
 
 await test("the host schema accepts and refuses the new axes", async () => {

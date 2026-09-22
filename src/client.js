@@ -59,6 +59,7 @@ var PRESETS_FIELD = shared.PRESETS_FIELD;
 var ACTIVE_PRESET_FIELD = shared.ACTIVE_PRESET_FIELD;
 var UI_FOLLOWS_FIELD = shared.UI_FOLLOWS_FIELD;
 var VALUE_FIELDS = shared.VALUE_FIELDS;
+var RETIRED_FIELDS = shared.RETIRED_FIELDS;
 var SIZE_MIN = shared.SIZE_MIN;
 var SIZE_MAX = shared.SIZE_MAX;
 var WEIGHT_MIN = shared.WEIGHT_MIN;
@@ -124,12 +125,6 @@ var CHEVRON_PATH =
 /** Panel height cap, used to decide whether it opens up or down. */
 var PANEL_HEIGHT = 380;
 
-/**
- * Cap on how many enumerated families the picker lists at once: a machine can
- * report well over a thousand, which would make the panel useless.
- */
-var MAX_VISIBLE_FONTS = 240;
-
 /* ------------------------------------------------------------------ *
  * copy
  * ------------------------------------------------------------------ */
@@ -188,13 +183,9 @@ var DICTS = {
     "monoWest.label": "Code · Western",
     "monoEast.label": "Code · CJK",
     "split.pick": "Choose…",
-    "split.unset": "Not set",
     "split.remove": "Remove {name}",
     "split.rest": "Other fallbacks (reorder them in Advanced): {names}",
 
-    "size.bodyLabel": "Interface font size offset",
-    "size.bodyHint":
-      "Adds {offset} to interface text sizes, on top of DSH's own font-size setting. 0 keeps DSH's sizes.",
     "size.dialogLabel": "Conversation font size offset",
     "size.dialogHint":
       "Adds {offset} to the conversation text sizes, on top of DSH's own font-size setting. 0 keeps DSH's sizes.",
@@ -213,9 +204,6 @@ var DICTS = {
     "weight.codeHint":
       "Overrides code blocks, inline code and terminal output only. 400 or unset keeps DSH's own weight.",
 
-    "line.bodyLabel": "Interface line height",
-    "line.bodyHint":
-      "Scales every interface line height by {ratio}. 100% keeps DSH's own line heights.",
     "line.dialogLabel": "Conversation line height",
     "line.dialogHint":
       "Scales every conversation line height by {ratio}. 100% keeps DSH's own line heights.",
@@ -235,7 +223,6 @@ var DICTS = {
       "Advanced font-feature-settings value, e.g. \"ss01\" on, \"cv01\" 1. Invalid values are ignored.",
     "feat.placeholder": "\"ss01\" on",
 
-    "synth.label": "Refuse synthetic styles",
     "synth.italic": "No faux italic",
     "synth.italicHint":
       "CJK faces have no italic, so the browser tilts them. On keeps marked text upright.",
@@ -249,15 +236,6 @@ var DICTS = {
     "section.ui": "Interface",
     "section.dialog": "Conversation",
     "section.code": "Code",
-    "section.fine": "Global fine-tuning",
-    "section.presets": "Presets",
-    "section.uiHint":
-      "Sidebars, headings, buttons and every other chrome text.",
-    "section.dialogHint":
-      "The conversation markdown: paragraphs, tables and headings.",
-    "section.codeHint": "Code blocks, inline code and terminal output.",
-    "section.fineHint":
-      "Settings that apply to the whole page.",
     "section.open": "Expand {name}",
     "section.close": "Collapse {name}",
 
@@ -266,13 +244,6 @@ var DICTS = {
     "ui.own": "Own values",
     "dialog.default": "DSH defaults",
 
-    "theme.label": "Per-theme values",
-    "theme.on": "Light and dark keep separate values",
-    "theme.edit": "Editing theme",
-    "theme.light": "Light",
-    "theme.dark": "Dark",
-    "theme.mismatch":
-      "The page is in {active} mode; the preview below shows the values being edited.",
 
     "dialog.label": "Conversation font",
     "dialog.hint":
@@ -280,11 +251,6 @@ var DICTS = {
     "dialogWest.label": "Conversation · Western",
     "dialogEast.label": "Conversation · CJK",
 
-    "preset.save": "Save current",
-    "preset.namePlaceholder": "Preset name",
-    "preset.apply": "Apply",
-    "preset.overwrite": "Overwrite",
-    "preset.delete": "Delete",
     "preset.export": "Export",
     "preset.import": "Import",
     "preset.importPlaceholder": "Paste an exported preset JSON here",
@@ -295,18 +261,13 @@ var DICTS = {
     "preset.renamed": "Renamed to “{name}”.",
     "preset.autoSave": "With a preset selected, every change saves into it automatically.",
     "preset.nameUsed": "That name is already taken.",
-    "preset.saved": "Saved “{name}”.",
     "preset.applied": "Applied “{name}”.",
-    "preset.deleted": "Deleted “{name}”.",
-    "preset.updated": "Overwrote “{name}”.",
     "preset.exported": "Presets copied to the clipboard.",
     "preset.imported": "Imported {count} preset(s).",
     "preset.importBad": "That text is not a valid preset export.",
-    "preset.full": "The preset list is full ({max}).",
-    "preset.empty": "No presets saved yet.",
-    "preset.nameTaken": "“{name}” already exists — saving overwrites it.",
+    "preset.exportManual": "Clipboard unavailable — press Ctrl+C to copy the selected text.",
+    "preset.writeFailed": "The setting was not saved: {message}",
 
-    "preview.label": "Preview",
     "preview.sansCaption": "Interface",
     "preview.dialogCaption": "Conversation",
     "preview.monoCaption": "Code",
@@ -314,8 +275,6 @@ var DICTS = {
       "The quick brown fox jumps over the lazy dog — 中文排版预览，标点符号，数字 0123456789。",
     "preview.code": "const greet = (name) => `hello ${name}`; // => != >= -> 代码预览",
 
-    "footnote.local":
-      "Stored in the Host settings document. Every change applies immediately.",
   },
   zh: {
     "card.title": "字体增强",
@@ -368,13 +327,9 @@ var DICTS = {
     "monoWest.label": "代码 · 西文字体",
     "monoEast.label": "代码 · 中文字体",
     "split.pick": "选择…",
-    "split.unset": "未选择",
     "split.remove": "移除 {name}",
     "split.rest": "其余回退项（在高级模式中排序）：{names}",
 
-    "size.bodyLabel": "界面字号偏移",
-    "size.bodyHint":
-      "给界面文字统一加 {offset}，与设置里的「字号大小」叠加；0 表示保持原样。",
     "size.dialogLabel": "对话字号偏移",
     "size.dialogHint":
       "给对话文字统一加 {offset}，与设置里的「字号大小」叠加；0 表示保持 DSH 原样。",
@@ -392,8 +347,6 @@ var DICTS = {
     "weight.codeHint":
       "只覆盖代码块、行内代码与终端输出；400 或未设置表示保持 DSH 原样。",
 
-    "line.bodyLabel": "界面行高",
-    "line.bodyHint": "把界面行高整体缩放为 {ratio}；100% 表示保持原样。",
     "line.dialogLabel": "对话行高",
     "line.dialogHint": "把对话行高整体缩放为 {ratio}；100% 表示保持 DSH 原样。",
     "line.codeLabel": "代码行高",
@@ -411,7 +364,6 @@ var DICTS = {
       "高级的 font-feature-settings 值，例如 ss01 on、cv01 1；非法值会被忽略。",
     "feat.placeholder": "\"ss01\" on",
 
-    "synth.label": "拒绝合成样式",
     "synth.italic": "禁用伪斜体",
     "synth.italicHint":
       "中文字体没有斜体，浏览器会把标记文本硬掰歪；开启后保持直立。",
@@ -424,21 +376,9 @@ var DICTS = {
     "section.ui": "界面",
     "section.dialog": "对话",
     "section.code": "代码",
-    "section.fine": "全局微调",
-    "section.presets": "预设方案",
-    "section.uiHint": "侧栏、标题、按钮等界面文字。",
-    "section.dialogHint": "会话里的 Markdown：段落、表格与标题。",
-    "section.codeHint": "代码块、行内代码与终端输出。",
-    "section.fineHint": "作用于整页的选项。",
     "section.open": "展开{name}",
     "section.close": "收起{name}",
 
-    "theme.label": "分主题数值",
-    "theme.on": "深浅色各存一套数值",
-    "theme.edit": "正在编辑",
-    "theme.light": "浅色",
-    "theme.dark": "深色",
-    "theme.mismatch": "当前页面是{active}主题，下方预览显示的是正在编辑的那套数值。",
 
     "ui.follow": "跟随对话设置",
     "ui.followHint": "字体与字重",
@@ -451,11 +391,6 @@ var DICTS = {
     "dialogWest.label": "对话 · 西文字体",
     "dialogEast.label": "对话 · 中文字体",
 
-    "preset.save": "保存当前",
-    "preset.namePlaceholder": "方案名称",
-    "preset.apply": "应用",
-    "preset.overwrite": "覆盖",
-    "preset.delete": "删除",
     "preset.export": "导出",
     "preset.import": "导入",
     "preset.importPlaceholder": "粘贴导出的方案内容",
@@ -466,18 +401,13 @@ var DICTS = {
     "preset.renamed": "已改名为“{name}”。",
     "preset.autoSave": "选中方案后，所有改动自动存入该方案。",
     "preset.nameUsed": "这个名字已被占用。",
-    "preset.saved": "已保存“{name}”。",
     "preset.applied": "已应用“{name}”。",
-    "preset.deleted": "已删除“{name}”。",
-    "preset.updated": "已覆盖“{name}”。",
     "preset.exported": "方案已复制到剪贴板。",
     "preset.imported": "已导入 {count} 个方案。",
     "preset.importBad": "这段内容不是有效的方案导出。",
-    "preset.full": "方案列表已满（{max}）。",
-    "preset.empty": "还没有保存方案。",
-    "preset.nameTaken": "“{name}”已存在，保存将覆盖它。",
+    "preset.exportManual": "剪贴板不可用，按 Ctrl+C 复制下方已选中的内容。",
+    "preset.writeFailed": "设置没有保存成功：{message}",
 
-    "preview.label": "预览",
     "preview.sansCaption": "界面",
     "preview.dialogCaption": "对话",
     "preview.monoCaption": "代码",
@@ -485,7 +415,6 @@ var DICTS = {
       "The quick brown fox jumps over the lazy dog —— 中文排版预览，标点符号，数字 0123456789。",
     "preview.code": "const greet = (name) => `hello ${name}`; // => != >= -> 代码预览",
 
-    "footnote.local": "保存在宿主设置文档里；每次改动立即生效。",
   },
 };
 
@@ -588,7 +517,6 @@ var CARD_CSS = [
   ".dfp-miniButton{appearance:none;font:inherit;cursor:pointer;white-space:nowrap;flex:none;border-radius:6px;padding:3px 8px;font-size:12px;line-height:16px;color:var(--dsw-alias-label-secondary);background:0 0;border:.5px solid var(--dsw-alias-border-l3)}",
   ".dfp-miniButton:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-specific-sidebar-nav-item-hover)}",
   ".dfp-miniButton:disabled{opacity:.4;cursor:default}",
-  ".dfp-presetForm{align-items:center;gap:8px;margin-top:10px;display:flex}",
   ".dfp-textInput{flex:1;min-width:0;box-sizing:border-box;padding:5px 8px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;font:inherit;font-size:13px;line-height:18px}",
   // The auto-save hint and the transient message share one row: the hint holds
   // the left, the message fades in on the right. The row is always mounted and
@@ -637,6 +565,7 @@ var CARD_CSS = [
 
   ".dfp-panel{box-sizing:border-box;position:fixed;z-index:1200;flex-direction:column;width:320px;max-height:380px;padding:8px;background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:12px;box-shadow:var(--dsw-shadow-lv3,0 12px 32px #00000024);display:flex;gap:6px}",
   ".dfp-search{width:100%;box-sizing:border-box;padding:5px 8px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;font:inherit;font-size:13px;line-height:18px}",
+  ".dfp-exportText{resize:vertical;min-height:54px;font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:12px;line-height:17px}",
   ".dfp-note{padding:4px 2px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}",
   ".dfp-list{flex-direction:column;gap:1px;flex:1;min-height:0;overflow-y:auto;display:flex}",
   ".dfp-group{padding:6px 6px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;position:sticky;top:0;background:var(--dsw-alias-bg-layer-2)}",
@@ -1222,24 +1151,45 @@ function PresetSelect(props) {
  * ------------------------------------------------------------------ */
 
 /**
- * @typedef {{status: "unsupported"|"loading"|"denied"|"ready", families: string[]}} Catalog
+ * @typedef {{status: "unsupported"|"loading"|"denied"|"ready", families: string[],
+ *   at?: number, permanent?: boolean}} Catalog
  */
 
 /** Enumeration is session-stable, so it is resolved once and kept. */
 var catalogCache = null;
 
 /**
+ * How long a refused (or empty) enumeration is trusted before the picker asks
+ * again. Answering "denied" and never retrying is wrong in the case that
+ * actually happens: the user grants the permission from the browser's prompt
+ * or site settings and expects the list to fill in — and when the permission
+ * is still blocked the browser rejects the call instantly without prompting,
+ * so the retry costs nothing.
+ */
+var CATALOG_RETRY_MS = 20000;
+
+/** The clock, injectable so the retry window is testable without waiting. */
+var catalogNow = function () {
+  return Date.now();
+};
+
+/**
  * Enumerate installed families; the built-in presets stand in when the browser
  * cannot or will not enumerate them.
+ * @param {boolean} [force] - ignore a cached refusal and ask again.
  * @returns {Promise<Catalog>} the catalog.
  */
-async function loadCatalog() {
-  if (catalogCache !== null) return catalogCache;
+async function loadCatalog(force) {
+  var now = catalogNow();
+  if (force !== true && !shared.catalogRefreshDue(catalogCache, now, CATALOG_RETRY_MS)) {
+    return catalogCache;
+  }
   var host = /** @type {{queryLocalFonts?: () => Promise<Array<{family: string}>>}} */ (
     globalThis
   );
   if (typeof host.queryLocalFonts !== "function") {
-    catalogCache = { status: "unsupported", families: [] };
+    // No API at all: retrying cannot help, and the picker says so.
+    catalogCache = { status: "unsupported", families: [], at: now, permanent: true };
     return catalogCache;
   }
   try {
@@ -1259,11 +1209,11 @@ async function loadCatalog() {
     });
     catalogCache =
       families.length === 0
-        ? { status: "unsupported", families: [] }
-        : { status: "ready", families: families };
+        ? { status: "unsupported", families: [], at: now }
+        : { status: "ready", families: families, at: now };
   } catch (error) {
     // A refused permission is the common case here: `queryLocalFonts` prompts.
-    catalogCache = { status: "denied", families: [] };
+    catalogCache = { status: "denied", families: [], at: now };
   }
   return catalogCache;
 }
@@ -1326,13 +1276,65 @@ function classifyFamily(name) {
   return verdict;
 }
 
-/** Preset groups, in the order the picker lists them. */
-var PRESET_GROUPS = [
-  { label: "stack.groupMono", families: PRESETS.mono },
-  { label: "stack.groupCjk", families: PRESETS.cjk },
-  { label: "stack.groupLatin", families: PRESETS.latin },
-  { label: "stack.groupGeneric", families: PRESETS.generic },
-];
+/* ------------------------------------------------------------------ *
+ * clipboard
+ * ------------------------------------------------------------------ */
+
+/**
+ * Copy through the legacy selection path.
+ *
+ * This is not a museum piece: the async Clipboard API only exists in a secure
+ * context, and the deployment note in this repository's README documents a
+ * remote HTTP origin where `navigator.clipboard` is simply absent. A
+ * selection-based copy still works there, and it also works when the async
+ * call is refused without the clipboard-write permission.
+ * @param {string} text - what to put on the clipboard.
+ * @returns {boolean} whether the copy command reported success.
+ */
+function copyBySelection(text) {
+  if (typeof document === "undefined" || !document.body) return false;
+  if (typeof document.execCommand !== "function") return false;
+  var area = null;
+  try {
+    area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    // Off-screen rather than hidden: `display:none` cannot hold a selection.
+    area.style.position = "fixed";
+    area.style.top = "-1000px";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    return document.execCommand("copy") === true;
+  } catch (error) {
+    return false;
+  } finally {
+    if (area !== null && area.parentNode) area.parentNode.removeChild(area);
+  }
+}
+
+/**
+ * Copy text, trying the async API first and the selection fallback after it.
+ * @param {string} text - what to put on the clipboard.
+ * @returns {Promise<boolean>} whether the text reached the clipboard.
+ */
+async function copyText(text) {
+  var nav = globalThis.navigator;
+  if (
+    nav !== undefined &&
+    nav !== null &&
+    nav.clipboard !== undefined &&
+    typeof nav.clipboard.writeText === "function"
+  ) {
+    try {
+      await nav.clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      // No permission, or no clipboard in this context: fall through.
+    }
+  }
+  return copyBySelection(text);
+}
 
 /* ------------------------------------------------------------------ *
  * the family picker
@@ -1477,7 +1479,6 @@ function StackPicker(props) {
     commit(families.concat([name]));
   };
 
-  var needle = query.trim().toLowerCase();
   var selectedLower = {};
   if (single) {
     if (typeof props.value === "string" && props.value !== "") {
@@ -1488,47 +1489,15 @@ function StackPicker(props) {
       selectedLower[families[selectedIndex].toLowerCase()] = true;
     }
   }
-  var matches = function (name) {
-    return needle === "" || name.toLowerCase().indexOf(needle) >= 0;
-  };
-  var options = [];
-  var pushGroup = function (labelKey, names, limit, skipSelected) {
-    var rows = [];
-    for (var index = 0; index < names.length; index += 1) {
-      var name = sanitizeFamily(names[index]);
-      if (name === "" || !matches(name)) continue;
-      if (skipSelected === true && selectedLower[name.toLowerCase()] === true) continue;
-      rows.push(name);
-      if (limit !== undefined && rows.length >= limit) break;
-    }
-    if (rows.length > 0) options.push({ label: labelKey, families: rows });
-  };
-
-  var selectedRows = [];
-  for (var familyIndex = 0; familyIndex < families.length; familyIndex += 1) {
-    if (matches(families[familyIndex])) selectedRows.push(families[familyIndex]);
-  }
-  if (selectedRows.length > 0) {
-    options.push({ label: "stack.groupSelected", families: selectedRows });
-  }
-
-  if (catalog.status === "ready") {
-    if (needle === "") {
-      for (var groupIndex = 0; groupIndex < PRESET_GROUPS.length; groupIndex += 1) {
-        pushGroup(PRESET_GROUPS[groupIndex].label, PRESET_GROUPS[groupIndex].families, undefined, !single);
-      }
-    }
-    pushGroup("stack.groupLocal", catalog.families, MAX_VISIBLE_FONTS, !single);
-  } else {
-    for (var fallbackIndex = 0; fallbackIndex < PRESET_GROUPS.length; fallbackIndex += 1) {
-      pushGroup(
-        PRESET_GROUPS[fallbackIndex].label,
-        PRESET_GROUPS[fallbackIndex].families,
-        undefined,
-        !single
-      );
-    }
-  }
+  // The grouping itself is pure and lives in the shared core, where it is
+  // covered without a browser: which rows appear, in which order, and never
+  // twice.
+  var options = shared.pickerGroups({
+    stack: families,
+    single: single,
+    query: query,
+    catalog: catalog,
+  });
 
   var typed = query.trim();
   var typedKnown = false;
@@ -2006,6 +1975,8 @@ function FontCard(props) {
   // effect runs again instead of ignoring the second one.
   var [presetStatus, setPresetStatus] = useState({ text: "", id: 0 });
   var [statusShown, setStatusShown] = useState(false);
+  /** The exported JSON when the clipboard refused it: shown selected instead. */
+  var [exportText, setExportText] = useState("");
   var [renaming, setRenaming] = useState(false);
   var [importOpen, setImportOpen] = useState(false);
   /** True while the card itself writes a whole preset's values: the edits
@@ -2092,18 +2063,45 @@ function FontCard(props) {
     clear(field);
     mirrorPreset(field, DEFAULTS[field]);
   };
+  /**
+   * Report a write the settings document refused. A silent failure is the
+   * worst outcome here: the control goes back to showing the stored value and
+   * the user is left believing the change was saved.
+   * @param {unknown} error - the rejection reason.
+   */
+  var writeFailed = function (error) {
+    var message = error && error.message ? String(error.message) : String(error);
+    if (message.length > 160) message = message.slice(0, 160) + "…";
+    showStatus(t("preset.writeFailed", { message: message }));
+  };
   var submit = function (field, value) {
-    var result = scope.set(field, value);
+    var result;
+    try {
+      result = scope.set(field, value);
+    } catch (error) {
+      writeFailed(error);
+      return;
+    }
     if (result && typeof result.catch === "function") {
-      result.catch(function () {
-        // A failed write reloads the Host state through the scope itself.
+      result.catch(function (error) {
+        // The scope reloads the Host state itself; the status row is what
+        // keeps the user from thinking the change stuck.
+        writeFailed(error);
       });
     }
   };
   var clear = function (field) {
-    var result = scope.unset(field);
+    var result;
+    try {
+      result = scope.unset(field);
+    } catch (error) {
+      writeFailed(error);
+      return;
+    }
     if (result && typeof result.catch === "function") {
-      result.catch(function () {});
+      result.catch(function (error) {
+        writeFailed(error);
+      });
     }
   };
   var overridden = function (field) {
@@ -2443,21 +2441,23 @@ function FontCard(props) {
     showStatus(t("preset.renamed", { name: name }));
   };
 
+  /**
+   * Hand the preset list over as JSON: the clipboard when it is available,
+   * and otherwise a selected read-only box with the same text in it. The old
+   * fallback printed the export into the one-line status row, which truncated
+   * the JSON at 120 characters — a message that could not be copied from.
+   */
   var exportPresets = function () {
     var text = JSON.stringify(presetList);
-    var navigator = globalThis.navigator;
-    if (navigator !== undefined && navigator.clipboard !== undefined) {
-      navigator.clipboard
-        .writeText(text)
-        .then(function () {
-          showStatus(t("preset.exported"));
-        })
-        .catch(function () {
-          showStatus(text.slice(0, 200) + "…");
-        });
-    } else {
-      showStatus(text.slice(0, 120) + "…");
-    }
+    void copyText(text).then(function (copied) {
+      if (copied) {
+        setExportText("");
+        showStatus(t("preset.exported"));
+        return;
+      }
+      setExportText(text);
+      showStatus(t("preset.exportManual"));
+    });
   };
   var importPresets = function (text) {
     var parsed = normalizePresets(text);
@@ -2753,6 +2753,25 @@ function FontCard(props) {
                     if (text !== "") importPresets(text);
                   },
                 })
+              : null,
+            // The clipboard-less export: the same JSON, already selected, so
+            // the one thing left to do is press the copy shortcut.
+            exportText !== ""
+              ? h("textarea", {
+                  className: "dfp-search dfp-exportText",
+                  rows: 3,
+                  readOnly: true,
+                  autoFocus: true,
+                  spellCheck: false,
+                  "aria-label": t("preset.exportManual"),
+                  value: exportText,
+                  onFocus: function (event) {
+                    event.target.select();
+                  },
+                  onCopy: function () {
+                    setExportText("");
+                  },
+                })
               : null
           ),
 
@@ -2976,6 +2995,11 @@ function FontCard(props) {
                   for (var index = 0; index < VALUE_FIELDS.length; index += 1) {
                     clear(VALUE_FIELDS[index]);
                   }
+                  // The retired axes are cleared too: they render nothing, so a
+                  // value left behind would be invisible forever.
+                  for (var retired = 0; retired < RETIRED_FIELDS.length; retired += 1) {
+                    clear(RETIRED_FIELDS[retired]);
+                  }
                   clear(DARK_VALUES_FIELD);
                   // Auto-save: the reset IS a change to the active preset, so
                   // its snapshot follows back to the neutral defaults.
@@ -3092,7 +3116,38 @@ export function apply(ctx) {
     function () {
       if (typeof document === "undefined") return undefined;
       var lastSignature = "";
-      var recheck = function () {
+      var lastGate = null;
+      var ticks = 0;
+      // Reading the base tokens walks every property of every rule of every
+      // stylesheet — far too much to repeat every four seconds forever. This
+      // gate covers everything that moves those tokens in DSH: the theme
+      // writes its content font size inline on `body`, a light/dark switch
+      // swaps the class on `html`, and a lazily loaded view adds a stylesheet.
+      // A full sweep still runs every Nth tick, which is what catches an
+      // in-place rewrite inside the CSS-in-JS sheet.
+      var GATE_TICKS_PER_SWEEP = 8;
+      var gate = function () {
+        var inline = "";
+        var root = null;
+        try {
+          inline = document.body ? document.body.getAttribute("style") || "" : "";
+          root = document.documentElement;
+        } catch (error) {
+          inline = "";
+        }
+        return (
+          inline +
+          "|" +
+          (root ? root.className || "" : "") +
+          "|" +
+          document.styleSheets.length
+        );
+      };
+      var recheck = function (force) {
+        ticks += 1;
+        var current = gate();
+        if (force !== true && ticks % GATE_TICKS_PER_SWEEP !== 0 && current === lastGate) return;
+        lastGate = current;
         var next = readBaseTokens();
         var signature = "";
         var name;
@@ -3109,7 +3164,9 @@ export function apply(ctx) {
         sync();
       };
       scheduleRecheck = recheck;
-      var timer = globalThis.setTimeout(recheck, 500);
+      var timer = globalThis.setTimeout(function () {
+        recheck(true);
+      }, 500);
       var interval = globalThis.setInterval(recheck, 4000);
       return function () {
         globalThis.clearTimeout(timer);
@@ -3124,7 +3181,8 @@ export function apply(ctx) {
       // this hook; the polling recheck still covers theme changes there.
       if (typeof ctx.on !== "function") return undefined;
       return ctx.on("theme/change", function () {
-        if (scheduleRecheck !== null) scheduleRecheck();
+        // Forced: the theme may have moved without touching the cheap gate.
+        if (scheduleRecheck !== null) scheduleRecheck(true);
       });
     },
     "dsh-fonttune: theme change adoption"

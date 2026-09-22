@@ -1,11 +1,13 @@
 /**
- * Verify in a real browser that the body and code size axes are independent.
+ * Verify in a real browser that the conversation and code size axes are
+ * independent — and that the RETIRED interface size axis moves nothing.
  *
  *   node test/split-verify.mjs <url-with-token>
  *
- * Writes `sizeOffset` / `sizeOffsetCode` through `settings/mutate`, then
- * measures, for each combination:
- *   - body's computed `--dsh-content-font-size` (the source of the body chain)
+ * Writes `sizeOffsetDialog` / `sizeOffsetCode` (and, for the retirement check,
+ * the retired `sizeOffset`) through `settings/mutate`, then measures, for each
+ * combination:
+ *   - body's computed `--dsh-content-font-size` (the source of the conversation chain)
  *   - body's computed `--dsw-font-markdown-code-block` (the code shorthand)
  *   - probe elements consuming those tokens through `font:` — exactly how the
  *     shipped stylesheets size a code block (`font: var(--dsw-font-markdown-code-block)`)
@@ -200,10 +202,13 @@ const main = async () => {
   const round = (value) => Math.round(value * 1000) / 1000;
 
   /** Run one combination, then report the measured ratios against the baseline. */
-  const step = async (label, bodyOffset, codeOffset, baseline) => {
+  const step = async (label, dialogOffset, codeOffset, baseline, retiredOffset) => {
     const ops = [
-      { op: "set", path: ["sizeOffset"], value: bodyOffset },
+      { op: "set", path: ["sizeOffsetDialog"], value: dialogOffset },
       { op: "set", path: ["sizeOffsetCode"], value: codeOffset },
+      // The interface size axis is RETIRED: it must move nothing at all. The
+      // step that writes it proves that in the real page.
+      { op: "set", path: ["sizeOffset"], value: retiredOffset ?? 0 },
     ];
     const result = await mutate(ops);
     // Reload: the host half's first-paint row is baked into the served HTML, so
@@ -211,7 +216,7 @@ const main = async () => {
     await send("Page.navigate", { url });
     await sleep(9000);
     const seen = JSON.parse(await measure());
-    console.log(`\n${label} (body ${bodyOffset}, code ${codeOffset})`);
+    console.log(`\n${label} (conversation ${dialogOffset}, code ${codeOffset}, retired ${retiredOffset ?? 0})`);
     console.log("  user layer:", result);
     console.log(
       `  --dsh-content-font-size=${seen.contentSize}  code shorthand=${seen.codeToken}`
@@ -231,35 +236,49 @@ const main = async () => {
   };
 
   const base = await step("baseline", 0, 0, null);
-  const bodyOnly = await step("body only", 3, 0, base.seen);
+  const bodyOnly = await step("conversation only", 3, 0, base.seen);
   const codeOnly = await step("code only", 0, 3, base.seen);
   const both = await step("both, opposite signs", 3, -3, base.seen);
+  const retired = await step("retired interface size only", 0, 0, base.seen, 4);
 
   console.log("\nchecks");
-  const scaleUp = round(19 / 16);
-  const scaleDown = round(13 / 16);
+  // The conversation offset is added to the LIVE official content size (the
+  // theme's own font-size preference), while the code axis scales the shipped
+  // shorthands over DSH's 16px reference — so the two expectations differ
+  // whenever the machine is not on DSH's default size.
+  const dialogBase = px(base.seen.contentSize);
+  const codeBase = 16;
+  const scaleUp = round((dialogBase + 3) / dialogBase);
+  const codeUp = round((codeBase + 3) / codeBase);
+  const scaleDown = round((dialogBase - 3) / dialogBase);
+  const codeDown = round((codeBase - 3) / codeBase);
   check("baseline body probe resolved", px(base.seen.body.size) > 0, base.seen.body.size);
   check("baseline code probe resolved", px(base.seen.code.size) > 0, base.seen.code.size);
   check(
-    "body offset +3 moves the body chain only",
+    "conversation offset +3 moves the conversation chain only",
     bodyOnly.bodyRatio === scaleUp && bodyOnly.codeRatio === 1,
-    `body ×${bodyOnly.bodyRatio}, code ×${bodyOnly.codeRatio}`
+    `body ×${bodyOnly.bodyRatio} (want ${scaleUp}), code ×${bodyOnly.codeRatio}`
   );
   check(
     "code offset +3 moves the code chain only",
-    codeOnly.bodyRatio === 1 && codeOnly.codeRatio === scaleUp,
-    `body ×${codeOnly.bodyRatio}, code ×${codeOnly.codeRatio}`
+    codeOnly.bodyRatio === 1 && codeOnly.codeRatio === codeUp,
+    `body ×${codeOnly.bodyRatio}, code ×${codeOnly.codeRatio} (want ${codeUp})`
   );
   check(
     "opposite offsets move independently",
-    both.bodyRatio === scaleUp && both.codeRatio === scaleDown,
-    `body ×${both.bodyRatio}, code ×${both.codeRatio}`
+    both.bodyRatio === scaleUp && both.codeRatio === codeDown,
+    `body ×${both.bodyRatio} (want ${scaleUp}), code ×${both.codeRatio} (want ${codeDown})`
+  );
+  check(
+    "the retired interface size axis moves nothing",
+    retired.bodyRatio === 1 && retired.codeRatio === 1,
+    `body ×${retired.bodyRatio}, code ×${retired.codeRatio}`
   );
   const inlineRatio = round(ratio(px(both.seen.inlineCode.size), px(base.seen.inlineCode.size)));
   check(
     "the inline-code token rides the same code axis",
-    inlineRatio === scaleDown,
-    `inline code ×${inlineRatio}`
+    inlineRatio === codeDown,
+    `inline code ×${inlineRatio} (want ${codeDown})`
   );
   check(
     "the code shorthand keeps its family list",
@@ -272,7 +291,14 @@ const main = async () => {
   for (const key of Object.keys(original)) {
     restoreOps.push({ op: "set", path: [key], value: original[key] });
   }
-  for (const key of ["sans", "mono", "sizeOffset", "sizeOffsetCode", "weight"]) {
+  for (const key of [
+    "sans",
+    "mono",
+    "sizeOffset",
+    "sizeOffsetDialog",
+    "sizeOffsetCode",
+    "weight",
+  ]) {
     if (!Object.prototype.hasOwnProperty.call(original, key)) {
       restoreOps.push({ op: "unset", path: [key] });
     }
