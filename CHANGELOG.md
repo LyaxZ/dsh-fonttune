@@ -2,6 +2,27 @@
 
 **dsh-fonttune** 的重要变更都记录在这里。英文版见 [CHANGELOG.en.md](CHANGELOG.en.md)。
 
+## [0.2.4] - 2026-09-23
+
+### 新增
+- **一个包同时装上两条宿主线**：`0.1.5-rc.1` – `rc.3`（宿主 `settings.installSection` + 客户端 `settingsScope` 那一套）与 `0.1.7-alpha.1` – `alpha.2`（宿主 `settings.configure({auto:true}, ctx.fiber)` + 客户端 `configForms` 那一套）。插件在运行时看宿主到底给了哪一套，**两条都不在就只装样式、不注册卡片**，不会把整包 park 住。`package.json` 的 `engines.dsh` 写成语义化预发布区间 `>=0.1.5-rc.1 <0.1.7-0 || >=0.1.7-alpha.1 <0.2.0-0`（写 `>=0.1.5-rc.1` 是匹配不到 `0.1.7-alpha.1` 的），`dsh.compatibility.dshReleases` 逐条列出五条实测过的宿主线。
+- **卡片在两条线的三个座位上都能出现**，由宿主自己决定渲染哪一个：rc 的 `settings.plugin.item`（按设置命名空间认领）、alpha 的 `plugins.item`（插件页的插件条目，`id: fonttune`、标签取字典里的 `card.title`、摘要用 `card.description`、详情页才渲染整张卡——**DSH 自己的 shell / agent-loop / subagent / web-search 也是这么登记的**）、以及给已装 profile 包用的 `plugins.bundle.config`（按 npm 包名 `dsh-fonttune` 认领，落在该包的详情页）。
+- **认领命名空间改成「先等、再按签名认」**：alpha 的 `configForms.describe()` 是异步的，以前抢在它应答前按名字猜候选，猜错就会落在别的命名空间上、每次写入都被宿主拒绝（真机表现：卡片能开、一改就报「设置没有保存成功」）。现在候选为空就返回 `null`，并挂一个「待定作用域」占位（`getSnapshot`/`subscribe`/`set`/`unset` 全套），等 describe 的视图到达后按 **schema 里同时含 `uiFollowsDialog` 与 `stackDialog`** 认出自己那一个再接管（真机日志：`served namespaces []` → `matched by served schema: fonttune`）。
+- **宿主侧拆掉 volatile 引用**：alpha 的 `ctx.fiber.config` 里每个字段都是 cosmokit 的 volatile 引用（`{ get(), [Symbol.for("cosmokit.volatile.write")](v) }`，且被冻结），当普通对象读只会拿到空值——真机表现是**卡片第一次渲染是一整排空控件、注入的样式表 0 字节**。现在统一走 `plainConfigValue()` 深拆，`styleRow()` 拿到的是普通对象（实测样式行 973 B、`Georgia` / `520`）。
+- **`inject` 收窄到两条线都有的服务**（`slots` / `locale`）：声明一个某条线上不存在的服务（例如 rc 才有的 `settingsScope`）会把**整包 park 住**（`pending (waiting for service: …)`），Web 直接起不来。设置作用域改为运行时用 `ctx.get()` 免声明查找，找不到就按「没有宿主层」降级。
+- **写设置的结果两种形状都认**：rc 的 `mutate` 即使失败也 resolve `undefined`，alpha 的 `set`/`unset` resolve 布尔（`false` = 宿主拒绝）。`followWrite` 现在把同步 `false`、resolve 成 `false` 的 thenable、以及 rejection 三种都报到预设行右侧那句提示里。
+- **`test/host-line-probe.mjs`：与宿主线无关的真机探针**。只断言两条线都必须成立的事——页面无报错、插件只维护**一份**样式表且已接入文档、设置真的作用到文档（设了 `DFP_EXPECT_FAMILY` / `DFP_EXPECT_WEIGHT` 就顺带断言计算样式）、设置页里能找到并渲染出 `.dfp-card`（哪条线的座位都行）、以及从卡片上改一个值真的写进宿主。已并入 `npm run verify:browser` 的只读组。设 `DFP_PROBE=1` 时插件会往控制台打诊断行（服务了哪些命名空间、认领了哪个、座位当前状态），`DFP_DUMP=1` 时探针额外按分组打印插件页的条目。
+
+### 变更
+- **不再 require 宿主内部原语**：alpha 只导出 `IconPlusOutlineRegular` / `IconPlusOutlineMedium`（没有 rc 的 `IconPlusOutline16`），所以 `primitives` 的 require 整个去掉，用到的加号改成内联 SVG。
+- **实测清楚 rc.3 到底改了什么**（供后续判断要不要为它开分支）：把 rc.2 与 rc.3 的 `lib/` + `dist/` 共 728 个 js/css 逐个哈希比对，**只有 2 个文件不同**——`@deepseek-ai/cosmokit/lib/index.js`（13336 → 17160 B，新增 volatile 原语 `createVolatile` / `isVolatile` / `volatileEntries` / `updateVolatile` 与 `Symbol.for("cosmokit.volatile.write")`）和 `dsh-client-ui-sidebar/lib/client.js`（只差构建戳 `0.1.5-rc.2-449af19` → `0.1.5-rc.3-a5380f3`）；依赖上内部包抬到 `^0.1.5-rc.3`，`@deepseek-ai/schemastery` / `@deepseek-ai/cordis` 从 `^` 改成精确钉版（3.18.2 / 4.0.2）。**排版、主题、设置 API 一处没动**，面向 rc 的行为在 rc.3 上不需要新分支。rc 线自带的 schemastery 3.18.2 **没有** `.volatile()`（alpha 的 3.18.4 才有），所以根 schema 上的 volatile 标记必须**有则加、无则跳**。
+- 兼容表补 0.2.4（中英两份 README 都改了运行时双方言的处理说明）。
+
+### 测试
+- `test/run.mjs`（91 项）：卡片槽位白名单加入 `plugins.item` / `plugins.bundle.config`，那条用例改成「每个受支持宿主可能派发的座位都注册」，断言三个座位与 `plugins.item` 的 id / 标签 / 组件形态（摘要取 `card.description`，页面交出一个对象）。
+- `test/render-card.mjs`（23 项）：渲染取值改为「`settings.plugin.item` 不在就取 `plugins.item`」，两条线的座位各跑一遍。
+- 真机（受管实例 + 无头 Edge）：`0.1.5-rc.2`、`0.1.5-rc.3`、`0.1.7-alpha.2` 各跑一次 `host-line-probe` 通过（插入式装载）；alpha.2 另跑一次 bundle 式装载通过。alpha 上确认从卡片改的 `codeLigatures: 2` 真的写进 `profiles/dfp/cordis.patch.yml`，rc 上确认落在 `settings.yaml`。
+
 ## [0.2.3] - 2026-09-22
 
 ### 修复

@@ -22,14 +22,25 @@
 
 ## 兼容性
 
+**一份包同时支持 0.1.5-rc.x 与 0.1.7-alpha.x 两条宿主线**，安装方式与宿主线无关：两条线都验证过「设置卡片可用、样式真的作用到页面、卡片上的改动写得进去」。
+
 | 插件版本 | 支持的 DSH 版本 |
 | --- | --- |
-| **0.2.3**（最新） | 0.1.5-rc.2 |
+| **0.2.4**（最新） | 0.1.5-rc.1 / rc.2 / rc.3、0.1.7-alpha.1 / alpha.2 |
+| 0.2.3 | 0.1.5-rc.2 |
 | 0.2.2 | 0.1.5-rc.2 |
 | 0.2.1 | 0.1.5-rc.2 |
 | 0.2.0 | 0.1.5-rc.2 |
 
-`engines.dsh` 下限为 **0.1.5-rc.2**，兼容声明只列 **0.1.5 线的最新版本**：它包含这条线的全部修复，是同一大版本里最稳的一版，而同一大版本内的旧版本按语义化版本约定向上兼容。更早或更新的 DSH 未经验证，不作声明。市场条目同时声明这些兼容信息（`package.json` 的 `engines.dsh`、`dsh.compatibility.dshReleases` 与 `peerDependencies`），安装前可据此判断这一版需要的宿主版本。
+`engines.dsh` 声明为 **`>=0.1.5-rc.1 <0.1.7-0 || >=0.1.7-alpha.1 <0.2.0-0`**（预发布版本必须显式留分支：node-semver 只在一个范围的某个比较符与该版本落在同一个 `major.minor.patch` 元组、且自身带预发布标签时才放行，写成 `>=0.1.5-rc.1` 匹配不到 `0.1.7-alpha.1`）。两条线的差别**全部在运行时二选一，不看版本号**：
+
+- **设置服务**：0.1.5-rc.x 是 `settingsScope.bind({namespace})`（按命名空间），0.1.7-alpha.x 换成了 `configForms.get(<profile 条目 id>)`（按条目 id，id 由安装方的 profile patch 决定，所以插件靠「宿主服务的那份 schema 里有没有本插件自己的字段」来认领）。两者都是 `getSnapshot/subscribe/set/unset` 同一张脸，插件只写一套。
+- **配置卡片座位**：rc 线是 设置 → 插件 → 插件配置 里的一个 keyed 单元（`settings.plugin.item`）；alpha 线删掉了这个槽位，改成在「插件」页的官方插件列表里贡献一个条目（`plugins.item`，内置那些设置页就是这么挂的），并另外提供「已安装成 bundle 时」的每包页面（`plugins.bundle.config`）。三个座位都注册，宿主不声明的那个是惰性的。
+- **宿主半的配置来源**：alpha 把 schema 标成 `.volatile()` 之后，宿主半拿到的配置字段是 cosmokit 的 volatile 引用（`{get(),[write]}`）而不是普通值，首帧样式行会因此变空；插件先把引用解出来再用。
+- **`inject` 只声明两条线都有的服务**（`slots`、`locale`）：声明一个宿主没有的服务会把整包 park 住——alpha 上声明 `settingsScope` 会让整个 Web 界面起不来。设置服务一律用 `ctx.get(name)` 现查。
+- **alpha 的表单是「条目 id + 描述视图」**：宿主 `describe()` 还没答话时，插件不会去猜一个条目名（猜错的话每次写入都会被告主拒绝），而是先用一个等待态座位顶住，等宿主把视图发出来再接管并立刻重读。
+
+市场条目同时声明这些兼容信息（`package.json` 的 `engines.dsh`、`dsh.compatibility.dshReleases` 与 `peerDependencies`），安装前可据此判断这一版需要的宿主版本。
 
 ## 安装
 
@@ -74,7 +85,8 @@ dsh plugin --profile web add <插件目录路径>
 - `src/client.js` —— 浏览器半：设置卡片、选字体面板、字体枚举与样式注入
 - `build.mjs` —— 零依赖构建：内联共享核心、套上 `window.__ModuleLoader__.load({id, factory})` 外壳、拷贝宿主半，并校验客户端 bundle 只 require shell 预注入的模块
 - `test/run.mjs` —— 离线检查（自建 DOM / cordis / 设置面替身、真实 schemastery schema、CSS 生成与注入、消毒对抗用例、双语文案键一致性、选字体面板的分组规则、令牌轮询的省电闸门）；`test/render-card.mjs` 用 mini React hooks 运行时真实渲染卡片组件（含强制展开态与强制状态，覆盖 0.1.0 那类发布阻断崩溃），把**每个控件的回调都点一遍**（未接线的回调只有真点下去才会暴露），并**渲染第二次**覆盖「状态变化后 hook 顺序改变」这一类崩溃；`test/artifacts.mjs` 校验 `lib/` 与当前 `src/` 逐字节一致（`npm run verify` 跑全部三套）
-- 需要真实页面的检查走 `npm run verify:browser -- "<带 token 的地址>"`（先起一个受管实例：`dsh web --port 0 --no-open`，它会打印地址）。默认只跑**只读**的几支（`browser-probe` / `ui-walk` / `style-verify`）；加 `--writers` 再跑会**写设置命名空间**的几支（`slider-walk` / `split-walk` / `split-verify` / `weight-verify`，各自先快照用户层、退出前还原），`--only a,b` 挑子集；每支的退出码就是判定。`test/set-user-layer.mjs <url> '<json>'` 是在被中断的运行之后还原用户层的工具
+- 需要真实页面的检查走 `npm run verify:browser -- "<带 token 的地址>"`（先起一个受管实例：`dsh web --port 0 --no-open`，它会打印地址）。默认只跑**只读**的几支（`browser-probe` / `ui-walk` / `host-line-probe` / `style-verify`）；加 `--writers` 再跑会**写设置命名空间**的几支（`slider-walk` / `split-walk` / `split-verify` / `weight-verify`，各自先快照用户层、退出前还原），`--only a,b` 挑子集；每支的退出码就是判定。`test/set-user-layer.mjs <url> '<json>'` 是在被中断的运行之后还原用户层的工具
+- `test/host-line-probe.mjs` 是**与宿主线无关**的那一支：只断言两条线都必须成立的事——页面无报错、插件只维护**一份**样式表、设置真的作用到文档（`DFP_EXPECT_FAMILY` / `DFP_EXPECT_WEIGHT` 给了就顺带断言计算样式）、设置页里能找到并渲染出 `.dfp-card`（哪条线的座位都行）、以及从卡片上改一个值真的写进去。换宿主线（rc ↔ alpha）后先跑它；调试「alpha 上卡片写不进去」这类问题时设 `DFP_PROBE=1`，插件会往控制台打一行 `[dfp-probe]`（服务了哪些命名空间、认领了哪个、座位当前是什么状态）
 - `test/weight-verify.mjs` 在真实页面里量三条字重轴（界面 / 对话 / 代码）的独立性与「样式表只有一份、不刷新关掉跟随立即回落」；`test/split-verify.mjs` 量对话/代码两条字号轴的独立性，外加**退役的界面字号轴什么都不动**；`test/slider-walk.mjs` 与 `test/split-walk.mjs` 驱动真实卡片（拖动不写、松手才写；简单模式两格与整条栈的往返）；另有市场条目的维护脚本 `test/market-pr.mjs`（status / update / refresh / reopen / open / about）与诊断脚本 `test/market-inspect.mjs`（PR 状态、评论、CI 与分支差异）
 - `docs/` —— 0.2.0 的[背景调研](docs/research-0.2.0.md)与[功能规格](docs/spec-0.2.0.md)（设计阶段的记录，含当时的取舍理由；与最终实现不同的地方以 README/CHANGELOG 为准，两份文件文首都有说明）。**不在 npm `files` 清单内，不随包发布**
 - 客户端模块能 require 的只有 shell 静态表里的模块（`react`、`react/jsx-runtime`、`react-dom`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-*` 等）；`dsh.client.inject` 只是加载顺序声明，不是 require 许可

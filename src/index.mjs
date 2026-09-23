@@ -72,6 +72,30 @@ const MAX_STACK = 200;
 const SAFE_FEATURES = /^[a-zA-Z0-9"' ,]*$/;
 
 /**
+ * Mark a schema editable without reloading, where the running schemastery
+ * knows the modifier.
+ *
+ * DSH 0.1.7-alpha.x derives a settings page from one form per composed entry
+ * and only projects the fields under a node marked `.volatile()` — an entry
+ * whose schema has no such node is skipped entirely, so the plugin would have
+ * no configuration page there. The modifier arrived in schemastery 3.18.x for
+ * the alpha line; the 0.1.5-rc.x line ships 3.18.2, where calling it while
+ * this module is imported would throw. Feature-detecting it is therefore the
+ * whole compatibility shim: the rc line keeps the plain schema it has always
+ * used, and the alpha gets the marking it needs.
+ *
+ * Marking the ROOT object makes every field below it live-editable; schemastery
+ * refuses a volatile node nested inside another volatile one, so nothing below
+ * may carry the modifier as well.
+ *
+ * @param {object} schema - the object schema.
+ * @returns {object} the schema, marked when the modifier exists.
+ */
+function volatileWhenSupported(schema) {
+  return typeof schema.volatile === "function" ? schema.volatile() : schema;
+}
+
+/**
  * The durable settings section.
  *
  * Every field defaults to "leave DSH alone": an empty stack injects no family
@@ -82,7 +106,7 @@ const SAFE_FEATURES = /^[a-zA-Z0-9"' ,]*$/;
  * value. Installing the plugin therefore changes nothing until the user asks
  * for something.
  */
-export const Config = z.object({
+export const Config = volatileWhenSupported(z.object({
   [SANS_FIELD]: z
     .string()
     .max(MAX_STACK)
@@ -220,12 +244,41 @@ export const Config = z.object({
     .max(shared.MAX_PRESET_NAME)
     .default("")
     .description("Name of the preset the card currently edits (edits auto-save into it)"),
-});
+}));
 
 /**
  * One row of the structured index injection table.
  * @typedef {{kind: "style", text: string} | {kind: "html", placement: "head", html: string}} StyleRow
  */
+
+/**
+ * The cosmokit volatile-reference protocol: a parsed config field may be a
+ * frozen `{ get(), [write](value) }` reference rather than a plain value.
+ *
+ * DSH 0.1.7-alpha.x marks the plugin's whole schema `.volatile()` so a settings
+ * write can land without remounting the entry, and the loader then hands this
+ * plugin a config whose fields ARE those references. Reading them as plain data
+ * (which `normalizeConfig` expects) would see objects where strings belong and
+ * emit nothing, so the references are unwrapped first. On the 0.1.5-rc.x line
+ * no field is a reference and this is a plain deep copy.
+ */
+const VOLATILE_WRITE = Symbol.for("cosmokit.volatile.write");
+
+/**
+ * Replace every volatile reference in a parsed config with its current value.
+ * @param {unknown} value - a parsed config value, or a reference to one.
+ * @returns {unknown} the same shape, references unwrapped.
+ */
+function plainConfigValue(value) {
+  if (value === null || typeof value !== "object") return value;
+  if (VOLATILE_WRITE in value && typeof value.get === "function") {
+    return plainConfigValue(value.get());
+  }
+  if (Array.isArray(value)) return value.map(plainConfigValue);
+  const out = {};
+  for (const [key, child] of Object.entries(value)) out[key] = plainConfigValue(child);
+  return out;
+}
 
 /**
  * The style row carrying one configuration.
@@ -240,7 +293,7 @@ export const Config = z.object({
  * @returns {StyleRow} the row the web server renders into `<head>`.
  */
 function styleRow(resolved) {
-  const cfg = normalizeConfig(resolved);
+  const cfg = normalizeConfig(plainConfigValue(resolved));
   // 0.2.0 ships the per-theme editor out; light and dark stay one value set
   // (the dark fields remain in the schema, dormant, for a future release).
   cfg[PER_THEME_FIELD] = false;
@@ -258,20 +311,47 @@ function styleRow(resolved) {
 
 /**
  * Register the settings section and keep the index in sync with it.
+ *
+ * TWO HOST DIALECTS. Up to DSH 0.1.5-rc.x the settings service registers a
+ * named section with a schema and reads it back by that name
+ * (`settings.installSection`), and the section name is what the browser half
+ * binds. From 0.1.7-alpha.x the service derives one form per composed entry and
+ * addresses it by the PROFILE ENTRY ID — there is no `installSection` at all,
+ * and an instance announces its page policy with `settings.configure` instead.
+ * Both are pure registrations that the browser half then reads through its own
+ * service, so which one ran does not change anything else here.
+ *
  * @param {object} ctx - host cordis context.
  * @param {unknown} config - the plugin entry's composition config (base layer).
  */
 export function apply(ctx, config) {
   let current = () => config;
   ctx.inject(["settings"], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, NAMESPACE, Config, config ?? {}, {
-      setSource: (source) => {
-        current = source;
-      },
-      // The row table is rebuilt on every index render and every worker boot
-      // payload, so each read is already fresh; nothing to invalidate here.
-      onChange: () => {},
-    });
+    const settings = settingsCtx.settings;
+    if (settings && typeof settings.installSection === "function") {
+      settings.installSection(ctx, NAMESPACE, Config, config ?? {}, {
+        setSource: (source) => {
+          current = source;
+        },
+        // The row table is rebuilt on every index render and every worker boot
+        // payload, so each read is already fresh; nothing to invalidate here.
+        onChange: () => {},
+      });
+      return;
+    }
+    if (settings && typeof settings.configure === "function") {
+      // `auto: true` keeps the host's generated page as the fallback wherever
+      // no custom page of ours is reachable.
+      settingsCtx.effect(() => settings.configure({ auto: true }, ctx.fiber));
+      // This dialect has no registered reader: the entry's live, merged value
+      // is the fiber's own resolved config, which is what the settings service
+      // shows a form as well. The browser half adopts and rewrites the served
+      // element on activation either way, so this only decides the first frame.
+      current = () => {
+        const live = ctx.fiber && ctx.fiber.config;
+        return live === undefined || live === null ? config : live;
+      };
+    }
   });
   ctx.on("webserver/index-inject", (table) => {
     table.push(styleRow(current()));

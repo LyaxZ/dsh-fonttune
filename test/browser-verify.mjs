@@ -41,6 +41,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const CHECKS = [
   { name: "browser-probe", script: "browser-probe.mjs", args: ["--open-settings"] },
   { name: "ui-walk", script: "ui-walk.mjs", args: [] },
+  // Line-independent checks: one adopted stylesheet, the configured CSS in the
+  // document, the configuration card reachable from the settings sheet on
+  // whichever seat the host declares, and a card control writing through. Set
+  // DFP_EXPECT_FAMILY / DFP_EXPECT_WEIGHT to also assert the applied values.
+  { name: "host-line-probe", script: "host-line-probe.mjs", args: [] },
   { name: "style-verify", script: "style-verify.mjs", args: [], report: true },
   { name: "slider-walk", script: "slider-walk.mjs", args: [], writers: true },
   { name: "split-walk", script: "split-walk.mjs", args: [], writers: true },

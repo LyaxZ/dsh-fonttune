@@ -363,16 +363,26 @@ async function loadClientBundle(ctx) {
 
 /**
  * A client context with a recording slot registry.
+ *
+ * Every card seat the plugin offers is recorded, in the order they are offered,
+ * so a check can look any of them up: the rc line's `settings.plugin.item`
+ * cell, the alpha line's `plugins.item` entry in the Plugins page, and the
+ * alpha line's per-package `plugins.bundle.config` cell.
  * @param {object} scope - the settings scope to bind.
  * @param {string} [locale] - the active locale id.
- * @returns {{ctx: object, registered: object[]}} the context and its captures.
+ * @returns {{ctx: object, registered: object[], seats: string[]}} the context and its captures.
  */
 function cardContext(scope, locale = "en") {
   const registered = [];
+  const seats = [];
   const ctx = createClientContext({
     slots: {
       inject(name, callback) {
-        assert.equal(name, "settings.plugin.item");
+        assert.ok(
+          ["settings.plugin.item", "plugins.item", "plugins.bundle.config"].includes(name),
+          `unexpected slot: ${name}`
+        );
+        seats.push(name);
         callback();
       },
       register(options, component) {
@@ -387,28 +397,47 @@ function cardContext(scope, locale = "en") {
     },
     settingsScope: { bind: () => scope },
   });
-  return { ctx, registered };
+  return { ctx, registered, seats };
 }
 
 /**
  * Apply the built host half against a stand-in host context.
  * @param {unknown} [config] - the composition config (base layer).
- * @returns {Promise<{table: Function[], section: object, module: object}>} the host state.
+ * @param {object} [options] - the host dialect to stand in for.
+ * @param {"rc"|"alpha"} [options.dialect] - which settings service the host exposes.
+ * @returns {Promise<{table: Function[], section: object, module: object, effects: object[]}>} the host state.
  */
-async function loadHostHalf(config) {
+async function loadHostHalf(config, options = {}) {
   const module = await import(ENTRY);
   const table = [];
+  const effects = [];
+  const presentations = [];
+  const dialect = options.dialect ?? "rc";
   let section = null;
   const ctx = {
+    fiber: { uid: "uid:test", config: options.liveConfig ?? {} },
     inject(names, callback) {
       if (!names.includes("settings")) return;
       callback({
-        settings: {
-          installSection(owner, namespace, schema, entry, hooks) {
-            section = { owner, namespace, schema, entry, hooks };
-            hooks.setSource(() => entry);
-            hooks.onChange();
-          },
+        settings:
+          dialect === "alpha"
+            ? {
+                configure(presentation, owner) {
+                  presentations.push({ presentation, owner });
+                  return () => {};
+                },
+              }
+            : {
+                installSection(owner, namespace, schema, entry, hooks) {
+                  section = { owner, namespace, schema, entry, hooks };
+                  hooks.setSource(() => entry);
+                  hooks.onChange();
+                },
+              },
+        effect(callback) {
+          const disposer = callback();
+          effects.push(typeof disposer === "function" ? disposer : null);
+          return () => {};
         },
       });
     },
@@ -417,7 +446,7 @@ async function loadHostHalf(config) {
     },
   };
   module.apply(ctx, config);
-  return { table, section, module };
+  return { table, section, module, effects, presentations };
 }
 
 /* ------------------------------------------------------------------ *
@@ -1262,6 +1291,53 @@ await test("registers the namespace and injects the first-frame style row", asyn
   );
 });
 
+await test("the alpha dialect configures the entry instead of a section", async () => {
+  // DSH 0.1.7-alpha.x has no `installSection`: an instance announces its page
+  // policy with `settings.configure`, and the settings service derives the form
+  // from the schema this module exports. The row still has to be served, and its
+  // values come from the entry's own resolved config.
+  const host = await loadHostHalf(
+    { sans: '"Inter"' },
+    { dialect: "alpha", liveConfig: { sans: '"Noto Serif SC"', weightDialog: 480 } }
+  );
+  assert.equal(host.section, null, "no section is registered on this line");
+  assert.equal(host.presentations.length, 1, "the page policy was configured once");
+  assert.deepEqual(host.presentations[0].presentation, { auto: true });
+  assert.equal(
+    host.presentations[0].owner,
+    host.presentations[0].owner,
+    "the policy is owned by an explicit fiber"
+  );
+  assert.equal(host.effects.length, 1, "configure is registered as an effect");
+  assert.equal(host.table.length, 1);
+  const rows = [];
+  host.table[0](rows);
+  assert.ok(
+    rows[0].html.includes('"Noto Serif SC"'),
+    "the served row carries the entry's live value, not only the base layer"
+  );
+  assert.ok(rows[0].html.includes("font-weight:480 !important"));
+});
+
+await test("the schema is marked live-editable where schemastery supports it", async () => {
+  // The alpha projects a form per entry and only shows the fields under a
+  // `.volatile()` node; without the marking the plugin has no page there at
+  // all. The rc line ships a schemastery without the modifier, so the call is
+  // feature-detected rather than unconditional.
+  const host = await loadHostHalf(undefined);
+  const schema = host.module.Config;
+  const json = JSON.stringify(schema.toJSON ? schema.toJSON() : schema);
+  assert.ok(json.includes("stackDialog"), "the schema still declares the fields");
+  if (typeof schema.volatile === "function") {
+    assert.equal(schema.meta.volatile, true, "the root carries the volatile marking");
+  } else {
+    assert.equal(schema.meta?.volatile, undefined, "no marking is possible here");
+  }
+  // Whatever the dialect, the schema still validates the same values.
+  assert.equal(schema({ sans: '"Inter"' }).sans, '"Inter"');
+  assert.throws(() => schema({ weightDialog: 10_000 }));
+});
+
 await test("a configured base layer is rendered into the row", async () => {
   const host = await loadHostHalf({
     sans: '"Inter"',
@@ -1322,15 +1398,115 @@ await test("the host schema accepts real stacks and refuses bad ones", async () 
 
 section("browser half: the card and the applied stylesheet");
 
-await test("registers the card under the settings namespace key", async () => {
+await test("registers the card in every seat a supported host may declare", async () => {
   const scope = createScope();
   resetDom();
-  const { ctx, registered } = cardContext(scope);
+  const { ctx, registered, seats } = cardContext(scope);
   await loadClientBundle(ctx);
-  assert.equal(registered.length, 1);
-  assert.equal(registered[0].options.name, "settings.plugin.item");
-  assert.equal(registered[0].options.key, "dsh-fonttune");
-  assert.equal(typeof registered[0].component, "function");
+  // The rc line shows a keyed cell under Settings -> Plugins -> Plugin
+  // configuration; the alpha line contributes an entry to the Plugins page's
+  // official list (that is how every plugin page is added there) and, for a
+  // profile that installed this plugin as a bundle, a per-package cell. A host
+  // declares whichever it knows, and a registration into a slot it never
+  // declares is inert, so all three are offered.
+  assert.deepEqual(seats, ["settings.plugin.item", "plugins.bundle.config", "plugins.item"]);
+  assert.equal(registered.length, 3);
+  const bySeat = {};
+  for (const entry of registered) bySeat[entry.options.name] = entry;
+  assert.equal(bySeat["settings.plugin.item"].options.key, "dsh-fonttune");
+  assert.equal(typeof bySeat["settings.plugin.item"].component, "function");
+  assert.equal(bySeat["plugins.bundle.config"].options.key, "dsh-fonttune");
+  assert.equal(bySeat["plugins.bundle.config"].options.locale, "dsh-fonttune");
+  // The Plugins-page entry is identified by `id` on that line, carries the
+  // card's title as its label, and answers the summary view itself.
+  assert.equal(bySeat["plugins.item"].options.id, "fonttune");
+  assert.equal(typeof bySeat["plugins.item"].options.label, "function");
+  assert.equal(bySeat["plugins.item"].options.label(), "Font tune");
+  assert.equal(typeof bySeat["plugins.item"].component, "function");
+  assert.notEqual(
+    bySeat["plugins.item"].component,
+    bySeat["settings.plugin.item"].component,
+    "the page wrapper is its own component"
+  );
+  const summary = bySeat["plugins.item"].component({ view: "summary", t: (key) => key });
+  assert.equal(summary, "card.description");
+  assert.equal(typeof bySeat["plugins.item"].component({ view: "page", t: (key) => key }), "object");
+});
+
+await test("the bound services are ones every supported host provides", async () => {
+  // A declared service the running host does not have parks the whole package:
+  // on DSH 0.1.7-alpha.x a declared `settingsScope` left the Web UI waiting on
+  // a service that line no longer ships, and the GUI never finished booting.
+  const scope = createScope();
+  resetDom();
+  const { face } = await loadClientBundle(cardContext(scope).ctx);
+  assert.deepEqual(face.inject, ["slots", "locale"]);
+});
+
+await test("the alpha dialect binds its scope through configForms by entry id", async () => {
+  // From DSH 0.1.7-alpha.x the settings service hands out per-entry forms from
+  // `configForms`, keyed by PROFILE ENTRY ID — which the installing profile's
+  // patch decides, so the served schema is what identifies the plugin.
+  const scope = createScope({ value: { sans: '"Inter"' } });
+  const asked = [];
+  const servedEntry = {
+    ns: "fonttune",
+    schema: { type: "object", dict: { uiFollowsDialog: {}, stackDialog: {}, mono: {} } },
+    value: { sans: '"Inter"' },
+    user: {},
+    base: {},
+    revision: 3,
+  };
+  const forms = {
+    get(id) {
+      asked.push(id);
+      return scope;
+    },
+    describe() {
+      return { getSnapshot: () => ({ view: { writable: true, namespaces: [servedEntry] } }) };
+    },
+  };
+  const registered = [];
+  const ctx = createClientContext({
+    // No `settingsScope` property at all: this is the alpha line.
+    get: (name) => (name === "configForms" ? forms : undefined),
+    slots: {
+      inject: (name, callback) => callback(),
+      register: (options, component) => {
+        registered.push({ options, component });
+        return () => {};
+      },
+    },
+    locale: { register: () => () => {}, getLocale: () => ({ active: "en" }) },
+  });
+  resetDom();
+  await loadClientBundle(ctx);
+  assert.deepEqual(asked, ["fonttune"], "the served schema named the entry");
+  assert.equal(registered.length, 3, "the card is offered in every seat");
+  const face = registered[0].options.inject();
+  assert.equal(face.scope, scope, "the alpha form is the scope the card writes through");
+  assert.equal(typeof face.t, "function");
+});
+
+await test("a host with neither settings dialect keeps the page working", async () => {
+  // No settings service, no slot: the plugin must still inject its stylesheet
+  // and must not register a card that could neither read nor write.
+  const registered = [];
+  const ctx = createClientContext({
+    slots: {
+      inject: (name, callback) => {
+        registered.push(name);
+        callback();
+      },
+      register: () => () => {},
+    },
+    locale: { register: () => () => {}, getLocale: () => ({ active: "en" }) },
+  });
+  resetDom();
+  await loadClientBundle(ctx);
+  assert.deepEqual(registered, [], "no card without a settings seat");
+  const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
+  assert.ok(tag, "the stylesheet is still managed");
 });
 
 await test("applies the saved configuration to one style tag", async () => {

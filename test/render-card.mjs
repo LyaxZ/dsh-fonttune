@@ -177,12 +177,18 @@ async function loadFace() {
 
 /**
  * Apply the face against a minimal client context and capture the card.
+ *
+ * The plugin offers its card in three seats (the rc line's
+ * `settings.plugin.item`, the alpha line's `plugins.item` page contribution and
+ * its per-package `plugins.bundle.config`). The card itself is the component
+ * registered in the rc seat; the alpha page seat wraps it, so this picks by
+ * seat name rather than by registration order.
  * @param {object} face - the loaded plugin face.
  * @param {object} scope - the settings scope to bind.
  * @returns {object} the registered card component.
  */
 function applyAndRegister(face, scope) {
-  let card = null;
+  const seats = {};
   face.apply({
     effect(cb) {
       cb();
@@ -196,14 +202,14 @@ function applyAndRegister(face, scope) {
         callback();
       },
       register(options, component) {
-        card = { options, component };
+        seats[options.name] = { options, component };
         return () => {};
       },
     },
     locale: { register: () => () => {} },
     settingsScope: { bind: () => scope },
   });
-  return card;
+  return seats["settings.plugin.item"] ?? seats["plugins.item"] ?? null;
 }
 
 /**
@@ -938,6 +944,49 @@ await test("a second render after a state change keeps the hook order", async ()
     "the advanced chip stack rendered after the state change"
   );
   assert.equal(first.out.classes.includes("dfp-chips"), false, "the first render was simple mode");
+});
+
+await test("a boolean refusal from the alpha dialect is reported too", async () => {
+  // The alpha's form controller answers a write with a plain boolean (the rc
+  // scope answers with a promise), so a refusal has to be recognised in both
+  // shapes.
+  const scope = createScope();
+  scope.set = () => false;
+  scope.unset = () => false;
+  const { out, runtime } = await renderSection(scope, "dialog");
+  const slider = out.props.find(
+    (entry) => entry.tag === "NumberSlider" && typeof entry.props.onChange === "function"
+  );
+  assert.ok(slider, "the conversation size slider renders");
+  slider.props.onChange(3);
+  const status = runtime.sets
+    .map((entry) => entry.value)
+    .find((value) => value && typeof value === "object" && "text" in value);
+  assert.ok(status, "a refusal is reported, not swallowed");
+  assert.equal(status.text, "preset.writeFailed");
+});
+
+await test("the card renders in a seat that hands it no props", async () => {
+  // The alpha's bundle page renders the registered component with its own
+  // props, so the scope and translator `apply` bound have to carry it.
+  const scope = createScope({ value: { stackDialog: '"Inter"', weightDialog: 480 } });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true); // card open
+  runtime.seed(2, "dialog");
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({}), runtime, out);
+  const text = out.text.join("\n");
+  assert.ok(
+    out.classes.some((name) => name.includes("dfp-card")),
+    `the card renders with no injected face (saw ${out.classes.slice(0, 6).join(" | ")})`
+  );
+  // The built-in dictionary answers, not the bare keys: the fallback translator
+  // is the real one, only its locale is defaulted.
+  assert.ok(text.includes("Font tune"), "the fallback translator resolves the dictionary");
+  assert.equal(text.includes("undefined"), false, "no undefined leaks into the copy");
+  assert.ok(text.includes("Conversation font"), "the controls render from the bound scope");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
