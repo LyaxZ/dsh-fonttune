@@ -46,6 +46,17 @@ const ALLOWED_REQUIRES = [
 /** Packages that must resolve from the DSH installation at run time. */
 const HOST_IMPORTS = ["@deepseek-ai/schemastery"];
 
+/**
+ * Builtins the host half may import.
+ *
+ * Node always provides these, so they need no entry in the package whitelist
+ * above — the rule there is about PACKAGES, whose availability depends on the
+ * installation. The host half uses them to resolve `@deepseek-ai/schemastery`
+ * from the host rather than from this package's own `node_modules` (see
+ * `loadSchemastery` in `src/index.mjs`).
+ */
+const HOST_BUILTINS = ["node:module", "node:path", "node:url"];
+
 /** Local specifier rewritten to the inlined shared module. */
 const SHARED_SPECIFIER = "./shared.cjs";
 
@@ -129,10 +140,12 @@ export function verifyHost(source) {
   );
   for (const specifier of imports) {
     if (specifier.startsWith(".")) continue;
+    if (HOST_BUILTINS.includes(specifier)) continue;
     if (!HOST_IMPORTS.includes(specifier)) {
       throw new Error(
         `the host half imports "${specifier}"; only these resolve from the DSH installation: ` +
-          HOST_IMPORTS.join(", ")
+          HOST_IMPORTS.join(", ") +
+          ` (plus the builtins ${HOST_BUILTINS.join(", ")})`
       );
     }
   }
