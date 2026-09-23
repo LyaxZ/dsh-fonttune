@@ -1333,8 +1333,19 @@ await test("the schema is marked live-editable where schemastery supports it", a
   } else {
     assert.equal(schema.meta?.volatile, undefined, "no marking is possible here");
   }
-  // Whatever the dialect, the schema still validates the same values.
-  assert.equal(schema({ sans: '"Inter"' }).sans, '"Inter"');
+  // Whatever the dialect, the schema still validates the same values — but a
+  // dialect that has the modifier also changes what a resolved field IS: the
+  // loader then hands the plugin references, which is why the host half unwraps
+  // before reading. (CI installs the newest schemastery, so this branch is the
+  // one the release has to survive; the rc line's plain shape is asserted below
+  // and exercised live on rc.2 / rc.3.)
+  const resolved = schema({ sans: '"Inter"' });
+  if (typeof schema.volatile === "function") {
+    assert.notEqual(resolved.sans, '"Inter"', "a volatile field resolves to a reference");
+    assert.equal(host.module.plainConfigValue(resolved).sans, '"Inter"');
+  } else {
+    assert.equal(resolved.sans, '"Inter"', "without the modifier a field stays plain");
+  }
   assert.throws(() => schema({ weightDialog: 10_000 }));
 });
 
@@ -1375,7 +1386,7 @@ await test("a configured base layer is rendered into the row", async () => {
 await test("the host schema accepts real stacks and refuses bad ones", async () => {
   const { module } = await loadHostHalf(undefined);
   const schema = module.Config;
-  const resolved = schema({ sans: '"Inter", "Microsoft YaHei"' });
+  const resolved = module.plainConfigValue(schema({ sans: '"Inter", "Microsoft YaHei"' }));
   assert.equal(resolved.sans, '"Inter", "Microsoft YaHei"');
   // The schema enforces rather than clamps: a bad value must be refused, never
   // silently stored as a corrected one, or the card would show one thing and
@@ -1388,7 +1399,7 @@ await test("the host schema accepts real stacks and refuses bad ones", async () 
   assert.throws(() => schema({ weightCode: 900 }));
   assert.throws(() => schema({ weightCode: -1 }));
   assert.throws(() => schema({ sans: "a;b{}" }), "a declaration-breaking stack must be refused");
-  const defaults = schema({});
+  const defaults = module.plainConfigValue(schema({}));
   assert.equal(defaults.sans, "");
   assert.equal(defaults.sizeOffset, 0);
   assert.equal(defaults.sizeOffsetCode, 0);
@@ -2149,7 +2160,9 @@ await test("a retired axis is stored but is not a value axis", () => {
 await test("the host schema accepts and refuses the new axes", async () => {
   const { module } = await loadHostHalf(undefined);
   const schema = module.Config;
-  const resolved = schema({ lineHeight: 130, lineHeightDialog: 120, lineHeightCode: 3, codeLigatures: 1 });
+  const resolved = module.plainConfigValue(
+    schema({ lineHeight: 130, lineHeightDialog: 120, lineHeightCode: 3, codeLigatures: 1 })
+  );
   assert.equal(resolved.lineHeight, 130);
   assert.equal(resolved.lineHeightDialog, 120);
   assert.equal(resolved.lineHeightCode, 3);
@@ -2158,11 +2171,11 @@ await test("the host schema accepts and refuses the new axes", async () => {
   assert.throws(() => schema({ lineHeightCode: 99 }));
   assert.throws(() => schema({ codeLigatures: 5 }));
   assert.throws(() => schema({ codeFeatures: '"ss01"; }' }));
-  const defaults = schema({});
+  const defaults = module.plainConfigValue(schema({}));
   assert.equal(defaults.lineHeight, shared.LINE_HEIGHT_MIN);
   assert.equal(defaults.codeLigatures, 0);
   assert.equal(defaults.uiFollowsDialog, true);
-  assert.equal(schema({ uiFollowsDialog: false }).uiFollowsDialog, false);
+  assert.equal(module.plainConfigValue(schema({ uiFollowsDialog: false })).uiFollowsDialog, false);
   assert.equal(defaults.perTheme, false);
   assert.equal(defaults.darkValues, "{}");
   assert.equal(defaults.presets, "[]");

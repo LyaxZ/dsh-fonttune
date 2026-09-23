@@ -22,6 +22,7 @@
 - `test/run.mjs`（91 项）：卡片槽位白名单加入 `plugins.item` / `plugins.bundle.config`，那条用例改成「每个受支持宿主可能派发的座位都注册」，断言三个座位与 `plugins.item` 的 id / 标签 / 组件形态（摘要取 `card.description`，页面交出一个对象）。
 - `test/render-card.mjs`（23 项）：渲染取值改为「`settings.plugin.item` 不在就取 `plugins.item`」，两条线的座位各跑一遍。
 - 真机（受管实例 + 无头 Edge）：`0.1.5-rc.2`、`0.1.5-rc.3`、`0.1.7-alpha.2` 各跑一次 `host-line-probe` 通过（插入式装载）；alpha.2 另跑一次 bundle 式装载通过。alpha 上确认从卡片改的 `codeLigatures: 2` 真的写进 `profiles/dfp/cordis.patch.yml`，rc 上确认落在 `settings.yaml`。
+- **CI 抓到一条本地测不出来的用例**：`test/run.mjs` 里三条 schema 用例直接读 `schema({…}).sans` 这类字段。发布 CI 装的是最新的 schemastery（3.18.4，带 `.volatile()`），于是解析出来的字段是**引用**而不是值，三条在本地（3.18.2）全绿、在 CI 全红。现在宿主半把 `plainConfigValue` 导出，这三条按**插件读配置的同一方式**取值，并断言两种方言各自的形态：有修饰符时字段是引用、拆开后才是值；没有修饰符时字段本身就是值。devDependency 同时抬到 `^3.18.4`，让本地与 CI 跑同一个方言（rc 线那套无修饰符的形态由真机探针在 rc.2 / rc.3 上覆盖）。
 
 ## [0.2.3] - 2026-09-22
 

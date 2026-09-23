@@ -266,10 +266,14 @@ const VOLATILE_WRITE = Symbol.for("cosmokit.volatile.write");
 
 /**
  * Replace every volatile reference in a parsed config with its current value.
+ *
+ * Exported because it is half of this plugin's host-line contract: a caller that
+ * wants to read a resolved config — a test, or a later composition — has to go
+ * through it, since on the alpha a parsed field is a reference rather than data.
  * @param {unknown} value - a parsed config value, or a reference to one.
  * @returns {unknown} the same shape, references unwrapped.
  */
-function plainConfigValue(value) {
+export function plainConfigValue(value) {
   if (value === null || typeof value !== "object") return value;
   if (VOLATILE_WRITE in value && typeof value.get === "function") {
     return plainConfigValue(value.get());
