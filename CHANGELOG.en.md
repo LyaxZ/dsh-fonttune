@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.2.5] - 2026-09-23
+
+### Fixed
+- **Installed as a link to the source directory, the card and the fonts disappeared together on 0.1.5-rc.x**: the plugin used the copy of the schema library in its own directory instead of the one DSH provides, and the newer copy marked the configuration in a way the rc line's settings controller cannot handle — the settings namespace was therefore never registered: no card in the settings sheet, an empty injected stylesheet, no typography change at all. It now always uses the copy DSH ships, so a linked install and a normal install behave identically.
+
 ## [0.2.4] - 2026-09-23
 
 ### Added
