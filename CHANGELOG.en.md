@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.2.7] - 2026-09-24
+
+### Changed
+- **DSH 0.1.7-rc.2 support**: it is a patch update of 0.1.7-rc.1 with the same settings service and configuration-card seats, so no code had to change; each item was verified in an isolated environment (host start, stylesheet applied, card expanded, a change written through), and the compatibility table lists 0.1.7-rc.2.
+
 ## [0.2.6] - 2026-09-24
 
 ### Fixed
