@@ -799,6 +799,35 @@ function readBaseTokens() {
 }
 
 /**
+ * Find the cheap markdown selector for this page, so the stylesheet does not
+ * have to match the conversation container by substring attribute.
+ *
+ * The substring form `[class*="_markdown_" i]` is what the dialog rule used to
+ * be scoped by, and that rule's code exclusion is a `:not(...)` with ~30
+ * arguments, so its scan is paid once per candidate element: naming the wrapper
+ * takes that from ~1800 candidates per recalculation to ~37.
+ *
+ * The code hooks stay as substring selectors (see `codeSurfaceList()`): a class
+ * the page has not rendered yet cannot be named, and an unknown surface must
+ * still get the code axes.
+ *
+ * A page without the wrapper keeps the substring form — the builder's default —
+ * and only loses the cheaper one.
+ *
+ * @returns {{markdown?: string}} the hints.
+ */
+function harvestScope() {
+  var hints = {};
+  if (typeof document === "undefined" || typeof document.querySelector !== "function") return hints;
+  try {
+    if (document.querySelector("[data-dss-prose]") !== null) hints.markdown = "[data-dss-prose]";
+  } catch (error) {
+    // No wrapper to name: the builder falls back to the substring selector.
+  }
+  return hints;
+}
+
+/**
  * Create the writer that keeps one `<style>` element in sync.
  *
  * The host half renders the same declarations into the served index so the
@@ -817,7 +846,7 @@ function createStylesheet(tokens) {
   var lastCss = null;
   return function apply(config) {
     if (typeof document === "undefined") return;
-    var css = buildFontCss(config, tokens());
+    var css = buildFontCss(config, tokens(), harvestScope());
     if (css === lastCss && tag !== null && tag.isConnected) return;
     lastCss = css;
     if (tag === null || !tag.isConnected) {
@@ -2051,7 +2080,15 @@ function firstFamily(stack) {
 function FontCardPage(props) {
   var t = typeof props.t === "function" ? props.t : cardT || fallbackTranslate;
   if (props.view === "summary") return t("card.description");
-  return h(FontCard, { scope: props.scope || cardScope || MEMORY_SCOPE, t: t });
+  // Every other view is the card as the content of a section the reader has
+  // already opened, so it starts open: the row/entry they clicked IS the
+  // expansion gesture, and asking for a second click on the card's own header
+  // was the one thing left to remove on the official plugin page.
+  return h(FontCard, {
+    scope: props.scope || cardScope || MEMORY_SCOPE,
+    t: t,
+    defaultOpen: props.view !== "row",
+  });
 }
 
 /**
@@ -2076,7 +2113,14 @@ function FontCard(props) {
   // values `apply` bound are the fallback.
   var t = typeof props.t === "function" ? props.t : cardT || fallbackTranslate;
   var scope = props.scope || cardScope || MEMORY_SCOPE;
-  var [open, setOpen] = useState(false);
+  // The official plugin page (0.1.7: `view: "page"`) and the rc line's
+  // configuration cell (which passes no props at all) both render this card as
+  // the whole body of a section the reader has ALREADY opened — the host's own
+  // row is the expansion gesture there, so starting collapsed asked for a
+  // second click. The card therefore starts open unless the seat says
+  // otherwise (`defaultOpen: false`), and `FontCardPage` answers a one-line
+  // summary request with its description instead of the card.
+  var [open, setOpen] = useState(props.defaultOpen !== false);
   var [view, setView] = useState(readViewMode);
   var [expanded, setExpanded] = useState(null);
   var [presetName, setPresetName] = useState("");
@@ -3463,6 +3507,33 @@ export function apply(ctx) {
     "dsh-fonttune: settings adoption"
   );
   sync();
+
+  // Which selectors the sheet can be narrowed to depends on what the page
+  // contains, and the conversation renders AFTER this bundle activates: the
+  // first harvest sees an empty shell and falls back to the wide attribute
+  // hooks (correct, but an attribute scan per element per rule). Re-harvest
+  // when the DOM grows. The applier returns untouched when the resulting CSS
+  // is unchanged, so a redundant re-sync costs one string compare.
+  ctx.effect(
+    function () {
+      if (typeof document === "undefined") return undefined;
+      if (typeof MutationObserver !== "function" || !document.body) return undefined;
+      var pending = null;
+      var observer = new MutationObserver(function () {
+        if (pending !== null) return;
+        pending = globalThis.setTimeout(function () {
+          pending = null;
+          sync();
+        }, 1000);
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      return function () {
+        if (pending !== null) globalThis.clearTimeout(pending);
+        observer.disconnect();
+      };
+    },
+    "dsh-fonttune: scope re-harvest"
+  );
 
   // DSH writes its tokens (and its content font size) after this bundle
   // activates, and the host's own boot row only covers the first frame; the

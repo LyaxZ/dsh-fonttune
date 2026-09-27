@@ -5,16 +5,26 @@
 # the first paint already uses them; the browser half owns the
 # Settings -> Plugins -> Plugin configuration card.
 #
+# The row id is the settings key from DSH 0.1.7-rc.1 on: that line imports the
+# sections of the removed settings.yaml by matching each section against the
+# entry of the SAME name, and this plugin's host half registered the namespace
+# `dsh-fonttune` (its package name). Keeping the id equal to that namespace is
+# what carries an existing installation's saved fonts and weights over; naming
+# it `fonttune` leaves them behind in settings.yaml.imported, which shows up as
+# "the plugin does nothing" (measured on 0.1.7-rc.1: an empty runtime
+# stylesheet, no font applied). On the 0.1.5-rc lines the id is only a loader
+# key, so the same value is harmless there.
+#
 # A profile may pin the composition defaults here; a saved value still wins,
 # and a field left out falls back to the schema default (empty = do not touch
 # that axis):
 #
 # - insert:
-#     - id: fonttune
+#     - id: dsh-fonttune
 #       name: dsh-fonttune
 #       config:
 #         sans: '"JetBrains Mono", "Sarasa Mono SC", "Microsoft YaHei", sans-serif'
 #         mono: '"JetBrains Mono", "Cascadia Code", Consolas, monospace'
 - insert:
-    - id: fonttune
+    - id: dsh-fonttune
       name: dsh-fonttune

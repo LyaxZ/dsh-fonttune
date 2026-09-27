@@ -288,12 +288,13 @@ function walk(node, runtime, out) {
 /**
  * Render the card once (optionally forced open) and walk the tree.
  */
-async function renderCard(scope, { open = false } = {}) {
+async function renderCard(scope, { open, closed } = {}) {
   const { face, runtime } = await loadFace();
   const card = applyAndRegister(face, scope);
   assert.ok(card, "the card must register");
   runtime.rewind();
   if (open) runtime.seed(0, true); // slot 0 = the card's `open` state
+  if (closed) runtime.seed(0, false); // ...forced shut, for the collapsed case
   const out = { text: [], classes: [], tags: [] };
   walk(card.component({ scope, t: (key) => key }), runtime, out);
   return out;
@@ -441,9 +442,19 @@ await test("every control's handler runs with values already configured", async 
   assert.deepEqual(result.errors, [], result.errors.join(" | "));
 });
 
-await test("a collapsed card renders the header only", async () => {
+await test("a card in a seat that hands it no props starts open", async () => {
+  // The official plugin page (0.1.7) and the rc line's configuration cell both
+  // render the card as the body of a section the reader already opened, so the
+  // card must NOT ask for a second click: no seed, no props, body present.
   const out = await renderCard(createScope());
-  assert.ok(out.classes.includes("dfp-card"), "the card element renders");
+  assert.ok(out.classes.some((c) => c.includes("dfp-card")), "the card element renders");
+  assert.ok(out.text.includes("card.title"), "the title copy renders");
+  assert.ok(out.text.includes("section.ui"), "the body is open without a click");
+});
+
+await test("a card told to stay collapsed renders the header only", async () => {
+  const out = await renderCard(createScope(), { closed: true });
+  assert.ok(out.classes.some((c) => c.includes("dfp-card")), "the card element renders");
   assert.ok(out.text.includes("card.title"), "the title copy renders");
   assert.equal(out.text.includes("preview.label"), false, "the body stays closed");
 });
@@ -530,7 +541,7 @@ await test("the zh copy covers the same keys as en (structure, not text)", async
   runtime.rewind();
   const out = { text: [], classes: [], tags: [] };
   walk(card.component({ scope, t: (key) => key.slice(0, 4) }), runtime, out);
-  assert.ok(out.classes.includes("dfp-card"), "renders with arbitrary copy");
+  assert.ok(out.classes.some((c) => c.includes("dfp-card")), "renders with arbitrary copy");
 });
 
 await test("an expanded presets-free card: renaming state keeps the bar on one row", async () => {

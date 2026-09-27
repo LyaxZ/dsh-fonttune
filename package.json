@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "engines": {
-    "dsh": ">=0.1.5-rc.1 <0.1.7-0 || >=0.1.7-alpha.1 <0.2.0-0"
+    "dsh": ">=0.1.5-rc.3 <0.1.7-0 || >=0.1.7-alpha.1 <0.2.0-0"
   },
   "dsh": {
     "bundle": {
@@ -30,11 +30,10 @@
     },
     "compatibility": {
       "dshReleases": {
-        "0.1.5-rc.1": "compatible",
-        "0.1.5-rc.2": "compatible",
         "0.1.5-rc.3": "compatible",
         "0.1.7-alpha.1": "compatible",
-        "0.1.7-alpha.2": "compatible"
+        "0.1.7-alpha.2": "compatible",
+        "0.1.7-rc.1": "compatible"
       }
     }
   },

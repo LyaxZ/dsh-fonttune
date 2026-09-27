@@ -2,6 +2,19 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.2.6] - 2026-09-24 (draft, to be released after the user's own test)
+
+### Fixed
+- **Opening "Font tune" still needed a second click before the settings appeared**: the official plugin page now treats opening that entry as the expansion gesture, while the card still carried a collapsible header of its own. The card now starts open on the entry page and on the package configuration page (the chevron still collapses it by hand).
+- **Dragging the UI no longer stutters (the sidebar and the conversation-list resize both showed it)**: the injected stylesheet made the browser match nearly two thousand elements against every rule on each style recalculation (about 15,000 matches), and a drag recalculates once per frame — hence the jank. Each axis now matches only the elements it actually needs (about 1,400): over a 50-step drag the measured recalculation time dropped from **1.5 s to 0.5 s**, frames over 25 ms from **49 to 0–2**, and the frame interval is back to **17 ms** (zero long tasks). The families, sizes, weights, line heights and the code axis (ligatures and feature switches included) look and read exactly as before.
+
+### Added
+- **DSH 0.1.7-rc.1 support**: its settings interface differs from the 0.1.5-rc.x one, and the plugin now works with whichever the host actually provides. The families, the interface weight, the code axis and the configuration card were all verified on that line (the card lives in the Plugins page's "Font tune" entry, and is reachable from the `dsh-fonttune` package row as well).
+
+### Changed
+- **The compatibility floor is now `0.1.5-rc.3`** (rc.1 / rc.2 are no longer claimed) and the compatibility table lists `0.1.7-rc.1`.
+- **The loader row id this package ships is now `dsh-fonttune`** (the settings namespace and the package name): from DSH 0.1.7 on, settings are keyed by that id, and the first start imports the old `settings.yaml` by matching section names against it — with a different id the saved families and weights stay behind in the backup file and the plugin looks as if it did nothing. With the matching id, moving from 0.1.5-rc.x to 0.1.7 needs no re-selecting. (The same id also lets the package be installed through the profile's `dsh.profile.bundles`: the plugin manager then shows it as running, and the configuration page stays reachable.)
+
 ## [0.2.5] - 2026-09-23
 
 ### Fixed

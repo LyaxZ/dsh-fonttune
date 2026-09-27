@@ -581,12 +581,15 @@ await test("families are declared at the source variables, code rule last", () =
   );
   assert.match(
     css,
-    /pre,pre \*,code,code \*,kbd,kbd \*,samp,samp \*,var,var \*,tt,tt \*,textarea,textarea \*,\.cm-editor,\.cm-editor \*,\.dfp-previewCode,\.dfp-previewCode \*,\[class\*="code" i\],\[class\*="code" i\] \*,\[class\*="terminal" i\],\[class\*="terminal" i\] \*\{font-family:"JetBrains Mono" !important\}/
+    /pre,code,kbd,samp,var,tt,textarea,\.cm-editor,\.dfp-previewCode,\[class\*="code" i\],\[class\*="terminal" i\]\{font-family:"JetBrains Mono" !important\}/
   );
   assert.ok(
-    css.indexOf("pre,pre *") > css.indexOf("body{font-family"),
+    css.indexOf("pre,code,kbd") > css.indexOf("body{font-family"),
     "the code rule must come after the body rule so it wins on equal specificity"
   );
+  // Surfaces only: a `… *` descendant here would cost an ancestor walk per
+  // element per recalculation, and everything inside a code surface inherits.
+  assert.equal(/pre \*|code \*|terminal" i\] \*/.test(css), false);
 });
 
 await test("an unset family overrides none of its variables", () => {
@@ -830,47 +833,75 @@ await test("every per-theme rule carries the theme attribute", () => {
   );
 });
 
-await test("the interface weight is one blanket rule that skips the conversation", () => {
+await test("the interface weight reaches the chrome without walking every element", () => {
   const css = shared.buildFontCss({ weight: 480, uiFollowsDialog: false });
-  assert.ok(css.includes("font-weight:480 !important"), "the weight is written");
-  assert.ok(css.includes("body,body *:not("), "it reaches every element");
-  // The conversation subtree is what makes the two axes independent. The
-  // exclusions ride one `:not(…)` selector list, so they are read back out of
-  // it rather than matched as text.
-  const excluded = shared
-    .splitSelectorList(shared.INTERFACE_EXCLUDES.slice(":not(".length, -1));
+  assert.ok(css.includes("font-weight:var(--dfp-interface-weight,480) !important"), "the weight is written through the variable");
+  assert.ok(css.includes(":root,body{--dfp-interface-weight:480}"), "the variable is declared at the source");
+  // The reach is an element table, not `body *`: the universal descendant form
+  // matched 1892 elements on every recalculation (measured 0.2 s of style
+  // recalculation per 50-step drag).
+  assert.equal(css.includes("body,body *"), false, "no universal descendant reach");
+  const selector = css.split("\n").find((rule) => rule.startsWith("body,body :where("));
+  for (const needle of ["button", "span", "div", "strong", "th"]) {
+    assert.ok(selector.includes(needle), `${needle} pins its own weight in DSH`);
+  }
+  // The conversation has no weight of its own here, so the rule carries the
+  // markdown guard — and nothing else: code subtrees stay out through the
+  // variable, not through a descendant selector.
+  assert.ok(
+    css.includes("body,body :where(" + shared.WEIGHT_ELEMENT_TABLE + ")" + shared.WEIGHT_MARKDOWN_GUARD),
+    "the interface rule is the element table plus the markdown guard"
+  );
+  const guarded = shared
+    .splitSelectorList(shared.WEIGHT_MARKDOWN_GUARD.slice(":not(".length, -1))
+    .join(",");
   for (const needle of [
-    'code',
-    'code *',
-    '[class*="code" i]',
-    '[class*="code" i] *',
-    ".cm-editor",
-    ".cm-editor *",
-    ".dfp-previewCode",
-    ".dfp-previewCode *",
     '[class*="_markdown_" i]',
     '[class*="_markdown_" i] *',
     ".dfp-previewDialog",
     ".dfp-previewDialog *",
   ]) {
-    assert.ok(excluded.includes(needle), `${needle} must be excluded`);
+    assert.ok(guarded.includes(needle), `${needle} must be guarded`);
   }
-  assert.ok(css.includes(shared.INTERFACE_EXCLUDES), "the rule carries exactly that exclusion");
-  // The compact form is the point: one `:not(` per rule, not one per argument.
-  assert.equal(css.includes(":not(pre):not(pre *)"), false, "no repeated :not() chain");
+  // The guard rides `:where(…)` so it adds NO specificity: the rule stays at
+  // (0,0,1), which is what lets the class-scoped dialog rule and the code rules
+  // out-rank it. Without that, the guard's class would beat the code rule's
+  // element selectors and code would take the interface weight.
+  assert.ok(shared.WEIGHT_MARKDOWN_GUARD.startsWith(":not(:where("), "the guard adds no specificity");
+  assert.equal(guarded.includes("code"), false, "code surfaces are not guarded here");
+  // With a conversation weight of its own the guard is dropped entirely: the
+  // dialog rule is class-scoped and wins anyway, so the rule collapses to the
+  // bare table — measured to keep the axis in full (141/141 interface elements).
+  const withDialog = shared.buildFontCss({ weight: 480, weightDialog: 460, uiFollowsDialog: false });
+  assert.ok(
+    withDialog.includes(
+      "body,body :where(" + shared.WEIGHT_ELEMENT_TABLE + "){font-weight:var(--dfp-interface-weight,480) !important}"
+    )
+  );
+  assert.equal(withDialog.split("\n").some((rule) => rule.startsWith("body,body :where(") && rule.includes(":not(")), false, "no guard when the dialog owns a weight");
+  // No rule may carry a long `:not(…)` argument list: the measurement was for
+  // the weight rule's 26 arguments, and only the markdown-scoped dialog rule is
+  // allowed a list (it matches markdown elements only).
+  for (const rule of css.split("\n")) {
+    const guard = /:not\((.*)\)/.exec(rule);
+    if (guard === null || rule.startsWith('[class*="_markdown_" i]')) continue;
+    const args = shared.splitSelectorList(guard[1]).length;
+    assert.ok(args <= 4, `a guard should stay short: ${rule.slice(0, 90)}`);
+  }
 });
 
 await test("an interface weight takes code back out when the code axis is unset", () => {
   const css = shared.buildFontCss({ weight: 480, uiFollowsDialog: false });
   assert.ok(
-    css.includes("{font-weight:normal !important}"),
-    "code surfaces are excluded from the blanket, so they need their own reset"
+    css.includes("{font-weight:normal !important;--dfp-interface-weight:normal}"),
+    "code surfaces are excluded from the table's reach, so they reset the variable too"
   );
   assert.ok(shared.CODE_SELECTOR.split(",").every((selector) => css.includes(selector)));
-  // With a code weight of its own the reset is skipped: the axis rule stands.
+  // With a code weight of its own the reset is skipped: the axis rule stands,
+  // and it hands its own weight to everything inside the surface.
   const both = shared.buildFontCss({ weight: 480, weightCode: 450, uiFollowsDialog: false });
-  assert.equal(both.includes("{font-weight:normal !important}"), false);
-  assert.ok(both.includes("font-weight:450 !important"));
+  assert.equal(both.includes("{font-weight:normal !important"), false);
+  assert.ok(both.includes("font-weight:450 !important;--dfp-interface-weight:450"));
 });
 
 await test("following hands the conversation's family and weight to the interface", () => {
@@ -900,16 +931,28 @@ await test("the interface and conversation weights never share a rule", () => {
     {},
     false
   );
-  const interfaceRule = light.split("\n").find((rule) => rule.includes("body,body *:not("));
+  const table = "body,body :where(" + shared.WEIGHT_ELEMENT_TABLE + ")";
+  const interfaceRule = light.split("\n").find((rule) => rule.startsWith(table + "{"));
   const dialogRule = light.split("\n").find((rule) => rule.startsWith('[class*="_markdown_" i]'));
-  assert.ok(interfaceRule.includes("font-weight:380 !important"));
+  assert.ok(interfaceRule.includes("font-weight:var(--dfp-interface-weight,380) !important"));
+  assert.ok(light.includes(":root,body{--dfp-interface-weight:380}"));
   assert.equal(interfaceRule.includes("520"), false);
   assert.ok(dialogRule.includes("font-weight:520 !important"));
   assert.equal(dialogRule.includes("380"), false);
-  // Dark gets the same pair, prefixed with the theme attribute.
+  // Dark gets the same pair, prefixed with the theme attribute, and the guard
+  // follows the same rule: present only when the conversation has no weight.
   const dark = shared.buildAxisCss({ weight: 380, weightDialog: 520 }, {}, true);
-  assert.ok(dark.includes("body[data-ds-dark-theme] *:not("));
-  assert.ok(dark.includes("font-weight:380 !important"));
+  assert.ok(
+    dark.includes(
+      "body[data-ds-dark-theme],body[data-ds-dark-theme] :where(" +
+        shared.WEIGHT_ELEMENT_TABLE +
+        "){font-weight:var(--dfp-interface-weight,380) !important}"
+    )
+  );
+  const darkGuarded = shared.buildAxisCss({ weight: 380 }, {}, true);
+  assert.ok(
+    darkGuarded.includes("body[data-ds-dark-theme] :where(" + shared.WEIGHT_ELEMENT_TABLE + ")" + shared.WEIGHT_MARKDOWN_GUARD)
+  );
 });
 
 await test("an unset code weight injects nothing of its own", () => {
@@ -928,8 +971,8 @@ await test("the conversation and code weight axes are independent", () => {
   assert.ok(css.includes("font-weight:320 !important"));
   assert.equal(css.includes("font-weight:580 !important"), false, "follow wins");
   assert.ok(
-    css.includes("body,body *:not("),
-    "and the interface rule is the one carrying the exclusion"
+    css.includes("font-weight:var(--dfp-interface-weight,560) !important"),
+    "and the interface rule carries the followed weight with no guard"
   );
   // With follow off, all three axes render their own value.
   const own = shared.buildFontCss({
@@ -939,7 +982,11 @@ await test("the conversation and code weight axes are independent", () => {
     uiFollowsDialog: false,
   });
   for (const value of [560, 320, 580]) {
-    assert.ok(own.includes(`font-weight:${value} !important`), `${value} must render`);
+    assert.ok(
+      own.includes(`font-weight:${value} !important`) ||
+        own.includes(`font-weight:var(--dfp-interface-weight,${value}) !important`),
+      `${value} must render`
+    );
   }
   // code only: nothing touches the conversation
   const codeOnly = shared.buildFontCss({ weightCode: 600 });
@@ -950,14 +997,19 @@ await test("the conversation and code weight axes are independent", () => {
 await test("the code weight selector names the code surfaces", () => {
   const selector = shared.CODE_SELECTOR;
   for (const needle of ["pre", "code", "kbd", "samp", "var", "tt", "textarea"]) {
-    assert.ok(selector.includes(needle + ","), `${needle} must be covered`);
-    // the blanket body rule matches every element, so descendants are needed too
-    assert.ok(selector.includes(needle + " *"), `${needle} descendants must be covered`);
+    assert.ok(selector.split(",").includes(needle), `${needle} must be covered`);
+    // No descendants: they cost an ancestor walk per element per recalculation,
+    // and the weight reaches the elements inside a surface through
+    // `--dfp-interface-weight` instead.
+    assert.equal(selector.includes(needle + " *"), false, `${needle} descendants are not listed`);
   }
   assert.ok(selector.includes(".cm-editor"));
   assert.ok(selector.includes(".dfp-previewCode"), "the card's own code preview");
   assert.ok(selector.includes('[class*="code" i]'), "tool code bodies are plain divs");
   assert.ok(selector.includes('[class*="terminal" i]'), "the terminal output is a plain div");
+  // The dialog rule's exclusion still reaches through ancestry: it is evaluated
+  // against markdown elements only, so its `… *` arguments are affordable there.
+  assert.ok(shared.CODE_EXCLUDES.includes("pre *"), "the dialog exclusion still reaches descendants");
 });
 
 await test("the code weight clamps like the body weight", () => {
@@ -1365,9 +1417,9 @@ await test("a configured base layer is rendered into the row", async () => {
   assert.ok(html.endsWith("</style>"));
   assert.match(html, /body\{font-family:"Inter" !important\}/);
   // Following is the default, so the interface carries the conversation's 460.
-  assert.ok(html.includes("font-weight:460 !important"), "the conversation weight renders");
+  assert.ok(html.includes("font-weight:var(--dfp-interface-weight,460) !important"), "the conversation weight renders");
   assert.equal(
-    html.includes("font-weight:500 !important"),
+    html.includes("font-weight:var(--dfp-interface-weight,500) !important"),
     false,
     "the interface's own 500 is overridden while following"
   );
@@ -1378,8 +1430,14 @@ await test("a configured base layer is rendered into the row", async () => {
     false,
     "the retired interface size axis injects nothing into the row"
   );
-  // The interface weight rule is the one that carries the markdown exclusion.
-  assert.ok(html.includes("body,body *:not("));
+  // The interface weight rule reaches the chrome through the element table (the
+  // dialog owns a weight here, so the guard is dropped), and the conversation
+  // keeps its own weight through the markdown-scoped rule.
+  assert.ok(
+    html.includes(
+      "body,body :where(" + shared.WEIGHT_ELEMENT_TABLE + "){font-weight:var(--dfp-interface-weight,460) !important}"
+    )
+  );
   assert.ok(html.includes('[class*="_markdown_" i]'));
 });
 
@@ -1617,13 +1675,13 @@ await test("dropping a rule actually removes it from the page", async () => {
   const { ctx } = cardContext(scope);
   await loadClientBundle(ctx);
   const tag = () => globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
-  assert.ok(tag().textContent.includes("font-weight:480 !important"));
+  assert.ok(tag().textContent.includes("font-weight:var(--dfp-interface-weight,480) !important"));
   // The user resets the interface weight: with the two-copy layout this is the
   // exact case that used to keep applying the old value until a reload.
   scope.publish({ value: { weight: 0, uiFollowsDialog: false } });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(
-    tag().textContent.includes("font-weight:480 !important"),
+    tag().textContent.includes("font-weight:var(--dfp-interface-weight,480) !important"),
     false,
     "the reset must empty the injected rule"
   );
@@ -1831,11 +1889,16 @@ await test("the bundle registers itself under the package name", async () => {
 
 await test("the patch layer inserts exactly one row", async () => {
   const patch = await readFile(join(ROOT, "cordis.patch.yml"), "utf8");
+  const manifest = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
   const inserts = patch.split("\n").filter((line) => line.trim() === "- insert:");
   const ids = patch.split("\n").filter((line) => /^\s{4}- id:/.test(line));
   assert.equal(inserts.length, 1);
   assert.equal(ids.length, 1, `expected one entry id, saw ${ids.length}`);
-  assert.match(patch, /- id: fonttune/);
+  // The loader row id IS the settings key from DSH 0.1.7 on — that line imports
+  // the removed settings.yaml by matching section names against entry ids — so
+  // it has to equal the namespace the host half registers (the package name),
+  // or an existing installation's saved values are left behind in the backup.
+  assert.match(patch, new RegExp(`- id: ${manifest.name}\\s*$`, "m"));
   assert.match(patch, /name: dsh-fonttune/);
 });
 
@@ -2003,7 +2066,7 @@ await test("dark per-theme values prefix their own rules", () => {
   assert.ok(css.includes("font-weight:500 !important"), "the dark weight value renders");
   assert.match(
     css,
-    /body\[data-ds-dark-theme\],body\[data-ds-dark-theme\] \*\{[^}]*--dsh-content-font-size:calc\(\(14px\) \+ 2px\)/,
+    /body\[data-ds-dark-theme\]\{[^}]*--dsh-content-font-size:calc\(\(14px\) \+ 2px\)/,
     "the dark conversation size is prefixed"
   );
   // No dark rules at all when the dark map is empty.
