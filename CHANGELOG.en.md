@@ -2,7 +2,7 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
-## [0.2.6] - 2026-09-24 (draft, to be released after the user's own test)
+## [0.2.6] - 2026-09-24
 
 ### Fixed
 - **Opening "Font tune" still needed a second click before the settings appeared**: the official plugin page now treats opening that entry as the expansion gesture, while the card still carried a collapsible header of its own. The card now starts open on the entry page and on the package configuration page (the chevron still collapses it by hand).
