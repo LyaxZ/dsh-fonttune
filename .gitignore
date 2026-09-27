@@ -1,2 +1,5 @@
 node_modules/
 *.log
+# a packed tarball is a build output: `npm pack` writes it here while verifying a
+# release, and the release workflow packs its own copy in CI.
+*.tgz
