@@ -22,11 +22,12 @@
 
 ## Compatibility
 
-**One package serves three host lines** — 0.1.5-rc.3 (the floor), 0.1.7-alpha.1 / alpha.2 and 0.1.7-rc.1 / rc.2 — and the install is the same on any of them: all three were verified for "the settings card opens, the stylesheet really reaches the page, and a change made in the card is written through".
+**One package serves four host lines** — 0.1.5-rc.3 (the floor), 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2 and 0.2.0-rc.1 — and the install is the same on any of them: all three were verified for "the settings card opens, the stylesheet really reaches the page, and a change made in the card is written through".
 
 | Plugin version | Supported DSH versions |
 | --- | --- |
-| **0.3.1** (latest) | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2 |
+| **0.3.2** (latest) | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2, 0.2.0-rc.1 |
+| 0.3.1 | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2 |
 | 0.3.0 | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2 |
 | 0.2.7 | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2 |
 | 0.2.6 | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 |
