@@ -178,6 +178,49 @@ const main = async () => {
       return undefined;
     }
   };
+  /**
+   * Wait for one field to actually land in the settings document.
+   *
+   * The release commits through the settings RPC, and the document write is
+   * debounced on the host side — on a loaded machine (this sandbox runs the
+   * whole browser-verify chain back to back) it can take longer than any fixed
+   * sleep, which is what made this walk flap. The contract under test is "the
+   * release commits", not "it commits within one second", so the wait polls.
+   * @param {string} name - the settings field.
+   * @param {unknown} value - the value it must reach.
+   * @param {number} [timeoutMs] - how long to keep polling.
+   * @returns {Promise<{landed: boolean, seen: unknown, waitedMs: number}>}
+   */
+  const waitForField = async (name, value, timeoutMs = 9000) => {
+    const started = Date.now();
+    let seen = field(await readUser(), name);
+    while (seen !== value && Date.now() - started < timeoutMs) {
+      await sleep(250);
+      seen = field(await readUser(), name);
+    }
+    return { landed: seen === value, seen, waitedMs: Date.now() - started };
+  };
+  /**
+   * Wait for one field to become a DIFFERENT value, and return it.
+   *
+   * The weight controls count font steps while the document stores weight offsets
+   * (and a document written before the axes were relative stores an absolute
+   * weight, migrated on read), so "one step landed" cannot be checked against a
+   * fixed number — only against "the value moved, and it moved by one step".
+   * @param {string} name - field name.
+   * @param {unknown} previous - the value to move away from.
+   * @param {number} [timeoutMs] - how long to poll for.
+   * @returns {Promise<{landed: boolean, seen: unknown, waitedMs: number}>}
+   */
+  const waitForChange = async (name, previous, timeoutMs = 9000) => {
+    const started = Date.now();
+    let seen = field(await readUser(), name);
+    while (seen === previous && Date.now() - started < timeoutMs) {
+      await sleep(250);
+      seen = field(await readUser(), name);
+    }
+    return { landed: seen !== previous, seen: seen, waitedMs: Date.now() - started };
+  };
 
   /** Expand one accordion section by its title. */
   const expandSection = async (pattern) => {
@@ -231,18 +274,116 @@ const main = async () => {
   );
   await release();
   console.log("size readout samples:", await readouts(0));
-  await sleep(1400);
+  const sizeLanded = await waitForField("sizeOffsetDialog", 3);
   const afterSize = await readUser();
-  console.log("host after release:", afterSize);
-  check("releasing the size drag commits it", field(afterSize, "sizeOffsetDialog") === 3, afterSize);
+  console.log("host after release:", afterSize, `(landed in ${sizeLanded.waitedMs} ms)`);
+  check("releasing the size drag commits it", sizeLanded.landed, `saw ${sizeLanded.seen}`);
 
-  console.log("\nweight drag to 420:", await drag(2, [430, 420]));
+  // The weight sliders are counted in FONT STEPS now ("-2 -1 0 +1 +2 +3 +4"), not
+  // in weight units: how many positions they have is a property of the family,
+  // measured on the page. The document still stores a weight offset — and a
+  // document written before the axes were relative stores an ABSOLUTE weight that
+  // is migrated on read — so the walk never compares the raw document against a
+  // step count: it moves by steps and checks that the offsets follow them.
+  const shape = JSON.parse(
+    await evalJs(`(() => {
+      const input = [...document.querySelectorAll(".dfp-slider")][2];
+      if (!input) return "null";
+      return JSON.stringify({
+        min: Number(input.min),
+        max: Number(input.max),
+        step: Number(input.step),
+        value: Number(input.value),
+      });
+    })()`)
+  );
+  console.log("weight slider shape:", shape);
+  check(
+    "the weight slider counts font steps, not weight units",
+    shape.step === 1 && shape.min < 0 && shape.max > 0 && Math.abs(shape.max) <= 12 && Math.abs(shape.min) <= 12,
+    JSON.stringify(shape)
+  );
+  const raw0 = field(await readUser(), "weightDialog");
+  const up = shape.value + 1 <= shape.max;
+  const c1 = up ? shape.value + 1 : shape.value - 1;
+  console.log(`weight drag to step ${c1} (from ${shape.value}):`, await drag(2, [c1]));
   await sleep(400);
   await release();
-  await sleep(1400);
-  const afterWeight = await readUser();
-  console.log("host after weight release:", afterWeight);
-  check("releasing the weight drag commits it", field(afterWeight, "weightDialog") === 420, afterWeight);
+  const first = await waitForChange("weightDialog", raw0);
+  console.log("host after weight release:", await readUser(), `(changed in ${first.waitedMs} ms)`);
+  check("releasing a one-step weight drag commits it", first.landed, `saw ${first.seen}, was ${raw0}`);
+  const unit = typeof first.seen === "number" && c1 !== 0 ? first.seen / c1 : 0;
+  check(
+    "one slider step is one step of the family, written as a weight offset",
+    Number.isFinite(unit) && unit > 0 && unit <= 300,
+    `step ${c1} wrote ${first.seen} → ${unit} per step`
+  );
+  const c2 = up && c1 + 1 <= shape.max ? c1 + 1 : c1 - 1;
+  console.log(`weight drag to step ${c2}:`, await drag(2, [c2]));
+  await sleep(400);
+  await release();
+  const second = await waitForChange("weightDialog", first.seen);
+  check(
+    "two steps write exactly twice one step",
+    second.landed && Math.abs(second.seen - c2 * unit) < 0.001,
+    `saw ${second.seen} for ${c2} steps at ${unit} each`
+  );
+
+  // The notch must be the granularity the family can actually render: one notch
+  // has to change the rendering. Measured here with the same canvas probe the
+  // card uses, so a broken measurement (which silently degrades to no steps)
+  // shows up as a failure instead of a slider that feels dead.
+  const notch = await evalJs(`(() => {
+    const sample = document.querySelector('[class*="_markdown_" i]') || document.body;
+    const family = getComputedStyle(sample).fontFamily;
+    const unit = ${typeof unit === "number" ? unit : 0};
+    const canvas = document.createElement("canvas");
+    canvas.width = 260;
+    canvas.height = 56;
+    const context = canvas.getContext("2d");
+    const ink = (weight) => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.font = weight + " 32px " + family;
+      context.textBaseline = "top";
+      context.fillStyle = "#000";
+      context.fillText("\\u5bf9\\u8bdd Aa 0189", 2, 6);
+      const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let count = 0;
+      for (let index = 3; index < data.length; index += 4) count += data[index];
+      return count;
+    };
+    return JSON.stringify({ unit: unit, family: family, normal: ink(400), bolder: ink(400 + unit) });
+  })()`);
+  console.log("one notch:", notch);
+  let notchOk = false;
+  try {
+    const parsed = JSON.parse(notch);
+    notchOk = parsed.unit !== 0 && parsed.normal !== parsed.bolder;
+  } catch (error) {
+    notchOk = false;
+  }
+  check("one notch of the weight slider changes the rendering", notchOk, String(notch).slice(0, 140));
+
+  // Two drags in a row, with the first write still in flight: the second value
+  // must reach the document. A confirmation for the first one used to drop the
+  // value being dragged (the thumb snapped back), and the release guard used to
+  // swallow the second release entirely — so on a slow host that adjustment was
+  // silently lost. The document write is debounced, which is exactly the window
+  // this exercises. The second drag goes to the far end, so the value it must land
+  // is known exactly: the far step count times the measured unit.
+  const far = up ? shape.max : shape.min;
+  console.log("\nback-to-back drags:", await drag(2, [0]));
+  await sleep(150);
+  await release();
+  console.log(`second drag to step ${far} before the first confirmed:`, await drag(2, [far]));
+  await sleep(150);
+  await release();
+  const backToBack = await waitForField("weightDialog", far * unit);
+  check(
+    "a second drag lands even while the first write is unconfirmed",
+    backToBack.landed,
+    `saw ${backToBack.seen} after ${backToBack.waitedMs} ms (${far} steps × ${unit})`
+  );
 
   // --- the code section: size, line height, weight ---
   console.log("\nsection:", await expandSection("/代码|Code/"));
@@ -252,19 +393,27 @@ const main = async () => {
   console.log("code size drag:", await drag(0, [2, 3, 4]));
   await sleep(400);
   await release();
-  await sleep(1400);
+  const codeSizeLanded = await waitForField("sizeOffsetCode", 4);
   const afterCodeSize = await readUser();
-  console.log("host after code size release:", afterCodeSize);
-  check("the code size lands on its own axis", field(afterCodeSize, "sizeOffsetCode") === 4, afterCodeSize);
+  console.log("host after code size release:", afterCodeSize, `(landed in ${codeSizeLanded.waitedMs} ms)`);
+  check("the code size lands on its own axis", codeSizeLanded.landed, `saw ${codeSizeLanded.seen}`);
   console.log("code css:", await readHost());
 
-  console.log("\ncode weight drag to 300:", await drag(2, [320, 300]));
+  // The code weight is a step count as well ("bolder / lighter by n of the code
+  // font's steps"), so the drag targets a count and the offset that lands is that
+  // count times the code family's own unit.
+  const codeRaw = field(await readUser(), "weightCode");
+  console.log("\ncode weight drag to step -1:", await drag(2, [0, -1]));
   await sleep(400);
   await release();
-  await sleep(1400);
+  const codeWeight = await waitForChange("weightCode", codeRaw);
   const afterCodeWeight = await readUser();
-  console.log("host after code weight release:", afterCodeWeight);
-  check("the code weight lands on its own axis", field(afterCodeWeight, "weightCode") === 300, afterCodeWeight);
+  console.log("host after code weight release:", afterCodeWeight, `(changed in ${codeWeight.waitedMs} ms)`);
+  check(
+    "the code offset lands on its own axis",
+    codeWeight.landed && typeof codeWeight.seen === "number" && codeWeight.seen < 0,
+    `saw ${codeWeight.seen} (was ${codeRaw})`
+  );
   console.log("weight css:", await readHost());
 
   // --- leave the machine as it was found ---

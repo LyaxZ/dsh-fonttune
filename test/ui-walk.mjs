@@ -130,12 +130,15 @@ const main = async () => {
     const text = document.body.innerText;
     const has = (needle) => text.includes(needle);
     return JSON.stringify({
-      sansRow: has("正文字体") || has("Body font"),
+      sansRow: has("界面字体") || has("Interface font"),
       monoRow: has("代码字体") || has("Code font"),
-      bodySizeRow: has("正文字号偏移") || has("Body font size offset"),
-      bodyWeightRow: has("正文字重") || has("Body font weight"),
+      bodySizeRow: has("对话字号偏移") || has("Conversation font-size offset"),
+      // The two offset sliders read "+n" and are labelled "…weight offset"; the
+      // All three weight axes are offsets now, so the code row matches too.
+      bodyWeightRow: has("对话字重偏移") || has("Conversation font-weight offset"),
+      uiWeightRow: has("界面字重偏移") || has("Interface font-weight offset"),
       codeSizeRow: has("代码字号偏移") || has("Code font size offset"),
-      codeWeightRow: has("代码字重") || has("Code font weight"),
+      codeWeightRow: has("代码字重偏移") || has("Code font-weight offset"),
       preview: has("预览") || has("Preview"),
       sliders: document.querySelectorAll('input[type="range"]').length,
       sliderLabels: [...document.querySelectorAll('input[type="range"]')].map((el) => el.getAttribute("aria-label")),

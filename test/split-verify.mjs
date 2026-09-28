@@ -179,12 +179,45 @@ const main = async () => {
       const hostRows = [...document.querySelectorAll("style")]
         .filter((tag) => !tag.dataset.pluginCss && (tag.textContent || "").includes("--dsh-content-font-size"))
         .map((tag) => (tag.textContent || "").replace(/\\s+/g, " ").slice(0, 150));
+      // The heading ladder: one probe per level, inside a container that carries
+      // BOTH the real markdown class (so DSH's own font shorthands size the
+      // headings) and the data-dss-prose hint (the scope the plugin's
+      // conversation rules hang on). This is the regression the conversation
+      // offset used to have: h1/h2 carry their size inside the token's font
+      // shorthand, and a value test that could not tell an expanded
+      // calc(21px + -2px) from a literal shifted them a second time while h3
+      // stayed right.
+      let containerClass = null;
+      for (const sheet of document.styleSheets) {
+        let rules;
+        try { rules = [...sheet.cssRules]; } catch { continue; }
+        for (const rule of rules) {
+          const hit = (rule.selectorText || "").match(/^\\.(_markdown_[A-Za-z0-9_-]+)$/);
+          if (hit && /markdown-base/.test(rule.cssText)) { containerClass = hit[1]; break; }
+        }
+        if (containerClass) break;
+      }
+      let headings = null;
+      if (containerClass !== null) {
+        const host = document.createElement("div");
+        host.className = containerClass;
+        host.setAttribute("data-dss-prose", "");
+        host.innerHTML = "<h1>h1</h1><h2>h2</h2><h3>h3</h3><h4>h4</h4><p>p</p>";
+        document.body.appendChild(host);
+        const sizeOf = (selector) => {
+          const el = host.querySelector(selector);
+          return el === null ? null : getComputedStyle(el).fontSize;
+        };
+        headings = { h1: sizeOf("h1"), h2: sizeOf("h2"), h3: sizeOf("h3"), h4: sizeOf("h4"), p: sizeOf("p") };
+        host.remove();
+      }
       return JSON.stringify({
         contentSize: bodyStyle.getPropertyValue("--dsh-content-font-size").trim(),
         codeToken: bodyStyle.getPropertyValue("--dsw-font-markdown-code-block").trim().slice(0, 90),
         body: probe("var(--dsw-font-markdown-base)"),
         code: probe("var(--dsw-font-markdown-code-block)"),
         inlineCode: probe("var(--dsw-font-markdown-code)"),
+        headings: headings,
         real: real,
         hostRows: hostRows,
         ourCss: [...document.querySelectorAll('style[data-plugin-css="dsh-fonttune"]')]
@@ -239,6 +272,7 @@ const main = async () => {
   const bodyOnly = await step("conversation only", 3, 0, base.seen);
   const codeOnly = await step("code only", 0, 3, base.seen);
   const both = await step("both, opposite signs", 3, -3, base.seen);
+  const negative = await step("conversation only, negative", -3, 0, base.seen);
   const retired = await step("retired interface size only", 0, 0, base.seen, 4);
 
   console.log("\nchecks");
@@ -279,6 +313,47 @@ const main = async () => {
     "the inline-code token rides the same code axis",
     inlineRatio === codeDown,
     `inline code ×${inlineRatio} (want ${codeDown})`
+  );
+  // The heading ladder, in absolute px: every level derives from the same
+  // `--dsh-content-font-delta`, so each one is its own base plus the offset —
+  // once. The offset is added to the LIVE official size, so the expected value
+  // carries the machine's own drift off DSH's 14px reference.
+  const drift = px(base.seen.contentSize) - 14;
+  const headingCheck = (seen, offset) => {
+    const want = (headingBase) => headingBase + drift + offset;
+    const near = (measured, expected) => measured !== null && Math.abs(px(measured) - expected) < 0.01;
+    const h = seen.headings;
+    if (h === null) return null;
+    return {
+      h1: near(h.h1, want(21)),
+      h2: near(h.h2, want(19)),
+      h3: near(h.h3, want(18)),
+      h4: near(h.h4, want(14)),
+      p: near(h.p, want(14)),
+      ordered: px(h.h1) > px(h.h2) && px(h.h2) > px(h.h3) && px(h.h3) >= px(h.h4),
+    };
+  };
+  const up = headingCheck(bodyOnly.seen, 3);
+  const down = headingCheck(negative.seen, -3);
+  check(
+    "the heading ladder is probed",
+    up !== null && down !== null,
+    JSON.stringify({ up: bodyOnly.seen.headings, down: negative.seen.headings })
+  );
+  check(
+    "an offset of +3 lands once on every heading level",
+    up !== null && up.h1 && up.h2 && up.h3 && up.h4 && up.p,
+    `h1=${bodyOnly.seen.headings.h1} h2=${bodyOnly.seen.headings.h2} h3=${bodyOnly.seen.headings.h3} h4=${bodyOnly.seen.headings.h4} p=${bodyOnly.seen.headings.p} (drift ${drift})`
+  );
+  check(
+    "an offset of −3 lands once on every heading level",
+    down !== null && down.h1 && down.h2 && down.h3 && down.h4 && down.p,
+    `h1=${negative.seen.headings.h1} h2=${negative.seen.headings.h2} h3=${negative.seen.headings.h3} h4=${negative.seen.headings.h4} p=${negative.seen.headings.p} (drift ${drift})`
+  );
+  check(
+    "the heading hierarchy survives both offsets",
+    up !== null && down !== null && up.ordered && down.ordered,
+    `up=${JSON.stringify(bodyOnly.seen.headings)} down=${JSON.stringify(negative.seen.headings)}`
   );
   check(
     "the code shorthand keeps its family list",

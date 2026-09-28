@@ -240,11 +240,18 @@ const main = async () => {
   })()`);
   console.log("pick:", pickResult);
   check("the curated family is offered in the panel", pickResult === "picked Segoe UI", pickResult);
-  await sleep(1600);
-
-  const finalPicks = await evalJs(
-    `JSON.stringify([...document.querySelectorAll(".dfp-pick")].map((p) => (p.textContent || "").trim()))`
-  );
+  // The slot label follows the settings round-trip, and that write is debounced
+  // on the host side — on a loaded machine a fixed sleep can read the old label
+  // even though the value already landed (the layer read below proves it does).
+  // Poll for the label instead of guessing a delay.
+  const readPicks = () =>
+    evalJs(`JSON.stringify([...document.querySelectorAll(".dfp-pick")].map((p) => (p.textContent || "").trim()))`);
+  const pickDeadline = Date.now() + 9000;
+  let finalPicks = await readPicks();
+  while (JSON.parse(finalPicks)[0] !== "Segoe UI" && Date.now() < pickDeadline) {
+    await sleep(300);
+    finalPicks = await readPicks();
+  }
   console.log("final picks:", finalPicks);
   const stored = JSON.parse(await readUser());
   console.log("layer after the pick:", JSON.stringify(stored));

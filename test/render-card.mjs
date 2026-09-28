@@ -609,7 +609,7 @@ await test("switching the follow switch off carries the values it was showing", 
   const scope = createScope({
     value: {
       stackDialog: "Inter",
-      weightDialog: 480,
+      weightDialog: 80,
       uiFollowsDialog: true,
     },
   });
@@ -628,7 +628,7 @@ await test("switching the follow switch off carries the values it was showing", 
   const written = scope.getSnapshot().value;
   assert.equal(written.uiFollowsDialog, false, "the switch is off");
   assert.equal(written.sans, "Inter", "the family it was showing becomes its own");
-  assert.equal(written.weight, 480, "the weight it was showing becomes its own");
+  assert.equal(written.weight, 80, "the weight offset it was showing becomes its own");
 });
 
 await test("an unset follow target leaves the interface on DSH's own values", async () => {
@@ -673,7 +673,17 @@ await test("an expanded dialog section shows all four of its axes", async () => 
   assert.ok(text.includes("size.dialogLabel"), "the conversation size slider renders");
   assert.ok(text.includes("line.dialogLabel"), "the conversation line-height slider renders");
   assert.ok(text.includes("weight.dialogLabel"), "the conversation weight slider renders");
-  assert.ok(text.includes("400"), "an unset weight reads 400, never a blank state");
+  // The weight axes are OFFSETS now: an unset one reads the neutral 0 on a
+  // slider that spans the offset range, never a blank state and never an
+  // absolute weight.
+  const dialogSlider = out.props.find(
+    (entry) => entry.props && entry.props["aria-label"] === "weight.dialogLabel"
+  );
+  assert.ok(dialogSlider, "the conversation weight slider is an input");
+  assert.equal(dialogSlider.props.value, 0, "an unset offset reads 0");
+  assert.equal(dialogSlider.props.min, -100, "the lighter end of the offset range");
+  assert.equal(dialogSlider.props.max, 200, "the bolder end of the offset range");
+  assert.ok(dialogSlider.props.step >= 1, "the notch is the family's weight granularity");
   assert.ok(text.includes("preview.dialogCaption"), "the conversation preview renders");
   assert.equal(text.includes("preview.sansCaption"), false, "the interface preview stays closed");
 });
@@ -692,6 +702,18 @@ await test("an expanded code section shows the ligature and line-height controls
   assert.ok(text.includes("size.codeLabel"), "the code size slider renders");
   assert.ok(text.includes("line.codeLabel"), "the code line-height slider renders");
   assert.ok(text.includes("weight.codeLabel"), "the code weight slider renders");
+  // All three weight axes share one shape: an offset centred on zero, so the
+  // code slider is the same control as the conversation and interface ones.
+  const codeSlider = out.props.find(
+    (entry) => entry.props && entry.props["aria-label"] === "weight.codeLabel"
+  );
+  assert.ok(codeSlider, "the code weight slider is an input");
+  assert.equal(codeSlider.props.min, -100, "the offset scale starts at -100");
+  assert.equal(codeSlider.props.max, 200, "and ends at +200");
+  assert.equal(codeSlider.props.value, 0, "an unset code offset reads 0");
+  // The notch is the family's measured weight granularity; without a canvas the
+  // measurement degrades to single units rather than breaking the card.
+  assert.ok(codeSlider.props.step >= 1, "the code slider carries its step");
   assert.ok(text.includes("lig.label"), "the ligature control renders");
   assert.ok(text.includes("lig.default"), "the three ligature options render");
   assert.ok(text.includes("preview.monoCaption"), "the code preview renders");
@@ -811,7 +833,7 @@ await test("an export the clipboard refuses is handed over selected", async () =
     value: { clipboard: { writeText: () => Promise.reject(new Error("not allowed")) } },
   });
   try {
-    const presets = JSON.stringify([{ name: "one", values: { weight: 480 }, savedAt: 1 }]);
+    const presets = JSON.stringify([{ name: "one", values: { weight: 80 }, savedAt: 1 }]);
     const scope = createScope({ value: { presets } });
     const { out, runtime } = await renderSection(scope, null);
     const button = out.props.find(
@@ -824,7 +846,7 @@ await test("an export the clipboard refuses is handed over selected", async () =
     // The whole JSON, not a 120-character prefix of it in the status row.
     const handed = values.find((value) => typeof value === "string" && value.startsWith("["));
     assert.ok(handed, `the JSON reached the card: ${JSON.stringify(values)}`);
-    assert.deepEqual(JSON.parse(handed), [{ name: "one", values: { weight: 480 }, savedAt: 1 }]);
+    assert.deepEqual(JSON.parse(handed), [{ name: "one", values: { weight: 80 }, savedAt: 1 }]);
     const status = values.find((value) => value && typeof value === "object" && "text" in value);
     assert.equal(status.text, "preset.exportManual");
   } finally {

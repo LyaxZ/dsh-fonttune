@@ -56,6 +56,26 @@ function section(title) {
   console.log(`\n${title}`);
 }
 
+/**
+ * The `font-weight` one weight group resolves to: its own base plus the offset
+ * in force where the element sits, clamped to the legal CSS range.
+ * @param {number} base - the weight DSH gives that group.
+ * @returns {string} the declaration value.
+ */
+function ladder(base) {
+  return `clamp(100,calc(${base} + var(--dfp-wdelta,0)),900)`;
+}
+
+/**
+ * The rule that scopes one weight group inside the conversation.
+ * @param {string} group - the element list of the group.
+ * @param {number} base - the group's own weight.
+ * @returns {string} the rule the stylesheet must contain.
+ */
+function ladderRule(group, base) {
+  return `[class*="_markdown_" i] :is(${group}){font-weight:${ladder(base)} !important}`;
+}
+
 /* ------------------------------------------------------------------ *
  * the stand-in DOM
  * ------------------------------------------------------------------ */
@@ -526,16 +546,37 @@ await test("round-trips a stack through format and parse", () => {
 
 section("shared: configuration normalization");
 
-await test("clamps the size offsets and the weight", () => {
+await test("clamps the size offsets and the weight axes", () => {
   assert.equal(shared.normalizeConfig({ sizeOffset: 99 }).sizeOffset, shared.SIZE_MAX);
   assert.equal(shared.normalizeConfig({ sizeOffset: -99 }).sizeOffset, shared.SIZE_MIN);
   assert.equal(shared.normalizeConfig({ sizeOffsetCode: 99 }).sizeOffsetCode, shared.SIZE_MAX);
   assert.equal(shared.normalizeConfig({ sizeOffsetCode: -99 }).sizeOffsetCode, shared.SIZE_MIN);
-  assert.equal(shared.normalizeConfig({ weight: 100 }).weight, shared.WEIGHT_MIN);
-  assert.equal(shared.normalizeConfig({ weight: 900 }).weight, shared.WEIGHT_MAX);
+  // The two weight axes are OFFSETS: they clamp to their own range and accept
+  // negative values (lighter than DSH's own).
+  assert.equal(shared.normalizeConfig({ weight: 999 }).weight, shared.WEIGHT_DELTA_CEIL);
+  assert.equal(shared.normalizeConfig({ weight: -999 }).weight, shared.WEIGHT_DELTA_FLOOR);
+  assert.equal(shared.normalizeConfig({ weight: -60 }).weight, -60);
   assert.equal(shared.normalizeConfig({ weight: 0 }).weight, shared.WEIGHT_UNSET);
   assert.equal(shared.normalizeConfig("nonsense").sizeOffset, 0);
   assert.equal(shared.normalizeConfig("nonsense").sizeOffsetCode, 0);
+});
+
+await test("an absolute weight from an older document migrates to its offset", () => {
+  // 0.2.7 and earlier stored an ABSOLUTE weight (300…600, 400 = normal). The
+  // window sits outside the offset range, so the conversion is unambiguous —
+  // and idempotent, which is what keeps a saved setup meaning the same thing.
+  assert.equal(shared.normalizeConfig({ weight: 400 }).weight, 0);
+  assert.equal(shared.normalizeConfig({ weight: 560 }).weight, 160);
+  assert.equal(shared.normalizeConfig({ weight: 300 }).weight, -100);
+  assert.equal(shared.normalizeConfig({ weightDialog: 460 }).weightDialog, 60);
+  // A value already inside the offset range is a delta and stays untouched.
+  assert.equal(shared.normalizeConfig({ weight: 160 }).weight, 160);
+  assert.equal(shared.normalizeConfig({ weight: -100 }).weight, -100);
+  // The code axis is an offset as well, so the same migration applies to it.
+  assert.equal(shared.normalizeConfig({ weightCode: 460 }).weightCode, 60);
+  // Presets and the per-theme map go through the same conversion.
+  const preset = shared.normalizePresets(JSON.stringify([{ name: "old", values: { weight: 520 }, savedAt: 1 }]));
+  assert.equal(preset[0].values.weight, 120);
 });
 
 await test("an empty configuration is dormant", () => {
@@ -545,10 +586,11 @@ await test("an empty configuration is dormant", () => {
   assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffset: 1 })), true);
   assert.equal(shared.isDormant(shared.normalizeConfig({ lineHeight: 130 })), true);
   // The axes that do render are not dormant.
-  assert.equal(shared.isDormant(shared.normalizeConfig({ weight: 480 })), false);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ weight: 80 })), false);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ weight: -80 })), false);
   assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffsetCode: -1 })), false);
   assert.equal(shared.isDormant(shared.normalizeConfig({ sizeOffsetDialog: 1 })), false);
-  assert.equal(shared.isDormant(shared.normalizeConfig({ weightDialog: 480 })), false);
+  assert.equal(shared.isDormant(shared.normalizeConfig({ weightDialog: 80 })), false);
   assert.equal(shared.isDormant(shared.normalizeConfig({ lineHeightDialog: 120 })), false);
 });
 
@@ -783,13 +825,64 @@ await test("tokens that derive from others via var() are skipped", () => {
   assert.match(css, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 1\.125\)/);
 });
 
-await test("the conversation weight is written verbatim inside the dialog scope", () => {
-  const css = shared.buildFontCss({ weightDialog: 300 });
-  assert.ok(css.includes('[class*="_markdown_" i]'), "the rule is markdown-scoped");
-  assert.ok(css.includes("font-weight:300 !important"));
-  assert.ok(shared.buildFontCss({ weightDialog: 520 }).includes("font-weight:520 !important"));
+await test("the conversation weight is an offset on each element's own weight", () => {
+  const css = shared.buildFontCss({ weightDialog: 100 });
+  assert.ok(css.includes('[class*="_markdown_" i]'), "the rules are markdown-scoped");
+  // The ladder: h1..h3 keep 700, h4..h6 and strong keep 600, th keeps 500 and
+  // the body text keeps 400 — every group ADDS the offset instead of replacing
+  // its weight. Replacing it is what flattened the headings before.
+  for (const group of shared.DIALOG_WEIGHT_GROUPS) {
+    assert.ok(
+      css.includes(ladderRule(group.elements, group.base)),
+      `the ${group.elements} group keeps its own base (${group.base})`
+    );
+  }
+  // The offset is pinned on the conversation scope, so it cannot take the
+  // interface's value and the groups above resolve the conversation's.
+  const scope = css.split("\n").find((rule) => rule.startsWith('[class*="_markdown_" i]') && rule.includes("--dfp-wdelta"));
+  assert.ok(scope !== undefined, "the conversation pins the offset on its scope");
+  assert.ok(scope.includes("--dfp-wdelta:100"), "its own offset, not the interface's");
+  assert.ok(scope.includes("font-weight:" + ladder(400)), "text directly in the scope takes the base group");
   // The card's conversation preview simulates the same surface.
-  assert.ok(css.includes(".dfp-previewDialog{font-weight:300 !important}"));
+  assert.ok(
+    css.includes(".dfp-previewDialog{--dfp-wdelta:100;font-weight:" + ladder(400) + " !important}"),
+    "the preview pins the same offset"
+  );
+  assert.ok(
+    css.includes(".dfp-previewDialog :is(h1,h2,h3){font-weight:" + ladder(700) + " !important}"),
+    "and carries the same ladder"
+  );
+  // A lighter conversation is as legal as a bolder one.
+  const lighter = shared.buildFontCss({ weightDialog: -100 });
+  assert.ok(lighter.includes("--dfp-wdelta:-100"), "a negative offset renders");
+  assert.ok(lighter.includes(ladderRule("h1,h2,h3", 700)), "and keeps the same ladder");
+});
+
+await test("no weight is written as one flat value over the conversation", () => {
+  // The regression guard for the reported bug: a plain `font-weight:<n>` on the
+  // markdown scope (or on any markdown element) would override the 700/600 the
+  // `font` shorthands carry, which is exactly how the headings lost their
+  // weight. Every markdown weight declaration has to be a ladder.
+  for (const offset of [100, -100, 200]) {
+    const css = shared.buildFontCss({ weightDialog: offset });
+    for (const rule of css.split("\n")) {
+      if (!rule.startsWith('[class*="_markdown_" i]') && !rule.startsWith(".dfp-previewDialog")) continue;
+      const match = /font-weight:([^;}]+)/.exec(rule);
+      if (match === null) continue;
+      assert.ok(
+        match[1].startsWith("clamp("),
+        `a markdown weight must be a ladder, saw ${match[1]} in ${rule.slice(0, 90)}`
+      );
+    }
+  }
+  // The interface offset in force must not leak into the conversation: with the
+  // conversation unset, no markdown rule may carry a weight at all.
+  const interfaceOnly = shared.buildFontCss({ weight: 100, uiFollowsDialog: false });
+  assert.equal(
+    interfaceOnly.split("\n").some((rule) => rule.startsWith('[class*="_markdown_" i]') && rule.includes("font-weight")),
+    false,
+    "an interface-only offset leaves the conversation alone"
+  );
 });
 
 await test("a selector list splits on its top-level commas only", () => {
@@ -815,7 +908,7 @@ await test("every per-theme rule carries the theme attribute", () => {
     mono: '"JetBrains Mono"',
     sans: '"Georgia"',
     weightDialog: 460,
-    weightCode: 400,
+    weightCode: 50,
     weight: 380,
     uiFollowsDialog: false,
   }).light;
@@ -834,9 +927,12 @@ await test("every per-theme rule carries the theme attribute", () => {
 });
 
 await test("the interface weight reaches the chrome without walking every element", () => {
-  const css = shared.buildFontCss({ weight: 480, uiFollowsDialog: false });
-  assert.ok(css.includes("font-weight:var(--dfp-interface-weight,480) !important"), "the weight is written through the variable");
-  assert.ok(css.includes(":root,body{--dfp-interface-weight:480}"), "the variable is declared at the source");
+  const css = shared.buildFontCss({ weight: 100, uiFollowsDialog: false });
+  assert.ok(
+    css.includes("font-weight:" + ladder(400) + " !important"),
+    "the offset is written through the variable"
+  );
+  assert.ok(css.includes(":root,body{--dfp-wdelta:100}"), "the offset is declared at the source");
   // The reach is an element table, not `body *`: the universal descendant form
   // matched 1892 elements on every recalculation (measured 0.2 s of style
   // recalculation per 50-step drag).
@@ -845,7 +941,7 @@ await test("the interface weight reaches the chrome without walking every elemen
   for (const needle of ["button", "span", "div", "strong", "th"]) {
     assert.ok(selector.includes(needle), `${needle} pins its own weight in DSH`);
   }
-  // The conversation has no weight of its own here, so the rule carries the
+  // The conversation has no offset of its own here, so the rule carries the
   // markdown guard — and nothing else: code subtrees stay out through the
   // variable, not through a descendant selector.
   assert.ok(
@@ -864,21 +960,21 @@ await test("the interface weight reaches the chrome without walking every elemen
     assert.ok(guarded.includes(needle), `${needle} must be guarded`);
   }
   // The guard rides `:where(…)` so it adds NO specificity: the rule stays at
-  // (0,0,1), which is what lets the class-scoped dialog rule and the code rules
-  // out-rank it. Without that, the guard's class would beat the code rule's
-  // element selectors and code would take the interface weight.
+  // (0,0,1), which is what lets the class-scoped conversation ladder and the
+  // code rules out-rank it. Without that, the guard's class would beat the code
+  // rule's element selectors and code would take the interface weight.
   assert.ok(shared.WEIGHT_MARKDOWN_GUARD.startsWith(":not(:where("), "the guard adds no specificity");
   assert.equal(guarded.includes("code"), false, "code surfaces are not guarded here");
-  // With a conversation weight of its own the guard is dropped entirely: the
-  // dialog rule is class-scoped and wins anyway, so the rule collapses to the
-  // bare table — measured to keep the axis in full (141/141 interface elements).
-  const withDialog = shared.buildFontCss({ weight: 480, weightDialog: 460, uiFollowsDialog: false });
+  // With a conversation offset of its own the guard is dropped entirely: the
+  // ladder is class-scoped and wins anyway, so the rule collapses to the bare
+  // table — measured to keep the axis in full (141/141 interface elements).
+  const withDialog = shared.buildFontCss({ weight: 100, weightDialog: 60, uiFollowsDialog: false });
   assert.ok(
     withDialog.includes(
-      "body,body :where(" + shared.WEIGHT_ELEMENT_TABLE + "){font-weight:var(--dfp-interface-weight,480) !important}"
+      "body,body :where(" + shared.WEIGHT_ELEMENT_TABLE + "){font-weight:" + ladder(400) + " !important}"
     )
   );
-  assert.equal(withDialog.split("\n").some((rule) => rule.startsWith("body,body :where(") && rule.includes(":not(")), false, "no guard when the dialog owns a weight");
+  assert.equal(withDialog.split("\n").some((rule) => rule.startsWith("body,body :where(") && rule.includes(":not(")), false, "no guard when the conversation owns an offset");
   // No rule may carry a long `:not(…)` argument list: the measurement was for
   // the weight rule's 26 arguments, and only the markdown-scoped dialog rule is
   // allowed a list (it matches markdown elements only).
@@ -891,106 +987,110 @@ await test("the interface weight reaches the chrome without walking every elemen
 });
 
 await test("an interface weight takes code back out when the code axis is unset", () => {
-  const css = shared.buildFontCss({ weight: 480, uiFollowsDialog: false });
+  const css = shared.buildFontCss({ weight: 100, uiFollowsDialog: false });
   assert.ok(
-    css.includes("{font-weight:normal !important;--dfp-interface-weight:normal}"),
-    "code surfaces are excluded from the table's reach, so they reset the variable too"
+    css.includes("{font-weight:normal !important;--dfp-wdelta:0}"),
+    "code surfaces are excluded from the table's reach, so they pin the offset to zero too"
   );
   assert.ok(shared.CODE_SELECTOR.split(",").every((selector) => css.includes(selector)));
-  // With a code weight of its own the reset is skipped: the axis rule stands,
-  // and it hands its own weight to everything inside the surface.
-  const both = shared.buildFontCss({ weight: 480, weightCode: 450, uiFollowsDialog: false });
+  // With a code offset of its own the reset is skipped: the axis rule stands,
+  // and it hands its own offset to everything inside the surface.
+  const both = shared.buildFontCss({ weight: 100, weightCode: 450, uiFollowsDialog: false });
   assert.equal(both.includes("{font-weight:normal !important"), false);
-  assert.ok(both.includes("font-weight:450 !important;--dfp-interface-weight:450"));
+  assert.ok(
+    both.includes(`font-weight:${ladder(shared.WEIGHT_BASE)} !important;--dfp-wdelta:50`),
+    "the legacy absolute 450 becomes the +50 offset"
+  );
 });
 
 await test("following hands the conversation's family and weight to the interface", () => {
-  const following = shared.resolveAxes({ stackDialog: "Inter", weightDialog: 480 });
+  const following = shared.resolveAxes({ stackDialog: "Inter", weightDialog: 80 });
   assert.equal(following.light.sans, "Inter", "the family follows");
-  assert.equal(following.light.weight, 480, "the weight follows");
+  assert.equal(following.light.weight, 80, "the offset follows");
   // Off: the interface keeps its own two axes and the conversation keeps its own.
   const independent = shared.resolveAxes({
     stackDialog: "Inter",
-    weightDialog: 480,
+    weightDialog: 80,
     sans: "Georgia",
-    weight: 380,
+    weight: -60,
     uiFollowsDialog: false,
   });
   assert.equal(independent.light.sans, "Georgia");
-  assert.equal(independent.light.weight, 380);
+  assert.equal(independent.light.weight, -60);
   assert.equal(independent.light.stackDialog, "Inter");
-  assert.equal(independent.light.weightDialog, 480);
+  assert.equal(independent.light.weightDialog, 80);
   // Following only where the conversation sets a value.
-  const fallback = shared.resolveAxes({ weight: 380 });
-  assert.equal(fallback.light.weight, 380, "the interface's own weight stands as the fallback");
+  const fallback = shared.resolveAxes({ weight: -60 });
+  assert.equal(fallback.light.weight, -60, "the interface's own offset stands as the fallback");
 });
 
 await test("the interface and conversation weights never share a rule", () => {
   const light = shared.buildAxisCss(
-    shared.resolveAxes({ weight: 380, weightDialog: 520, uiFollowsDialog: false }).light,
+    shared.resolveAxes({ weight: -60, weightDialog: 120, uiFollowsDialog: false }).light,
     {},
     false
   );
   const table = "body,body :where(" + shared.WEIGHT_ELEMENT_TABLE + ")";
   const interfaceRule = light.split("\n").find((rule) => rule.startsWith(table + "{"));
   const dialogRule = light.split("\n").find((rule) => rule.startsWith('[class*="_markdown_" i]'));
-  assert.ok(interfaceRule.includes("font-weight:var(--dfp-interface-weight,380) !important"));
-  assert.ok(light.includes(":root,body{--dfp-interface-weight:380}"));
-  assert.equal(interfaceRule.includes("520"), false);
-  assert.ok(dialogRule.includes("font-weight:520 !important"));
-  assert.equal(dialogRule.includes("380"), false);
+  assert.ok(interfaceRule.includes("font-weight:" + ladder(400) + " !important"));
+  assert.ok(light.includes(":root,body{--dfp-wdelta:-60}"));
+  assert.equal(interfaceRule.includes("120"), false);
+  assert.ok(dialogRule.includes("--dfp-wdelta:120"));
+  assert.equal(dialogRule.includes("-60"), false);
   // Dark gets the same pair, prefixed with the theme attribute, and the guard
-  // follows the same rule: present only when the conversation has no weight.
-  const dark = shared.buildAxisCss({ weight: 380, weightDialog: 520 }, {}, true);
+  // follows the same rule: present only when the conversation has no offset.
+  const dark = shared.buildAxisCss({ weight: -60, weightDialog: 120 }, {}, true);
   assert.ok(
     dark.includes(
       "body[data-ds-dark-theme],body[data-ds-dark-theme] :where(" +
         shared.WEIGHT_ELEMENT_TABLE +
-        "){font-weight:var(--dfp-interface-weight,380) !important}"
+        "){font-weight:" +
+        ladder(400) +
+        " !important}"
     )
   );
-  const darkGuarded = shared.buildAxisCss({ weight: 380 }, {}, true);
+  const darkGuarded = shared.buildAxisCss({ weight: -60 }, {}, true);
   assert.ok(
     darkGuarded.includes("body[data-ds-dark-theme] :where(" + shared.WEIGHT_ELEMENT_TABLE + ")" + shared.WEIGHT_MARKDOWN_GUARD)
   );
 });
 
-await test("an unset code weight injects nothing of its own", () => {
+await test("an unset code offset injects nothing of its own", () => {
   assert.equal(shared.buildFontCss({ weightCode: 0 }), "");
-  const css = shared.buildFontCss({ weightCode: 300, weightDialog: 480 });
-  assert.ok(css.includes("font-weight:300 !important"), "the code weight rule exists");
-  assert.ok(css.includes("font-weight:480 !important"), "the conversation weight rule exists");
+  const css = shared.buildFontCss({ weightCode: -100, weightDialog: 80 });
+  assert.ok(css.includes("--dfp-wdelta:-100"), "the code offset rule exists");
+  assert.ok(css.includes(ladderRule("h1,h2,h3", 700)), "the conversation ladder exists");
 });
 
 await test("the conversation and code weight axes are independent", () => {
-  // Following is the default, so the conversation's weight is the one the
-  // interface carries: the interface's own 580 is overridden, not added.
-  const css = shared.buildFontCss({ weightDialog: 560, weightCode: 320, weight: 580 });
-  assert.ok(css.includes('[class*="_markdown_" i]'), "the conversation rule is scoped");
-  assert.ok(css.includes("font-weight:560 !important"));
-  assert.ok(css.includes("font-weight:320 !important"));
-  assert.equal(css.includes("font-weight:580 !important"), false, "follow wins");
+  // Following is the default, so the conversation's offset is the one the
+  // interface carries: the interface's own 180 is overridden, not added.
+  const css = shared.buildFontCss({ weightDialog: 160, weightCode: -80, weight: 180 });
+  assert.ok(css.includes('[class*="_markdown_" i]'), "the conversation rules are scoped");
+  assert.ok(css.includes("--dfp-wdelta:160"), "the conversation's own offset renders");
+  assert.ok(css.includes("--dfp-wdelta:-80"), "the code offset renders");
+  assert.equal(css.includes("--dfp-wdelta:180"), false, "follow wins");
   assert.ok(
-    css.includes("font-weight:var(--dfp-interface-weight,560) !important"),
-    "and the interface rule carries the followed weight with no guard"
+    css.includes(":root,body{--dfp-wdelta:160}"),
+    "and the interface rule carries the followed offset"
   );
   // With follow off, all three axes render their own value.
   const own = shared.buildFontCss({
-    weightDialog: 560,
-    weightCode: 320,
-    weight: 580,
+    weightDialog: 160,
+    weightCode: -80,
+    weight: 180,
     uiFollowsDialog: false,
   });
-  for (const value of [560, 320, 580]) {
-    assert.ok(
-      own.includes(`font-weight:${value} !important`) ||
-        own.includes(`font-weight:var(--dfp-interface-weight,${value}) !important`),
-      `${value} must render`
-    );
-  }
+  assert.ok(own.includes(":root,body{--dfp-wdelta:180}"), "the interface offset renders");
+  assert.ok(own.includes("--dfp-wdelta:160"), "the conversation offset renders");
+  assert.ok(own.includes("--dfp-wdelta:-80"), "the code offset renders");
   // code only: nothing touches the conversation
-  const codeOnly = shared.buildFontCss({ weightCode: 600 });
-  assert.match(codeOnly, /font-weight:600 !important/);
+  const codeOnly = shared.buildFontCss({ weightCode: 200 });
+  assert.ok(
+    codeOnly.includes(`${shared.CODE_SELECTOR}{font-weight:${ladder(shared.WEIGHT_BASE)} !important;--dfp-wdelta:200`),
+    "a code offset rides the same ladder shape as the other two axes"
+  );
   assert.equal(codeOnly.includes('[class*="_markdown_" i]'), false);
 });
 
@@ -1012,9 +1112,17 @@ await test("the code weight selector names the code surfaces", () => {
   assert.ok(shared.CODE_EXCLUDES.includes("pre *"), "the dialog exclusion still reaches descendants");
 });
 
-await test("the code weight clamps like the body weight", () => {
-  assert.equal(shared.normalizeConfig({ weightCode: 100 }).weightCode, shared.WEIGHT_MIN);
-  assert.equal(shared.normalizeConfig({ weightCode: 900 }).weightCode, shared.WEIGHT_MAX);
+await test("the code offset clamps like the other two weight axes", () => {
+  assert.equal(
+    shared.normalizeConfig({ weightCode: 100 }).weightCode,
+    100,
+    "an offset in range is kept"
+  );
+  // A document written before the axis became relative stores an absolute weight.
+  assert.equal(shared.normalizeConfig({ weightCode: 460 }).weightCode, 60);
+  assert.equal(shared.normalizeConfig({ weightCode: 300 }).weightCode, -100);
+  assert.equal(shared.normalizeConfig({ weightCode: 900 }).weightCode, shared.WEIGHT_DELTA_CEIL);
+  assert.equal(shared.normalizeConfig({ weightCode: -900 }).weightCode, shared.WEIGHT_DELTA_FLOOR);
   assert.equal(shared.normalizeConfig({ weightCode: 0 }).weightCode, shared.WEIGHT_UNSET);
   assert.equal(shared.normalizeConfig("nonsense").weightCode, shared.WEIGHT_UNSET);
   assert.equal(shared.isDormant(shared.normalizeConfig({ weightCode: 450 })), false);
@@ -1350,7 +1458,7 @@ await test("the alpha dialect configures the entry instead of a section", async 
   // values come from the entry's own resolved config.
   const host = await loadHostHalf(
     { sans: '"Inter"' },
-    { dialect: "alpha", liveConfig: { sans: '"Noto Serif SC"', weightDialog: 480 } }
+    { dialect: "alpha", liveConfig: { sans: '"Noto Serif SC"', weightDialog: 80 } }
   );
   assert.equal(host.section, null, "no section is registered on this line");
   assert.equal(host.presentations.length, 1, "the page policy was configured once");
@@ -1368,7 +1476,7 @@ await test("the alpha dialect configures the entry instead of a section", async 
     rows[0].html.includes('"Noto Serif SC"'),
     "the served row carries the entry's live value, not only the base layer"
   );
-  assert.ok(rows[0].html.includes("font-weight:480 !important"));
+  assert.ok(rows[0].html.includes(ladderRule("h1,h2,h3", 700)));
 });
 
 await test("the schema is marked live-editable where schemastery supports it", async () => {
@@ -1406,8 +1514,8 @@ await test("a configured base layer is rendered into the row", async () => {
     sans: '"Inter"',
     sizeOffset: 2,
     sizeOffsetCode: -2,
-    weight: 500,
-    weightDialog: 460,
+    weight: 100,
+    weightDialog: 60,
     weightCode: 300,
   });
   const rows = [];
@@ -1416,14 +1524,15 @@ await test("a configured base layer is rendered into the row", async () => {
   assert.ok(html.startsWith('<style data-plugin="dsh-fonttune" data-plugin-css="dsh-fonttune">'));
   assert.ok(html.endsWith("</style>"));
   assert.match(html, /body\{font-family:"Inter" !important\}/);
-  // Following is the default, so the interface carries the conversation's 460.
-  assert.ok(html.includes("font-weight:var(--dfp-interface-weight,460) !important"), "the conversation weight renders");
+  // Following is the default, so the interface carries the conversation's +60.
+  assert.ok(html.includes(":root,body{--dfp-wdelta:60}"), "the conversation offset renders");
+  assert.ok(html.includes(ladderRule("h1,h2,h3", 700)), "the conversation ladder renders");
   assert.equal(
-    html.includes("font-weight:var(--dfp-interface-weight,500) !important"),
+    html.includes("--dfp-wdelta:100"),
     false,
-    "the interface's own 500 is overridden while following"
+    "the interface's own +100 is overridden while following"
   );
-  assert.match(html, /font-weight:300 !important/);
+  assert.match(html, /--dfp-wdelta:-100/, "the legacy absolute 300 becomes the -100 code offset");
   assert.match(html, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 0\.875\)/);
   assert.equal(
     html.includes("--dsw-font-s-14-font-size:"),
@@ -1431,11 +1540,11 @@ await test("a configured base layer is rendered into the row", async () => {
     "the retired interface size axis injects nothing into the row"
   );
   // The interface weight rule reaches the chrome through the element table (the
-  // dialog owns a weight here, so the guard is dropped), and the conversation
-  // keeps its own weight through the markdown-scoped rule.
+  // conversation owns an offset here, so the guard is dropped), and the
+  // conversation keeps its own offset through the markdown-scoped ladder.
   assert.ok(
     html.includes(
-      "body,body :where(" + shared.WEIGHT_ELEMENT_TABLE + "){font-weight:var(--dfp-interface-weight,460) !important}"
+      "body,body :where(" + shared.WEIGHT_ELEMENT_TABLE + "){font-weight:" + ladder(400) + " !important}"
     )
   );
   assert.ok(html.includes('[class*="_markdown_" i]'));
@@ -1454,8 +1563,16 @@ await test("the host schema accepts real stacks and refuses bad ones", async () 
   assert.throws(() => schema({ sizeOffsetCode: 99 }));
   assert.throws(() => schema({ sizeOffsetCode: -99 }));
   assert.throws(() => schema({ weight: 900 }));
+  assert.throws(() => schema({ weight: -301 }));
   assert.throws(() => schema({ weightCode: 900 }));
-  assert.throws(() => schema({ weightCode: -1 }));
+  assert.throws(() => schema({ weightCode: -301 }));
+  // The weight axes accept the legacy ABSOLUTE window as well, and the
+  // normalizer converts it: a document written before the axes became relative
+  // must still resolve, or the card would break on an existing install.
+  assert.equal(module.plainConfigValue(schema({ weight: 480, weightDialog: 460 })).weight, 480);
+  assert.equal(shared.normalizeConfig(module.plainConfigValue(schema({ weight: 480 }))).weight, 80);
+  assert.equal(shared.normalizeConfig(module.plainConfigValue(schema({ weightDialog: 460 }))).weightDialog, 60);
+  assert.equal(shared.normalizeConfig(module.plainConfigValue(schema({ weightCode: 450 }))).weightCode, 50);
   assert.throws(() => schema({ sans: "a;b{}" }), "a declaration-breaking stack must be refused");
   const defaults = module.plainConfigValue(schema({}));
   assert.equal(defaults.sans, "");
@@ -1585,8 +1702,8 @@ await test("applies the saved configuration to one style tag", async () => {
       mono: "",
       sizeOffset: 2,
       sizeOffsetCode: 1,
-      weight: 500,
-      weightDialog: 460,
+      weight: 100,
+      weightDialog: 60,
       weightCode: 300,
     },
     user: { sans: '"Inter"' },
@@ -1597,12 +1714,13 @@ await test("applies the saved configuration to one style tag", async () => {
   const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
   assert.ok(tag, "the plugin must inject its stylesheet");
   assert.match(tag.textContent, /body\{font-family:"Inter" !important\}/);
-  assert.ok(tag.textContent.includes("font-weight:460 !important"), "the conversation weight renders");
-  assert.match(tag.textContent, /font-weight:300 !important/);
+  assert.ok(tag.textContent.includes(":root,body{--dfp-wdelta:60}"), "the conversation offset renders");
+  assert.ok(tag.textContent.includes(ladderRule("h1,h2,h3", 700)), "the conversation ladder renders");
+  assert.match(tag.textContent, /--dfp-wdelta:-100/, "the code offset reaches the style tag");
   assert.equal(
-    tag.textContent.includes("font-weight:500 !important"),
+    tag.textContent.includes("--dfp-wdelta:100"),
     false,
-    "the retired interface weight renders nothing"
+    "the interface's own offset is overridden while following"
   );
   assert.match(tag.textContent, /--dsw-font-markdown-code-block:calc\(\(11px\) \* 1\.0625\)/);
   assert.equal(
@@ -1670,18 +1788,19 @@ await test("the browser half adopts the served first-frame stylesheet", async ()
 });
 
 await test("dropping a rule actually removes it from the page", async () => {
-  const scope = createScope({ value: { weight: 480, uiFollowsDialog: false } });
+  const scope = createScope({ value: { weight: 100, uiFollowsDialog: false } });
   resetDom();
   const { ctx } = cardContext(scope);
   await loadClientBundle(ctx);
   const tag = () => globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
-  assert.ok(tag().textContent.includes("font-weight:var(--dfp-interface-weight,480) !important"));
+  assert.ok(tag().textContent.includes(":root,body{--dfp-wdelta:100}"));
+  assert.ok(tag().textContent.includes("font-weight:" + ladder(400) + " !important"));
   // The user resets the interface weight: with the two-copy layout this is the
   // exact case that used to keep applying the old value until a reload.
   scope.publish({ value: { weight: 0, uiFollowsDialog: false } });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(
-    tag().textContent.includes("font-weight:var(--dfp-interface-weight,480) !important"),
+    tag().textContent.includes("--dfp-wdelta:100"),
     false,
     "the reset must empty the injected rule"
   );
@@ -2002,11 +2121,19 @@ await test("the dialog weight stays out of code surfaces", () => {
   const css = shared.buildFontCss({
     sans: '"Inter"',
     stackDialog: '"Noto Serif SC"',
-    weight: 500,
-    weightDialog: 430,
+    weight: 180,
+    weightDialog: 30,
   });
-  assert.ok(css.includes("font-weight:430 !important"), "the dialog weight rule exists");
-  assert.ok(css.indexOf("font-weight:430") > css.indexOf("font-weight:500"), "dialog wins over interface");
+  assert.ok(css.includes("--dfp-wdelta:30"), "the conversation offset rule exists");
+  // The interface offset is the one the conversation does NOT take, and the
+  // code surfaces pin the variable to zero (no code weight is set here), so an
+  // element inside a code block inherits the code's own weight instead.
+  assert.ok(css.includes(":root,body{--dfp-wdelta:30}"), "follow hands the conversation's offset to the interface");
+  assert.ok(css.includes("{font-weight:normal !important;--dfp-wdelta:0}"), "code pins the offset to zero");
+  assert.ok(
+    css.indexOf("--dfp-wdelta:30") < css.indexOf("--dfp-wdelta:0"),
+    "the code rules come after the conversation's, so code wins"
+  );
 });
 
 await test("the retired interface line-height injects nothing", () => {
@@ -2057,13 +2184,17 @@ await test("dark per-theme values prefix their own rules", () => {
   const css = shared.buildFontCss({
     sans: '"Inter"',
     perTheme: true,
-    darkValues: JSON.stringify({ weightDialog: 500, sizeOffsetDialog: 2 }),
+    darkValues: JSON.stringify({ weightDialog: 160, sizeOffsetDialog: 2 }),
   });
   assert.ok(
     css.includes("body[data-ds-dark-theme] [class*=\"_markdown_\""),
     "the dark conversation weight is prefixed"
   );
-  assert.ok(css.includes("font-weight:500 !important"), "the dark weight value renders");
+  assert.ok(css.includes("--dfp-wdelta:160"), "the dark weight offset renders");
+  assert.ok(
+    css.split("\n").some((rule) => rule.startsWith("body[data-ds-dark-theme]") && rule.includes("--dfp-wdelta:160")),
+    "and it rides a dark-prefixed rule"
+  );
   assert.match(
     css,
     /body\[data-ds-dark-theme\]\{[^}]*--dsh-content-font-size:calc\(\(14px\) \+ 2px\)/,
@@ -2073,7 +2204,7 @@ await test("dark per-theme values prefix their own rules", () => {
   const none = shared.buildFontCss({ sans: '"Inter"', perTheme: true, darkValues: "{}" });
   assert.equal(none.includes("body[data-ds-dark-theme]"), false);
   // Per-theme off ignores the stored map entirely.
-  const off = shared.buildFontCss({ sans: '"Inter"', perTheme: false, darkValues: JSON.stringify({ weightDialog: 500 }) });
+  const off = shared.buildFontCss({ sans: '"Inter"', perTheme: false, darkValues: JSON.stringify({ weightDialog: 160 }) });
   assert.equal(off.includes("body[data-ds-dark-theme]"), false);
 });
 
@@ -2104,13 +2235,116 @@ await test("the interface-follow flag defaults on and stores off", () => {
   assert.equal(set.uiFollowsDialog, false);
 });
 
+await test("the weight slider's range and notch come from the family", () => {
+  // A family can only be made as light or as heavy as the faces it ships, so the
+  // slider spans the reachable weights and steps between them; that is also what
+  // makes every notch a change instead of a stretch of nothing.
+  const profile = (sample, options) => shared.weightProfileFrom(sample, options);
+  // A variable axis: every weight renders differently, so the slider covers the
+  // whole probe window in single units.
+  const continuous = profile((weight) => "w" + weight);
+  assert.equal(continuous.step, 1, "a continuous family keeps single units");
+  assert.equal(continuous.min, -300, "and reaches down to the probe floor");
+  assert.equal(continuous.max, 500, "and up to the probe ceiling");
+  // Six named faces (a 300 hairline up to a 900 black), each requested weight
+  // rounded to the nearest cut: the range stops where the faces stop, and only
+  // steps of 100 always land on a different one.
+  const faces = (weight) => {
+    if (weight <= 350) return "300";
+    if (weight <= 450) return "400";
+    if (weight <= 550) return "500";
+    if (weight <= 650) return "600";
+    if (weight <= 750) return "700";
+    return "900";
+  };
+  const named = profile(faces);
+  assert.equal(named.step, 100, "one notch per face");
+  assert.equal(named.min, -100, "down to the lightest face");
+  assert.equal(named.max, 400, "up to the heaviest face, with no dead notch above it");
+  // Faces every 25 units: the finer step is found and kept.
+  const fine = profile((weight) => "f" + Math.floor(weight / 25));
+  assert.equal(fine.step, 25);
+  // Regular and bold only (what a two-face CJK family such as SimSun renders):
+  // the range is exactly the two faces, and the notch is the whole jump, so
+  // there is no dead position in between.
+  const pair = profile((weight) => (weight >= 600 ? "bold" : "regular"));
+  assert.deepEqual(pair, { min: 0, max: 200, step: 200 }, "two faces, two positions");
+  // One face and no synthesis: every request renders the same thing, so there is
+  // nothing to slide — the neutral position is the whole range, not a crash.
+  const flat = profile(() => "same");
+  assert.deepEqual(flat, { min: 0, max: 0, step: 1 }, "a family that never changes has no range");
+  // The hard bounds cap whatever a font claims.
+  const capped = profile((weight) => "w" + weight, { floor: -100, ceil: 200 });
+  assert.equal(capped.min, -100);
+  assert.equal(capped.max, 200);
+});
+
+await test("a weight offset turns into the step count the slider shows", () => {
+  // The control counts the family's steps ("-2 -1 0 +1 +2 +3 +4") while the
+  // document keeps storing a weight offset, so the two have to agree exactly.
+  const sixSteps = { min: -200, max: 400, step: 100 };
+  assert.deepEqual(shared.weightStepRange(sixSteps, 0), { min: -2, max: 4, unit: 100, value: 0 });
+  assert.deepEqual(shared.weightStepRange(sixSteps, 100).value, 1);
+  assert.deepEqual(shared.weightStepRange(sixSteps, 400).value, 4);
+  assert.deepEqual(shared.weightStepRange(sixSteps, -200).value, -2);
+  // An unaligned legacy value reads as the nearest step it renders like.
+  assert.equal(shared.weightStepRange(sixSteps, 80).value, 1);
+  assert.equal(shared.weightStepRange(sixSteps, -60).value, -1);
+  // A value outside the measured range widens the control instead of becoming
+  // unreachable (the font may have changed since it was written).
+  assert.deepEqual(shared.weightStepRange(sixSteps, 600), { min: -2, max: 6, unit: 100, value: 6 });
+  assert.deepEqual(shared.weightStepRange(sixSteps, -400), { min: -4, max: 4, unit: 100, value: -4 });
+  // A two-face family counts in halves of the old range; a continuous one in
+  // single weight units.
+  assert.deepEqual(shared.weightStepRange({ min: 0, max: 200, step: 200 }, 200), {
+    min: 0,
+    max: 1,
+    unit: 200,
+    value: 1,
+  });
+  assert.equal(shared.weightStepRange({ min: -300, max: 500, step: 1 }, 250).value, 250);
+  // Nothing slides: the neutral position is the whole range.
+  assert.deepEqual(shared.weightStepRange({ min: 0, max: 0, step: 1 }, 0), {
+    min: 0,
+    max: 0,
+    unit: 1,
+    value: 0,
+  });
+});
+
+await test("a slider keeps the value being dragged when an older write confirms", () => {
+  // The race behind "it jumps somewhere else while I adjust": the document write
+  // is debounced and can land seconds later, so a confirmation for the PREVIOUS
+  // commit arrives after a new drag has already started. The local value must
+  // survive it — dropping it moved the thumb back to the old value mid-drag.
+  const step = (state, confirmed) =>
+    shared.reconcileSliderValue({
+      pending: state.pending,
+      awaiting: state.awaiting,
+      confirmed: confirmed,
+    });
+  // Idle: nothing to drop.
+  assert.deepEqual(step({ pending: null, awaiting: null }, 5), { pending: null, awaiting: null });
+  // Normal flow: released 3, the document echoes 3 → the local copy is dropped.
+  assert.deepEqual(step({ pending: 3, awaiting: 3 }, 3), { pending: null, awaiting: null });
+  // The regression case: released 3, started dragging 7, then 3 confirms.
+  assert.deepEqual(step({ pending: 7, awaiting: 3 }, 3), { pending: 7, awaiting: null });
+  // An unrelated outside value (another page, a reset) arriving mid-drag: kept.
+  assert.deepEqual(step({ pending: 7, awaiting: null }, 5), { pending: 7, awaiting: null });
+  // An outside value that already equals what is on screen: nothing to hold.
+  assert.deepEqual(step({ pending: 7, awaiting: null }, 7), { pending: null, awaiting: null });
+  // A refused write never echoes; the value stays until the patience runs out
+  // (the component clears its own copy after a few seconds).
+  assert.deepEqual(step({ pending: 9, awaiting: 9 }, 4), { pending: 9, awaiting: 9 });
+});
+
 await test("the interface borrows the conversation's family", () => {
   const tokens = { "--dsw-font-family": "system-ui" };
   const config = {
     sans: '"Inter"',
     stackDialog: '"Noto Serif SC"',
-    weight: 500,
-    weightDialog: 430,
+    weight: 100,
+    weightDialog: 30,
     sizeOffset: 2,
   };
   // Following (the default): the conversation leads the shared family.
@@ -2120,16 +2354,16 @@ await test("the interface borrows the conversation's family", () => {
     "the interface takes the conversation family"
   );
   assert.equal(
-    following.includes("font-weight:500 !important"),
+    following.includes("--dfp-wdelta:100"),
     false,
-    "the retired interface weight is inert"
+    "the interface's own offset is overridden while following"
   );
-  assert.ok(following.includes("font-weight:430 !important"), "the conversation weight renders");
+  assert.ok(following.includes(":root,body{--dfp-wdelta:30}"), "the conversation offset leads");
   // Not following: the interface keeps its own family, the conversation is scoped.
   const split = shared.buildFontCss({ ...config, uiFollowsDialog: false }, tokens);
   assert.ok(split.includes('--dsw-font-family:"Inter"'), "the interface keeps its own family");
   assert.ok(split.includes('font-family:"Noto Serif SC" !important'), "the conversation is scoped");
-  assert.ok(split.includes("font-weight:430 !important"), "the conversation keeps its own weight");
+  assert.ok(split.includes(":root,body{--dfp-wdelta:100}"), "the interface keeps its own offset");
   // The retired interface size axis reaches nothing in either mode.
   assert.equal(split.includes("--dsh-content-font-size:"), false);
   assert.equal(following.includes("--dsh-content-font-size:"), false);
@@ -2153,17 +2387,84 @@ await test("the conversation offset rides the official content size once", () =>
   assert.equal(css.includes("+ 5px"), false, "the retired interface offset is not added on top");
 });
 
+await test("an expanded heading size is never shifted a second time", () => {
+  // The reported asymmetry: the page also carries `--dsw-font-markdown-h1` with
+  // its var() ALREADY substituted (`calc(21px + -2px)`), which reads exactly
+  // like a literal — so a value test let h1/h2 take the offset a second time
+  // while h3, still `calc(18px + var(…))`, did not. The whitelist is by NAME,
+  // so none of the derived names is re-declared whatever their value looks like.
+  const expanded = {
+    "--dsh-content-font-size": "14px",
+    "--dsh-content-font-delta": "calc(var(--dsh-content-font-size,14px) - 14px)",
+    "--dsw-font-markdown-h1": "700 calc(21px + -2px) / calc(30px + -2px) var(--dsw-font-family)",
+    "--dsw-font-markdown-h1-font-size": "calc(21px + -2px)",
+    "--dsw-font-markdown-h2": "700 calc(19px + -2px) / calc(28px + -2px) var(--dsw-font-family)",
+    "--dsw-font-markdown-h2-font-size": "calc(19px + -2px)",
+    "--dsw-font-markdown-h3-font-size": "calc(18px + var(--dsh-content-font-delta))",
+    "--dsw-font-markdown-base": "var(--dsh-content-font-size,14px) / calc(24px + var(--dsh-content-font-delta)) var(--dsw-font-family)",
+    "--dsw-font-markdown-small": "12px/20px var(--dsw-font-family)",
+    "--dsw-font-markdown-small-font-size": "12px",
+  };
+  const css = shared.buildFontCss({ sizeOffsetDialog: -2 }, expanded);
+  for (const name of [
+    "--dsw-font-markdown-h1",
+    "--dsw-font-markdown-h2",
+    "--dsw-font-markdown-h3",
+    "--dsw-font-markdown-base",
+  ]) {
+    assert.equal(css.includes(name), false, `${name} derives from the chain and must not be re-declared`);
+  }
+  // The source still shifts — once — and the literal family still follows it.
+  assert.ok(css.includes("--dsh-content-font-size:calc((14px) + -2px) !important"));
+  assert.ok(css.includes("--dsw-font-markdown-small-font-size:calc((12px) + -2px) !important"));
+  assert.ok(
+    css.includes("--dsw-font-markdown-small:calc((12px) + -2px) / 20px var(--dsw-font-family) !important"),
+    "the literal shorthand rebuilds with the shifted size"
+  );
+  // The ladder itself is derived, so a BOLD offset never rebuilds a size either.
+  const bold = shared.buildFontCss({ weightDialog: 60 }, expanded);
+  assert.equal(bold.includes("--dsw-font-markdown-h1"), false);
+});
+
+await test("a weight offset lands on each group's own base, clamped", () => {
+  // The offset is ADDED to the weight DSH gives the group, then clamped to the
+  // legal range (below 100 the value is invalid, above 900 the font ignores it),
+  // so the hierarchy survives every offset in both directions.
+  const resolve = (base, delta) => Math.min(900, Math.max(100, base + delta));
+  for (const delta of [shared.WEIGHT_DELTA_MIN, -40, 60, shared.WEIGHT_DELTA_MAX]) {
+    const css = shared.buildFontCss({ weightDialog: delta });
+    for (const group of shared.DIALOG_WEIGHT_GROUPS) {
+      assert.ok(css.includes(ladderRule(group.elements, group.base)), `${group.elements} at ${delta}`);
+      const value = resolve(group.base, delta);
+      assert.ok(value >= 100 && value <= 900, `${group.elements} stays legal at ${delta}`);
+    }
+    assert.ok(css.includes("--dfp-wdelta:" + delta), `the offset itself is pinned at ${delta}`);
+  }
+  // The order the reported bug broke: headings above bold text above the table
+  // head above body text, at both ends of the range.
+  for (const delta of [shared.WEIGHT_DELTA_MIN, shared.WEIGHT_DELTA_MAX]) {
+    assert.ok(resolve(700, delta) > resolve(600, delta), "h1..h3 stay above h4..h6/strong");
+    assert.ok(resolve(600, delta) > resolve(500, delta), "bold text stays above the table head");
+    assert.ok(resolve(500, delta) > resolve(400, delta), "the table head stays above body text");
+  }
+  // Zero is the neutral value: it injects NO weight rule at all, so a stored
+  // document that happens to carry 0 is indistinguishable from an empty one.
+  assert.equal(shared.buildFontCss({ weightDialog: 0 }).includes("font-weight"), false);
+  assert.equal(shared.buildFontCss({ weight: 0, uiFollowsDialog: false }).includes("font-weight"), false);
+});
+
 await test("the conversation keeps its own axes while the interface follows", () => {
   const css = shared.buildFontCss({
     sans: '"Inter"',
     stackDialog: '"Noto Serif SC"',
-    weight: 500,
-    weightDialog: 430,
+    weight: 100,
+    weightDialog: 30,
     sizeOffsetDialog: 2,
     lineHeightDialog: 140,
   });
   assert.ok(css.includes('font-family:"Noto Serif SC" !important'), "the shared family rule exists");
-  assert.ok(css.includes("font-weight:430 !important"), "the conversation weight leads");
+  assert.ok(css.includes(":root,body{--dfp-wdelta:30}"), "the conversation offset leads");
+  assert.ok(css.includes(ladderRule("h1,h2,h3", 700)), "and it rides the ladder");
   assert.ok(css.includes("--dsh-content-font-size:calc((14px) + 2px)"), "its own size rides the official base");
   assert.ok(css.includes("* 1.4)"), "its own line-height rebuilds the shorthand heights");
 });
@@ -2201,20 +2502,20 @@ await test("a retired axis is stored but is not a value axis", () => {
     assert.equal(shared.DURABLE_FIELDS.includes(field), true, `${field} is still durable`);
     assert.equal(shared.normalizeValueSet({ [field]: 3 })[field], undefined);
   }
-  const config = shared.normalizeConfig({ sizeOffset: 3, lineHeight: 140, weightDialog: 480 });
+  const config = shared.normalizeConfig({ sizeOffset: 3, lineHeight: 140, weightDialog: 80 });
   assert.equal(config.sizeOffset, 3, "an old document keeps its stored value");
   assert.equal(config.lineHeight, 140);
-  assert.equal(config.weightDialog, 480);
+  assert.equal(config.weightDialog, 80);
   assert.equal(shared.buildFontCss({ sizeOffset: 3, lineHeight: 140 }), "", "and renders nothing");
   // A light/dark pair that differs only in a retired axis is ONE set.
   const css = shared.buildFontCss({
-    weightDialog: 460,
+    weightDialog: 60,
     perTheme: true,
     darkValues: JSON.stringify({ sizeOffset: 5, lineHeight: 150 }),
   });
   assert.equal(css.includes("data-ds-dark-theme"), false, "no dark copy is emitted");
   assert.equal(
-    css.split(".dfp-previewDialog{font-weight:460 !important}").length - 1,
+    css.split(".dfp-previewDialog{--dfp-wdelta:60;font-weight:" + ladder(400) + " !important}").length - 1,
     1,
     "exactly one set came out"
   );

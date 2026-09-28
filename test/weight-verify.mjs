@@ -13,11 +13,21 @@
  * paragraphs / strong / headings inside it — inside the REAL page, with DSH's
  * real stylesheets loaded, and reads back the computed weight of each.
  *
- * The interface axis is the one that has to reach the whole page, so its rule
- * is `body, body *` with the conversation markdown subtree excluded. That
- * exclusion is measured here directly: the script disables the plugin's own
- * style tags for one frame and counts how many page elements the injected CSS
- * moved, split into "inside a markdown container" and "outside".
+ * All three weight axes are OFFSETS on each element's own weight (DSH keeps 700
+ * for h1..h3, 600 for h4..h6/strong, 500 for `th` and 400 for the rest inside its
+ * `font` shorthands, and 400 for the code surfaces).
+ * The checks below therefore expect `base + offset`, and two of them exist
+ * purely to catch a regression to a flat `font-weight` over the markdown scope,
+ * which used to erase that hierarchy in one direction and invert it in the
+ * other. The probe container carries both the real markdown class and the
+ * `data-dss-prose` hint, because that attribute is what the conversation ladder
+ * is scoped by.
+ *
+ * The interface axis is the one that has to reach the whole page, so its rule is
+ * `body` plus an element table with the conversation markdown subtree excluded.
+ * That exclusion is measured here directly: the script counts how many page
+ * elements the injected CSS moved, split into "inside a markdown container" and
+ * "outside".
  *
  * The namespace's original user layer is restored before the process exits.
  */
@@ -258,11 +268,13 @@ const main = async () => {
    *
    * Every probe element copies the `font` shorthand DSH's own stylesheet gives
    * that surface, so the weight under test is the one the real cascade produces
-   * — plus a `<span>` inside a block and inside the terminal, because the body
-   * axis is a blanket `body, body *` rule that would otherwise win on every
-   * descendant. The conversation block uses the markdown container class the
-   * shipped stylesheet actually declares, so the exclusion is exercised against
-   * the real selector.
+   * — plus a `<span>` inside a block and inside the terminal, because the
+   * interface rule reaches those through its element table. The conversation
+   * block carries BOTH scopes: the real markdown container class (so DSH's own
+   * markdown `font` shorthands apply, which is where the 700/600/500/400 bases
+   * live) and `data-dss-prose`, which is the hint the plugin harvests for its
+   * conversation ladder — without it the ladder would not match a detached
+   * probe and the headings would read DSH's own weights instead of base+offset.
    */
   const measure = () =>
     evalJs(`(() => {
@@ -288,7 +300,7 @@ const main = async () => {
         '<div id="w-cm" class="cm-editor" style="font: var(--dsw-font-markdown-code-block)">editor</div>' +
         (containerClass === null
           ? ""
-          : '<div class="' + containerClass + '" id="w-conv-host">' +
+          : '<div class="' + containerClass + '" data-dss-prose id="w-conv-host">' +
             '<p id="w-conv">paragraph</p><strong id="w-conv-strong">strong</strong>' +
             '<h2 id="w-conv-h2">heading</h2><code id="w-conv-code">inline</code></div>');
       document.body.appendChild(host);
@@ -343,10 +355,12 @@ const main = async () => {
       }
       const host = document.createElement("div");
       host.id = "dfp-dist";
+      // data-dss-prose on the probe container for the same reason as in
+      // measure(): it is the scope the conversation ladder hangs on.
       host.innerHTML =
         (containerClass === null
           ? ""
-          : '<div class="' + containerClass + '" id="dfp-dist-md">' +
+          : '<div class="' + containerClass + '" data-dss-prose id="dfp-dist-md">' +
             '<p id="dfp-dist-md-p">p</p><strong id="dfp-dist-md-strong">s</strong>' +
             '<h2 id="dfp-dist-md-h2">h</h2><code id="dfp-dist-md-code">c</code></div>') +
         '<p id="dfp-dist-ui">interface</p><p id="dfp-dist-ui-nested"><span>nested</span></p>';
@@ -435,8 +449,14 @@ const main = async () => {
   /**
    * Apply one weight combination (after a reload, so the state is
    * self-consistent). Follow is switched off so each of the three axes stands on
-   * its own value; the last step turns it back on to check what following hands
+   * its own value; the last steps turn it back on to check what following hands
    * the interface.
+   *
+   * All three weight axes are OFFSETS on each element's own weight (range
+   * −100…+200, 0 = leave it alone). The expected computed values below are
+   * therefore `base + offset`: 700 for h1..h3, 600 for h4..h6/strong, 500 for th,
+   * 400 for everything else in the conversation, and 400 for the interface and
+   * for the code surfaces.
    */
   const step = async (label, weight, weightCode, weightDialog, follows) => {
     const result = await mutate([
@@ -449,11 +469,11 @@ const main = async () => {
     await sleep(9000);
     const seen = JSON.parse(await measure());
     const split = JSON.parse(await distribution());
-    console.log(`\n${label} (interface ${weight}, code ${weightCode}, conversation ${weightDialog}, follows ${follows})`);
+    console.log(`\n${label} (interface offset ${weight}, code ${weightCode}, conversation offset ${weightDialog}, follows ${follows})`);
     console.log("  user layer:", result);
     console.log(
       `  interface=${seen.body}/${seen.bodySpan} | code pre=${seen.pre} inline=${seen.inline} tool=${seen.tool} terminal=${seen.terminal} editor=${seen.editor}` +
-        ` | conversation=${seen.conv}/${seen.convStrong}/${seen.convH2} code=${seen.convCode}`
+        ` | conversation p=${seen.conv} strong=${seen.convStrong} h2=${seen.convH2} code=${seen.convCode}`
     );
     console.log(
       `  injected css: ${seen.ourCss} B | probe weights interface ${JSON.stringify(split.probe.byWeight)} markdown ${JSON.stringify(split.probe.markdownByWeight)}`
@@ -465,11 +485,12 @@ const main = async () => {
   };
 
   const base = await step("baseline", 0, 0, 0, false);
-  const bodyOnly = await step("interface only", 560, 0, 0, false);
-  const codeOnly = await step("code only", 0, 320, 0, false);
-  const both = await step("interface + code", 560, 320, 0, false);
-  const conversationOnly = await step("conversation only", 0, 0, 480, false);
-  const following = await step("following the conversation", 380, 0, 480, true);
+  const bodyOnly = await step("interface only", 160, 0, 0, false);
+  const codeOnly = await step("code only", 0, -80, 0, false);
+  const both = await step("interface + code", 160, -80, 0, false);
+  const conversationOnly = await step("conversation only", 0, 0, 180, false);
+  const lighter = await step("lighter conversation", 0, 0, -100, false);
+  const following = await step("following the conversation", -60, 0, 180, true);
 
   // The two-copy trap: the served first-frame stylesheet is only rebuilt on the
   // next index render, so before the browser half started adopting it, a switch
@@ -478,7 +499,7 @@ const main = async () => {
   console.log("\nwithout a reload: following on -> off");
   await mutate([
     { op: "set", path: ["weight"], value: 0 },
-    { op: "set", path: ["weightDialog"], value: 480 },
+    { op: "set", path: ["weightDialog"], value: 180 },
     { op: "set", path: ["uiFollowsDialog"], value: true },
   ]);
   await send("Page.navigate", { url });
@@ -496,6 +517,8 @@ const main = async () => {
   const CODE_KEYS = ["pre", "preSpan", "inline", "tool", "terminal", "termSpan", "editor"];
   const CONV_KEYS = ["conv", "convStrong", "convH2"];
   const sameWeights = (left, right, keys) => keys.every((key) => left[key] === right[key]);
+  /** The weight one base group must resolve to for a given offset. */
+  const at = (baseWeight, offset) => String(Math.min(900, Math.max(100, baseWeight + offset)));
   check(
     "the baseline leaves DSH's own weights alone",
     base.body === base.pre && base.pre === base.inline,
@@ -507,70 +530,101 @@ const main = async () => {
     String(base.containerClass)
   );
   check(
-    "a code-only weight moves every code surface",
-    CODE_KEYS.every((key) => codeOnly[key] === "320"),
+    "a code offset moves every code surface",
+    CODE_KEYS.every((key) => codeOnly[key] === at(400, -80)),
     CODE_KEYS.map((key) => `${key}=${codeOnly[key]}`).join(" ")
   );
   check(
-    "a code-only weight leaves body text alone",
+    "a code offset leaves body text alone",
     codeOnly.body === base.body && codeOnly.bodySpan === base.bodySpan,
     `${codeOnly.body} / ${codeOnly.bodySpan}`
   );
   check(
-    "an interface-only weight moves the interface, not the conversation",
-    bodyOnly.body === "560" &&
-      bodyOnly.bodySpan === "560" &&
+    "an interface offset moves the interface, not the conversation",
+    bodyOnly.body === at(400, 160) &&
+      bodyOnly.bodySpan === at(400, 160) &&
       sameWeights(bodyOnly, base, CONV_KEYS) &&
       bodyOnly.convCode === base.convCode,
     `interface=${bodyOnly.body} conversation=${CONV_KEYS.map((key) => `${key}=${bodyOnly[key]}`).join(" ")}`
   );
   check(
-    "an interface-only weight moves interface elements and nothing inside markdown",
-    (bodyOnly.split.page.byWeight["560"] ?? 0) > 20 &&
-      (bodyOnly.split.probe.byWeight["560"] ?? 0) >= 3 &&
+    "an interface offset moves interface elements and nothing inside markdown",
+    (bodyOnly.split.page.byWeight[at(400, 160)] ?? 0) > 20 &&
+      (bodyOnly.split.probe.byWeight[at(400, 160)] ?? 0) >= 3 &&
       Object.keys(bodyOnly.split.probe.byWeight).length === 1 &&
       JSON.stringify(bodyOnly.split.probe.markdownByWeight) ===
         JSON.stringify(base.split.probe.markdownByWeight) &&
-      bodyOnly.split.probe.markdownByWeight["560"] === undefined &&
-      bodyOnly.split.page.markdownByWeight["560"] === undefined,
+      bodyOnly.split.probe.markdownByWeight[at(400, 160)] === undefined &&
+      bodyOnly.split.page.markdownByWeight[at(400, 160)] === undefined,
     `probe interface=${JSON.stringify(bodyOnly.split.probe.byWeight)} probe markdown=${JSON.stringify(bodyOnly.split.probe.markdownByWeight)}` +
-      ` page interface@560=${bodyOnly.split.page.byWeight["560"] ?? 0} page markdown@560=${bodyOnly.split.page.markdownByWeight["560"] ?? 0}`
+      ` page interface@${at(400, 160)}=${bodyOnly.split.page.byWeight[at(400, 160)] ?? 0} page markdown@${at(400, 160)}=${bodyOnly.split.page.markdownByWeight[at(400, 160)] ?? 0}`
   );
   check(
     "a dormant weight leaves both histograms at DSH's own values",
-    base.split.page.byWeight["560"] === undefined &&
-      base.split.probe.byWeight["560"] === undefined &&
+    base.split.page.byWeight[at(400, 160)] === undefined &&
+      base.split.probe.byWeight[at(400, 160)] === undefined &&
       (base.split.page.byWeight["400"] ?? 0) > 20,
     `page=${JSON.stringify(base.split.page.byWeight)}`
   );
   check(
-    "an interface weight takes code back out when the code axis is unset",
+    "an interface offset takes code back out when the code axis is unset",
     CODE_KEYS.every((key) => bodyOnly[key] === base[key]),
     CODE_KEYS.map((key) => `${key}=${bodyOnly[key]}`).join(" ")
   );
   check(
-    "a conversation-only weight moves the conversation, not the interface",
-    conversationOnly.conv === "480" &&
-      conversationOnly.convStrong === "480" &&
+    "a conversation offset moves the conversation, not the interface",
+    conversationOnly.conv === at(400, 180) &&
+      conversationOnly.convStrong === at(600, 180) &&
+      conversationOnly.convH2 === at(700, 180) &&
       conversationOnly.body === base.body &&
       conversationOnly.pre === base.pre,
     `conversation=${conversationOnly.conv} interface=${conversationOnly.body}`
   );
+  // The regression this verifier exists for: a flat weight on the markdown
+  // scope used to erase the heading hierarchy (DSH keeps 700/600/500 inside its
+  // `font` shorthands, and an `!important` long-hand beat them). With the
+  // ladder, every group keeps its own base plus the offset — in BOTH directions.
+  check(
+    "the conversation keeps its hierarchy at a positive offset",
+    Number(conversationOnly.convH2) > Number(conversationOnly.convStrong) &&
+      Number(conversationOnly.convStrong) > Number(conversationOnly.conv) &&
+      conversationOnly.convH2 === at(700, 180) &&
+      conversationOnly.conv === at(400, 180),
+    `h2=${conversationOnly.convH2} strong=${conversationOnly.convStrong} p=${conversationOnly.conv}`
+  );
+  check(
+    "the conversation keeps its hierarchy at a negative offset",
+    Number(lighter.convH2) > Number(lighter.convStrong) &&
+      Number(lighter.convStrong) > Number(lighter.conv) &&
+      lighter.convH2 === at(700, -100) &&
+      lighter.convStrong === at(600, -100) &&
+      lighter.conv === at(400, -100),
+    `h2=${lighter.convH2} strong=${lighter.convStrong} p=${lighter.conv}`
+  );
+  check(
+    "an offset never leaves the legal weight range",
+    [lighter, conversationOnly, following].every((seen) =>
+      [seen.conv, seen.convStrong, seen.convH2, seen.body].every(
+        (value) => Number(value) >= 100 && Number(value) <= 900
+      )
+    ),
+    `lighter=${lighter.convH2} conversation=${conversationOnly.convH2} following=${following.convH2}`
+  );
   check(
     "both axes at once: interface 560, code 320",
-    both.body === "560" &&
-      both.bodySpan === "560" &&
-      CODE_KEYS.every((key) => both[key] === "320") &&
+    both.body === at(400, 160) &&
+      both.bodySpan === at(400, 160) &&
+      CODE_KEYS.every((key) => both[key] === at(400, -80)) &&
       sameWeights(both, base, CONV_KEYS),
     `interface=${both.body} ` + CODE_KEYS.map((key) => `${key}=${both[key]}`).join(" ")
   );
   check(
-    "following hands the conversation's weight to the interface",
-    following.body === "480" && following.conv === "480",
+    "following hands the conversation's offset to the interface",
+    following.body === at(400, 180) && following.conv === at(400, 180),
     `interface=${following.body} conversation=${following.conv}`
   );
   check(
-    "following keeps the conversation itself on its own weight",
+    "following keeps the conversation itself on its own offset",
     sameWeights(following, conversationOnly, CONV_KEYS),
     CONV_KEYS.map((key) => `${key}=${following[key]}`).join(" ")
   );
@@ -585,8 +639,8 @@ const main = async () => {
     `on=${sheetsFollowOn.count} off=${sheetsFollowOff.count}`
   );
   check(
-    "turning following off drops the followed weight without a reload",
-    followOn.body === "480" && followOff.body === base.body && followOff.pre === base.pre,
+    "turning following off drops the followed offset without a reload",
+    followOn.body === at(400, 180) && followOff.body === base.body && followOff.pre === base.pre,
     `interface ${followOn.body} -> ${followOff.body} (baseline ${base.body})`
   );
 

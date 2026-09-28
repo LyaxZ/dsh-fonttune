@@ -64,6 +64,8 @@ var SIZE_MAX = shared.SIZE_MAX;
 var WEIGHT_MIN = shared.WEIGHT_MIN;
 var WEIGHT_MAX = shared.WEIGHT_MAX;
 var WEIGHT_UNSET = shared.WEIGHT_UNSET;
+var WEIGHT_DELTA_MIN = shared.WEIGHT_DELTA_MIN;
+var WEIGHT_DELTA_MAX = shared.WEIGHT_DELTA_MAX;
 var LINE_HEIGHT_MIN = shared.LINE_HEIGHT_MIN;
 var LINE_HEIGHT_MAX = shared.LINE_HEIGHT_MAX;
 var CODE_LINE_HEIGHT_MIN = shared.CODE_LINE_HEIGHT_MIN;
@@ -86,6 +88,9 @@ var normalizePresets = shared.normalizePresets;
 var normalizeValueSet = shared.normalizeValueSet;
 var parseStack = shared.parseStack;
 var quoteFamily = shared.quoteFamily;
+var reconcileSliderValue = shared.reconcileSliderValue;
+var weightProfileFrom = shared.weightProfileFrom;
+var weightStepRange = shared.weightStepRange;
 var resolveAxes = shared.resolveAxes;
 var sanitizeFamily = shared.sanitizeFamily;
 var isGenericFamilyName = shared.isGenericFamilyName;
@@ -113,8 +118,22 @@ var inject = ["slots", "locale"];
 var cardScope = null;
 var cardT = null;
 
-/** The weight DSH uses for body text; choosing it means "leave it alone". */
-var NEUTRAL_WEIGHT = 400;
+/**
+ * The neutral value of the two RELATIVE weight axes: an offset of zero, which
+ * means "leave every element at its own weight" and is what the slider's middle
+ * position and the "unset" state share.
+ */
+var NEUTRAL_WEIGHT = 0;
+
+/**
+ * Print a weight offset the way the slider reads it: a signed number, so `+60`
+ * and `-40` are distinguishable at a glance (plain `String(0)` for neutral).
+ * @param {number} value - the offset.
+ * @returns {string}
+ */
+function weightOffsetText(value) {
+  return value > 0 ? "+" + value : String(value);
+}
 
 /** Panel width, kept in one place because positioning reads it too. */
 var PANEL_WIDTH = 320;
@@ -283,15 +302,15 @@ var DICTS = {
       "Adds {offset} to code blocks and inline code only; the interface offset does not reach them. 0 keeps DSH's sizes.",
     "size.unit": "px",
 
-    "weight.uiLabel": "Interface font weight",
+    "weight.uiLabel": "Interface font-weight offset",
     "weight.uiHint":
-      "Sets the weight of the whole interface (sidebars, settings, buttons, headings). The conversation keeps its own.",
-    "weight.dialogLabel": "Conversation font weight",
+      "Adds to the weight of the whole interface (sidebars, settings, buttons, headings): a positive value is bolder, a negative one lighter. The conversation keeps its own. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); another font offers a different number of them.",
+    "weight.dialogLabel": "Conversation font-weight offset",
     "weight.dialogHint":
-      "Sets the weight of the conversation markdown; unset keeps DSH's own weights.",
-    "weight.codeLabel": "Code font weight",
+      "Adds to the weight of each conversation element, so headings stay bolder than body text and bold text stays bold. Unset keeps DSH's own weights. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); another font offers a different number of them.",
+    "weight.codeLabel": "Code font-weight offset",
     "weight.codeHint":
-      "Overrides code blocks, inline code and terminal output only. 400 or unset keeps DSH's own weight.",
+      "Adds to the weight of each code surface (code blocks, inline code, terminal output); 0 or unset keeps DSH's own weight. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); another font offers a different number of them.",
 
     "line.dialogLabel": "Conversation line height",
     "line.dialogHint":
@@ -427,14 +446,15 @@ var DICTS = {
       "只作用于代码块与行内代码，与界面字号互不影响；0 表示保持原样。",
     "size.unit": "px",
 
-    "weight.uiLabel": "界面字重",
+    "weight.uiLabel": "界面字重偏移",
     "weight.uiHint":
-      "设置整个界面的字重（侧栏、设置、按钮、标题）；对话 Markdown 不受影响。",
-    "weight.dialogLabel": "对话字重",
-    "weight.dialogHint": "设置对话 Markdown 的粗细；未设置时保持 DSH 原本的粗细。",
-    "weight.codeLabel": "代码字重",
+      "在整个界面自身的字重上叠加（侧栏、设置、按钮、标题）：正数更粗、负数更细；对话 Markdown 不受影响。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：换个字体，档数也会跟着变。",
+    "weight.dialogLabel": "对话字重偏移",
+    "weight.dialogHint":
+      "在每个元素自身的字重上叠加，所以标题依旧比正文粗、加粗文字依旧加粗；未设置时保持 DSH 原本的粗细。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：换个字体，档数也会跟着变。",
+    "weight.codeLabel": "代码字重偏移",
     "weight.codeHint":
-      "只覆盖代码块、行内代码与终端输出；400 或未设置表示保持 DSH 原样。",
+      "在每个代码面自身的字重上叠加（代码块、行内代码、终端输出）；0 或未设置表示保持 DSH 原样。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：换个字体，档数也会跟着变。",
 
     "line.dialogLabel": "对话行高",
     "line.dialogHint": "把对话行高整体缩放为 {ratio}；100% 表示保持 DSH 原样。",
@@ -882,6 +902,105 @@ function readDefaultFamily(name) {
 }
 
 /* ------------------------------------------------------------------ *
+ * weight granularity
+ * ------------------------------------------------------------------ */
+
+/** Sample drawn to compare two weights; mixed scripts, like the UI. */
+var WEIGHT_SAMPLE_TEXT = "对话 Aa 字重 0189";
+
+/** Canvas used for the granularity probe, created on first use. */
+var weightProbeCanvas = null;
+
+/** Cache of measured slider shapes, keyed by the resolved family stack. */
+var weightProfileCache = {};
+
+/**
+ * Render the sample at one weight and describe the result.
+ *
+ * The signature is the total ink (summed alpha) plus the advance width at high
+ * precision. Counting only fully-covered pixels would miss what a variable axis
+ * does between two named instances — a couple of units of extra alpha per glyph
+ * — and report a coarse family where the weights are in fact continuous.
+ * @param {string} stack - resolved `font-family` value.
+ * @param {number} weight - CSS weight to draw with.
+ * @returns {string} the signature; equal signatures mean identical rendering.
+ */
+function sampleWeightSignature(stack, weight) {
+  if (weightProbeCanvas === null) {
+    weightProbeCanvas = document.createElement("canvas");
+    weightProbeCanvas.width = 260;
+    weightProbeCanvas.height = 56;
+  }
+  var context = weightProbeCanvas.getContext("2d");
+  context.clearRect(0, 0, weightProbeCanvas.width, weightProbeCanvas.height);
+  context.font = weight + " 32px " + stack;
+  context.textBaseline = "top";
+  context.fillStyle = "#000";
+  context.fillText(WEIGHT_SAMPLE_TEXT, 2, 6);
+  var advance = Math.round(context.measureText(WEIGHT_SAMPLE_TEXT).width * 1000);
+  var pixels = context.getImageData(0, 0, weightProbeCanvas.width, weightProbeCanvas.height).data;
+  var ink = 0;
+  for (var index = 3; index < pixels.length; index += 4) ink += pixels[index];
+  return ink + "/" + advance;
+}
+
+/**
+ * The slider shape to use for one family: its range and its notch.
+ *
+ * A family can only be made as light or as heavy as the faces it ships, so the
+ * range is measured rather than fixed (`weightProfileFrom`), which also makes
+ * every notch a change. Measured once per family and cached; any failure (no
+ * canvas, no 2D context) falls back to the nominal window with single units.
+ * @param {string} stack - resolved `font-family` value, "" for the page default.
+ * @returns {{min: number, max: number, step: number}} the slider shape.
+ */
+function weightProfileFor(stack) {
+  var key = String(stack);
+  if (Object.prototype.hasOwnProperty.call(weightProfileCache, key)) {
+    return weightProfileCache[key];
+  }
+  var profile = { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
+  try {
+    var resolved = key === "" ? liveFamily() : key;
+    profile = weightProfileFrom(function (weight) {
+      return sampleWeightSignature(resolved, weight);
+    });
+  } catch (error) {
+    profile = { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
+  }
+  weightProfileCache[key] = profile;
+  return profile;
+}
+
+/**
+ * The family the page actually renders with, as a `font-family` value.
+ * @returns {string} the computed family, or "" when unreadable.
+ */
+function liveFamily() {
+  if (typeof document === "undefined") return "";
+  try {
+    return document.defaultView.getComputedStyle(document.body).fontFamily || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+/**
+ * The family code surfaces render with when the code axis sets none.
+ * @returns {string} the computed family, or "" when unreadable.
+ */
+function liveCodeFamily() {
+  if (typeof document === "undefined") return "";
+  try {
+    var sample = document.querySelector("pre, code, kbd, samp");
+    if (sample === null) return liveFamily();
+    return document.defaultView.getComputedStyle(sample).fontFamily || liveFamily();
+  } catch (error) {
+    return "";
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * hooks and controls
  * ------------------------------------------------------------------ */
 
@@ -1013,17 +1132,25 @@ function NumberSlider(props) {
   // (the "bounce back, then settle" the user saw), so the local value stays
   // on screen until the confirmed value arrives.
   var awaitingRef = useRef(null);
+  // The same value as `pending`, readable without a render: the reconciliation
+  // below runs from an effect that only depends on the incoming value.
+  var pendingRef = useRef(null);
+  var setLocal = function (value) {
+    pendingRef.current = value;
+    setPending(value);
+  };
   useEffect(
     function () {
-      if (awaitingRef.current === null) {
-        // idle: any value that arrives from outside (reset, another page) wins
-        setPending(null);
-        return undefined;
-      }
-      if (props.value === awaitingRef.current) {
-        awaitingRef.current = null;
-        setPending(null);
-      }
+      // `reconcileSliderValue` owns the decision (and is unit-tested): keeping
+      // the local value while the user is mid-drag is what stops a late
+      // confirmation from snapping the thumb back to the previous value.
+      var next = reconcileSliderValue({
+        pending: pendingRef.current,
+        awaiting: awaitingRef.current,
+        confirmed: props.value,
+      });
+      awaitingRef.current = next.awaiting;
+      setLocal(next.pending);
       return undefined;
     },
     [props.value]
@@ -1032,12 +1159,39 @@ function NumberSlider(props) {
     awaitingRef.current = value;
     props.onChange(value);
   };
+  /**
+   * Stop holding a value the host never confirmed.
+   *
+   * The local value is kept until the document echoes it back, which is what
+   * stops the "bounce back, then settle" flicker — but a write the host REFUSES
+   * (an out-of-range value against an older schema, a read-only deployment) never
+   * echoes, and the slider would then sit on a value the document does not have,
+   * i.e. it would look like it jumped somewhere else and stayed there. The
+   * document is the truth, so after a few seconds the local value yields to it.
+   */
+  var COMMIT_PATIENCE_MS = 6000;
+  useEffect(
+    function () {
+      if (awaitingRef.current === null) return undefined;
+      var timer = setTimeout(function () {
+        awaitingRef.current = null;
+        setLocal(null);
+      }, COMMIT_PATIENCE_MS);
+      return function () {
+        clearTimeout(timer);
+      };
+    },
+    [pending]
+  );
   useEffect(
     function () {
       if (pending === null) return undefined;
       var release = function () {
-        // one release per drag; a late pointerup must not rewrite the same value
-        if (awaitingRef.current !== null) return;
+        // One release per drag: a late pointerup must not rewrite the SAME value.
+        // The guard compares values instead of "is anything outstanding" — a
+        // commit still waiting for the document must not swallow the next drag's
+        // release, which silently dropped that adjustment on a slow host.
+        if (awaitingRef.current === pending) return;
         commit(pending);
       };
       window.addEventListener("pointerup", release, true);
@@ -2017,10 +2171,18 @@ function SimpleFamilyField(props) {
  * @param {boolean} uiFollows - whether the interface follows the conversation.
  * @param {(key: string, params?: object) => string} t - translate seat.
  * @returns {{ui: string, dialog: string, code: string}}
+ * @param {(field: string, value: number) => number} [weightCount] - turns a
+ *   stored weight offset into the number of font steps the sliders show, so a
+ *   collapsed section reads "+2" exactly like the open slider does.
  */
-function sectionSummaries(axis, uiFollows, t) {
+function sectionSummaries(axis, uiFollows, t, weightCount) {
   var sign = function (value) {
     return value > 0 ? "+" + value : String(value);
+  };
+  var weight = function (field, value) {
+    return typeof weightCount === "function"
+      ? weightOffsetText(weightCount(field, value))
+      : weightOffsetText(value);
   };
   // The conversation owns every axis, so its summary is always its values.
   var dialogParts = [];
@@ -2030,7 +2192,7 @@ function sectionSummaries(axis, uiFollows, t) {
     dialogParts.push(axis[LINE_HEIGHT_DIALOG_FIELD] + "%");
   }
   if (axis[WEIGHT_DIALOG_FIELD] !== WEIGHT_UNSET) {
-    dialogParts.push(String(axis[WEIGHT_DIALOG_FIELD]));
+    dialogParts.push(weight(WEIGHT_DIALOG_FIELD, axis[WEIGHT_DIALOG_FIELD]));
   }
   // The interface either follows (nothing of its own to report) or shows the
   // two axes it owns.
@@ -2038,13 +2200,15 @@ function sectionSummaries(axis, uiFollows, t) {
   if (!uiFollows) {
     var family = axis[SANS_FIELD] === "" ? null : firstFamily(axis[SANS_FIELD]);
     if (family !== null) uiParts.push(family);
-    if (axis[WEIGHT_FIELD] !== WEIGHT_UNSET) uiParts.push(String(axis[WEIGHT_FIELD]));
+    if (axis[WEIGHT_FIELD] !== WEIGHT_UNSET) uiParts.push(weight(WEIGHT_FIELD, axis[WEIGHT_FIELD]));
   }
   var codeParts = [];
   if (axis[MONO_FIELD] !== "") codeParts.push(firstFamily(axis[MONO_FIELD]));
   if (axis[CODE_SIZE_FIELD] !== 0) codeParts.push(sign(axis[CODE_SIZE_FIELD]) + "px");
   if (axis[CODE_LINE_HEIGHT_FIELD] !== 0) codeParts.push(sign(axis[CODE_LINE_HEIGHT_FIELD]) + "px");
-  if (axis[CODE_WEIGHT_FIELD] !== WEIGHT_UNSET) codeParts.push(String(axis[CODE_WEIGHT_FIELD]));
+  if (axis[CODE_WEIGHT_FIELD] !== WEIGHT_UNSET) {
+    codeParts.push(weight(CODE_WEIGHT_FIELD, axis[CODE_WEIGHT_FIELD]));
+  }
   if (axis[LIGATURES_FIELD] !== LIGATURES_DEFAULT) {
     codeParts.push(t(axis[LIGATURES_FIELD] === LIGATURES_OFF ? "lig.off" : "lig.on"));
   }
@@ -2332,7 +2496,25 @@ function FontCard(props) {
   };
 
   // ---- weight slider ----
+  // All three weight axes share one shape: an offset added to each element's own
+  // weight, centred on zero (code included — its surfaces ship their own weight
+  // too, and an offset keeps any bold element inside them bold).
+  //
+  // The CONTROL counts the family's own steps ("-2 -1 0 +1 +2 +3 +4"), because a
+  // family can only be made as light or as heavy as the faces it ships and only
+  // in steps between them: how many positions there are is a property of the font,
+  // measured on the page. The VALUE written to the document stays a weight offset,
+  // so nothing stored before has to be migrated and the stylesheet is unchanged.
   var weightField = function (props) {
+    var profile = weightProfileFor(props.stack === undefined ? "" : props.stack);
+    var stored = props.value === WEIGHT_UNSET ? NEUTRAL_WEIGHT : props.value;
+    // A stored offset outside the measured range (the font changed since it was
+    // set) widens the control, so it is never unreachable.
+    var shape = weightStepRange(
+      { min: Math.min(profile.min, stored), max: Math.max(profile.max, stored), step: profile.step },
+      stored
+    );
+    var text = weightOffsetText;
     return h(
       FieldShell,
       {
@@ -2346,22 +2528,27 @@ function FontCard(props) {
         },
       },
       h(NumberSlider, {
-        min: WEIGHT_MIN,
-        max: WEIGHT_MAX,
-        value: props.value === WEIGHT_UNSET ? NEUTRAL_WEIGHT : props.value,
+        min: shape.min,
+        max: shape.max,
+        value: shape.value,
         disabled: !writable,
         label: t(props.labelKey),
-        // "Unset" IS 400 here: that is the weight DSH uses for body text, the
-        // slider already sits at 400, and the hint says 400 keeps DSH's own.
-        // Printing "unset" made the readout disagree with the control.
-        readout: String(props.value === WEIGHT_UNSET ? NEUTRAL_WEIGHT : props.value),
-        minLabel: String(WEIGHT_MIN),
-        maxLabel: String(WEIGHT_MAX),
-        onChange: function (value) {
-          // 400 is DSH's own body weight, so choosing it means "leave the axis
-          // alone" rather than "write 400 on every element".
-          if (value === NEUTRAL_WEIGHT) resetField(props.field);
-          else setField(props.field, value);
+        // One notch is one family step, so every notch changes what is on screen.
+        step: 1,
+        // The readout is the STEP COUNT, not the weight: "+2" is two faces
+        // bolder, and the numbers stay small whatever the family is.
+        readout: text(shape.value),
+        minLabel: text(shape.min),
+        maxLabel: text(shape.max),
+        // The pending readout goes through the same formatter: without it the
+        // sign only appeared on release ("80" while dragging, then "+80" once
+        // the document confirmed it).
+        pendingText: text,
+        onChange: function (count) {
+          // The neutral position means "leave the axis alone" rather than "write
+          // it on every element".
+          if (count === 0) resetField(props.field);
+          else setField(props.field, count * shape.unit);
         },
       })
     );
@@ -2718,33 +2905,54 @@ function FontCard(props) {
   // fallback. The switch lives in the interface section.
   var uiFollows = config[UI_FOLLOWS_FIELD] !== false;
 
-  var summaries = sectionSummaries(editing, uiFollows, t);
+  // The family each weight axis is measured against: the configured stack when
+  // there is one, the page's own family otherwise. Resolved once, so the
+  // collapsed summaries, the sliders and the previews all agree on the count.
+  var uiStack =
+    editing[SANS_FIELD] !== "" ? formatStack(parseStack(editing[SANS_FIELD])) : "";
+  var dialogFallbackFamily =
+    typeof FALLBACK_TOKENS["--dsw-font-family"] === "string" ? FALLBACK_TOKENS["--dsw-font-family"] : "";
+  var dialogStack =
+    editing[STACK_DIALOG_FIELD] !== ""
+      ? formatStack(parseStack(editing[STACK_DIALOG_FIELD]))
+      : dialogFallbackFamily;
+  var codeStack =
+    editing[MONO_FIELD] !== "" ? formatStack(parseStack(editing[MONO_FIELD])) : liveCodeFamily();
+  /**
+   * One weight offset, as the number of family steps the reader sees.
+   * @param {string} field - which weight axis.
+   * @param {number} value - the stored offset.
+   * @returns {number} the step count.
+   */
+  var weightCount = function (field, value) {
+    var stack =
+      field === WEIGHT_DIALOG_FIELD ? dialogStack : field === CODE_WEIGHT_FIELD ? codeStack : uiStack;
+    var profile = weightProfileFor(stack);
+    return weightStepRange(profile, value === WEIGHT_UNSET ? 0 : value).value;
+  };
+
+  var summaries = sectionSummaries(editing, uiFollows, t, weightCount);
 
   // The interface owns one axis now (its family); its preview shows that and
   // nothing else — the weight, size and line height all come from the
   // conversation section.
   var previewUiStyle = {};
-  if (editing[SANS_FIELD] !== "") {
-    previewUiStyle.fontFamily = formatStack(parseStack(editing[SANS_FIELD]));
-  }
+  if (uiStack !== "") previewUiStyle.fontFamily = uiStack;
   var previewDialogStyle = {};
-  if (editing[STACK_DIALOG_FIELD] !== "") {
-    previewDialogStyle.fontFamily = formatStack(parseStack(editing[STACK_DIALOG_FIELD]));
-  } else {
-    // Independent and unset: the conversation keeps DSH's own family, so the
-    // preview shows the theme's default rather than the interface stack the
-    // page rule would otherwise paint into this box.
-    var dialogFallback = FALLBACK_TOKENS["--dsw-font-family"];
-    if (typeof dialogFallback === "string" && dialogFallback !== "") {
-      previewDialogStyle.fontFamily = dialogFallback;
-    }
-  }
+  // Independent and unset: the conversation keeps DSH's own family, so the
+  // preview shows the theme's default rather than the interface stack the page
+  // rule would otherwise paint into this box.
+  if (dialogStack !== "") previewDialogStyle.fontFamily = dialogStack;
   previewDialogStyle.fontSize = 13 + editing[SIZE_DIALOG_FIELD] + "px";
   if (editing[LINE_HEIGHT_DIALOG_FIELD] !== LINE_HEIGHT_MIN) {
     previewDialogStyle.lineHeight = String(editing[LINE_HEIGHT_DIALOG_FIELD] / 100);
   }
   if (editing[WEIGHT_DIALOG_FIELD] !== WEIGHT_UNSET) {
-    previewDialogStyle.fontWeight = editing[WEIGHT_DIALOG_FIELD];
+    // The offset, not a weight: the injected stylesheet's conversation ladder
+    // reads `--dfp-wdelta` on this very class and re-states each element's own
+    // base plus the offset, so the preview shows the same hierarchy the
+    // conversation does instead of one flat weight.
+    previewDialogStyle["--dfp-wdelta"] = editing[WEIGHT_DIALOG_FIELD];
   }
   var previewCodeStyle = {};
   if (editing[MONO_FIELD] !== "") {
@@ -2995,6 +3203,7 @@ function FontCard(props) {
               labelKey: "weight.dialogLabel",
               hintKey: "weight.dialogHint",
               value: editing[WEIGHT_DIALOG_FIELD],
+              stack: dialogStack,
             }),
             h(
               "div",
@@ -3081,6 +3290,7 @@ function FontCard(props) {
                   labelKey: "weight.uiLabel",
                   hintKey: "weight.uiHint",
                   value: editing[WEIGHT_FIELD],
+                  stack: uiStack,
                 }),
             h(
               "div",
@@ -3123,6 +3333,7 @@ function FontCard(props) {
               labelKey: "weight.codeLabel",
               hintKey: "weight.codeHint",
               value: editing[CODE_WEIGHT_FIELD],
+              stack: codeStack,
             }),
             ligatureField(),
             view === "advanced" ? featuresField() : null,
