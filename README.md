@@ -27,29 +27,8 @@
 | 插件版本 | 支持的 DSH 版本 |
 | --- | --- |
 | **0.3.3**（最新） | 0.1.7-alpha.1 / alpha.2、0.1.7-rc.1 / rc.2、0.2.0-rc.1 |
-| 0.3.2 | 0.1.5-rc.3、0.1.7-alpha.1 / alpha.2、0.1.7-rc.1 / rc.2、0.2.0-rc.1 |
-| 0.3.1 | 0.1.5-rc.3、0.1.7-alpha.1 / alpha.2、0.1.7-rc.1 / rc.2 |
-| 0.3.0 | 0.1.5-rc.3、0.1.7-alpha.1 / alpha.2、0.1.7-rc.1 / rc.2 |
-| 0.2.7 | 0.1.5-rc.3、0.1.7-alpha.1 / alpha.2、0.1.7-rc.1 / rc.2 |
-| 0.2.6 | 0.1.5-rc.3、0.1.7-alpha.1 / alpha.2、0.1.7-rc.1 |
-| 0.2.5 | 0.1.5-rc.1 / rc.2 / rc.3、0.1.7-alpha.1 / alpha.2 |
-| 0.2.4 | 0.1.5-rc.1 / rc.2 / rc.3、0.1.7-alpha.1 / alpha.2 |
-| 0.2.3 | 0.1.5-rc.2 |
-| 0.2.2 | 0.1.5-rc.2 |
-| 0.2.1 | 0.1.5-rc.2 |
-| 0.2.0 | 0.1.5-rc.2 |
 
-`engines.dsh` 声明为 **`>=0.1.7-alpha.1 <0.3.0-0`**（预发布版本必须显式留分支：node-semver 只在一个范围的某个比较符与该版本落在同一个 `major.minor.patch` 元组、且自身带预发布标签时才放行，写成 `>=0.1.5-rc.3` 匹配不到 `0.1.7-alpha.1`）。三条线的差别**全部在运行时二选一，不看版本号**：
-
-- **设置服务**：0.1.5-rc.x 是 `settingsScope.bind({namespace})`（按命名空间）；0.1.7-alpha.x 与 0.1.7-rc.x 换成了 `configForms.get(<profile 条目 id>)`（按条目 id，id 由安装方的 profile 决定，所以插件靠「宿主服务的那份 schema 里有没有本插件自己的字段」来认领）。两者都是 `getSnapshot/subscribe/set/unset` 同一张脸，插件只写一套。
-- **loader 行 id 就是设置键**：0.1.7-rc.1 起设置按入口 id 存档，首次启动还会按**同名**把旧的 `settings.yaml` 搬过去——本包自带的 loader 行 id 因此与设置命名空间一致（`dsh-fonttune`）。同名的行 id 也让这个包可以写进 profile 的 `dsh.profile.bundles` 安装：插件管理页会把它显示为运行中，配置页照旧可达。
-- **配置卡片座位**：0.1.5-rc.x 是 设置 → 插件 → 插件配置 里的一个 keyed 单元（`settings.plugin.item`）；0.1.7 两条线删掉了这个槽位，改成在「插件」页的官方插件列表里贡献一个条目（`plugins.item`，内置那些设置页就是这么挂的），并另外提供「已安装成 bundle 时」的每包页面（`plugins.bundle.config`）。三个座位都注册，宿主不声明的那个是惰性的；卡片在这些页面里**默认展开**——点进那个条目本身就是展开手势，不该再让人多点一次。
-- **宿主半的配置来源**：alpha 把 schema 标成 `.volatile()` 之后，宿主半拿到的配置字段是 cosmokit 的 volatile 引用（`{get(),[write]}`）而不是普通值，首帧样式行会因此变空；插件先把引用解出来再用。
-- **`inject` 只声明三条线都有的服务**（`slots`、`locale`）：声明一个宿主没有的服务会把整包 park 住——alpha 上声明 `settingsScope` 会让整个 Web 界面起不来。设置服务一律用 `ctx.get(name)` 现查。
-- **0.1.7 的表单是「条目 id + 描述视图」**：宿主 `describe()` 还没答话时，插件不会去猜一个条目名（猜错的话每次写入都会被宿主拒绝），而是先用一个等待态座位顶住，等宿主把视图发出来再接管并立刻重读。
-
-市场条目同时声明这些兼容信息（`package.json` 的 `engines.dsh`、`dsh.compatibility.dshReleases` 与 `peerDependencies`），安装前可据此判断这一版需要的宿主版本。
-
+`engines.dsh` 声明为 **`>=0.1.7-alpha.1 <0.3.0-0`**（预发布版本必须显式留分支：node-semver 只在一个范围的某个比较符与该版本落在同一个 `major.minor.patch` 元组、且自身带预发布标签时才放行，写成 `>=0.1.5-rc.3` 匹配不到 `0.1.7-alpha.1`）。
 ## 安装
 
 通过 DSH CLI 安装：

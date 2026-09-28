@@ -27,29 +27,8 @@
 | Plugin version | Supported DSH versions |
 | --- | --- |
 | **0.3.3** (latest) | 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2, 0.2.0-rc.1 |
-| 0.3.2 | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2, 0.2.0-rc.1 |
-| 0.3.1 | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2 |
-| 0.3.0 | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2 |
-| 0.2.7 | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2 |
-| 0.2.6 | 0.1.5-rc.3, 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 |
-| 0.2.5 | 0.1.5-rc.1 / rc.2 / rc.3, 0.1.7-alpha.1 / alpha.2 |
-| 0.2.4 | 0.1.5-rc.1 / rc.2 / rc.3, 0.1.7-alpha.1 / alpha.2 |
-| 0.2.3 | 0.1.5-rc.2 |
-| 0.2.2 | 0.1.5-rc.2 |
-| 0.2.1 | 0.1.5-rc.2 |
-| 0.2.0 | 0.1.5-rc.2 |
 
-`engines.dsh` is declared as **`>=0.1.7-alpha.1 <0.3.0-0`** (a prerelease needs its own branch: node-semver admits one only when some comparator in the range sits on that version's exact `major.minor.patch` tuple and carries a prerelease tag of its own, so a plain `>=0.1.5-rc.3` never matches `0.1.7-alpha.1`). Every difference between the lines is settled at runtime rather than by version number:
-
-- **The settings service**: up to 0.1.5-rc.x it is `settingsScope.bind({namespace})` (by namespace); 0.1.7-alpha.x and 0.1.7-rc.x use `configForms.get(<profile entry id>)` (by entry id, which the installing profile decides — so the plugin claims the form whose served schema names its own fields). Both expose the same `getSnapshot`/`subscribe`/`set`/`unset` face, so one implementation covers them.
-- **The loader row id IS the settings key**: from 0.1.7-rc.1 on, settings are stored per entry id, and the first start imports the removed `settings.yaml` by matching section names against it — so the row id this package ships equals its settings namespace (`dsh-fonttune`). That same id also lets the package be installed through the profile's `dsh.profile.bundles`: the plugin manager then shows it as running while the configuration page stays reachable.
-- **The configuration card's seat**: 0.1.5-rc.x has a keyed cell under Settings → Plugins → Plugin configuration (`settings.plugin.item`); the 0.1.7 lines dropped that slot and instead contribute an entry to the Plugins page's official list (`plugins.item`, which is how the built-in settings pages are added there), plus a per-package page for a profile that installed this plugin as a bundle (`plugins.bundle.config`). All three are registered; the one a host never declares is inert. On those pages the card **starts open** — opening the entry is the expansion gesture, and asking for a second click is exactly what this release removed.
-- **The host half's config values**: once the alpha marks the schema `.volatile()`, the fields the host half receives are cosmokit volatile references (`{get(),[write]}`) rather than plain values, which left the first-frame stylesheet row empty; the references are unwrapped before use.
-- **`inject` declares only services all three lines have** (`slots`, `locale`): declaring one a host does not provide parks the whole package — on the alpha a declared `settingsScope` kept the entire Web UI from booting. The settings service is looked up with `ctx.get(name)` instead.
-- **The 0.1.7 form is addressed by entry id**: while the host's `describe()` view has not arrived, the plugin does not guess a name (a wrong guess means every write is refused) — it stands in with a pending scope, adopts the real form as soon as the view is served, and re-reads immediately.
-
-The market entry also states these requirements (`engines.dsh`, `dsh.compatibility.dshReleases` and `peerDependencies` in `package.json`), so the host a version needs can be checked before installing.
-
+`engines.dsh` is declared as **`>=0.1.7-alpha.1 <0.3.0-0`** (a prerelease needs its own branch: node-semver admits one only when some comparator in the range sits on that version's exact `major.minor.patch` tuple and carries a prerelease tag of its own, so a plain `>=0.1.5-rc.3` never matches `0.1.7-alpha.1`).
 ## Install
 
 Install through the DSH CLI:
