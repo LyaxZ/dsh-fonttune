@@ -2,6 +2,16 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.3.1] - 2026-09-28
+
+### Fixed
+- **The upper positions of the weight slider jumped to a lower number**: two of them were read as an absolute weight and converted, so the third step showed as −1 and the fourth rendered exactly like 0. A position now stays where it is put.
+- **With the conversation weight at 0, the conversation still picked up the interface offset**: the two axes shared a range, so 0 carried the interface's offset as well and the 0 and +1 positions looked nearly the same. Each axis now keeps to its own scope, and 0 is DSH's own weight.
+- **The line-height preview in the card was taller at 100% than at the notches above it**: the preview and the conversation did not share a base. They do now, so every notch is taller in the preview as well.
+
+### Changed
+- **The weight slider's positions and step come from the font**: one step is one pair of neighbouring faces, and the range starts where body text and bold text can still swap faces — a family whose body text has more weights gets more positions (the range is no longer held back by the heading layer), and the heading layer stops once it is at its boldest; changing the family measures it again.
+
 ## [0.3.0] - 2026-09-28
 
 ### Fixed
