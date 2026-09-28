@@ -2,6 +2,18 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.3.0] - 2026-09-28
+
+### Fixed
+- **Markdown headings stopped being bold once a conversation weight was set**: the weight was one value for the whole conversation, so any setting flattened the headings down to roughly body weight. The offset now adds to each element's own weight, so headings stay clearly bolder than body text at any step and bold text stays bold.
+- **H1/H2 looked too small while H3 looked right once a conversation size offset was set**: the heading ladder was asymmetric under an offset, the larger headings moving further. The offset now lands once, the whole ladder follows it, and h1 > h2 > h3 > h4 holds at any offset.
+- **Dragging the weight occasionally snapped the number back, and the next adjustment did not apply**: with a slow write, the previous value could cover the value being dragged. The value under the drag is now kept, and two adjustments in a row are both written.
+- **A plus sign appeared in front of the number on release**: the readout while dragging and the readout after landing were written differently. They match now.
+
+### Changed
+- **The three weight axes are one control now, and they count steps**: conversation, interface and code all take an offset on each element's own weight, and the slider is divided into the weights the current font **can actually render** — the readout is the step count (for example `-2 … +4`, 0 keeps DSH's own weights), a font with more weights offers more steps, and every notch is a visible change; changing the font measures it again.
+- **An absolute weight stored by an older version is converted automatically** (400 → 0, 450 → +1), so nothing has to be set again, and changing the font never invalidates an existing setting.
+
 ## [0.2.7] - 2026-09-24
 
 ### Changed
