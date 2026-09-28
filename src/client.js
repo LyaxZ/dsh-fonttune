@@ -304,13 +304,13 @@ var DICTS = {
 
     "weight.uiLabel": "Interface font-weight offset",
     "weight.uiHint":
-      "Adds to the weight of the whole interface (sidebars, settings, buttons, headings): a positive value is bolder, a negative one lighter. The conversation keeps its own. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); another font offers a different number of them.",
+      "Adds to the weight of the whole interface (sidebars, settings, buttons, headings): a positive value is bolder, a negative one lighter. The conversation keeps its own. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); every notch swaps in a different face for body text and headings alike, and another font offers a different number of steps.",
     "weight.dialogLabel": "Conversation font-weight offset",
     "weight.dialogHint":
-      "Adds to the weight of each conversation element, so headings stay bolder than body text and bold text stays bold. Unset keeps DSH's own weights. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); another font offers a different number of them.",
+      "Adds to the weight of each conversation element, so headings stay bolder than body text and bold text stays bold. Unset keeps DSH's own weights. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); every notch swaps in a different face for body text and headings alike, and another font offers a different number of steps.",
     "weight.codeLabel": "Code font-weight offset",
     "weight.codeHint":
-      "Adds to the weight of each code surface (code blocks, inline code, terminal output); 0 or unset keeps DSH's own weight. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); another font offers a different number of them.",
+      "Adds to the weight of each code surface (code blocks, inline code, terminal output); 0 or unset keeps DSH's own weight. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); every notch swaps in a different face for body text and headings alike, and another font offers a different number of steps.",
 
     "line.dialogLabel": "Conversation line height",
     "line.dialogHint":
@@ -448,13 +448,13 @@ var DICTS = {
 
     "weight.uiLabel": "界面字重偏移",
     "weight.uiHint":
-      "在整个界面自身的字重上叠加（侧栏、设置、按钮、标题）：正数更粗、负数更细；对话 Markdown 不受影响。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：换个字体，档数也会跟着变。",
+      "在整个界面自身的字重上叠加（侧栏、设置、按钮、标题）：正数更粗、负数更细；对话 Markdown 不受影响。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：每挪一格，正文与标题都会换一张字形；换个字体，档数也会跟着变。",
     "weight.dialogLabel": "对话字重偏移",
     "weight.dialogHint":
-      "在每个元素自身的字重上叠加，所以标题依旧比正文粗、加粗文字依旧加粗；未设置时保持 DSH 原本的粗细。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：换个字体，档数也会跟着变。",
+      "在每个元素自身的字重上叠加，所以标题依旧比正文粗、加粗文字依旧加粗；未设置时保持 DSH 原本的粗细。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：每挪一格，正文与标题都会换一张字形；换个字体，档数也会跟着变。",
     "weight.codeLabel": "代码字重偏移",
     "weight.codeHint":
-      "在每个代码面自身的字重上叠加（代码块、行内代码、终端输出）；0 或未设置表示保持 DSH 原样。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：换个字体，档数也会跟着变。",
+      "在每个代码面自身的字重上叠加（代码块、行内代码、终端输出）；0 或未设置表示保持 DSH 原样。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：每挪一格，正文与标题都会换一张字形；换个字体，档数也会跟着变。",
 
     "line.dialogLabel": "对话行高",
     "line.dialogHint": "把对话行高整体缩放为 {ratio}；100% 表示保持 DSH 原样。",
@@ -949,22 +949,27 @@ function sampleWeightSignature(stack, weight) {
  *
  * A family can only be made as light or as heavy as the faces it ships, so the
  * range is measured rather than fixed (`weightProfileFrom`), which also makes
- * every notch a change. Measured once per family and cached; any failure (no
- * canvas, no 2D context) falls back to the nominal window with single units.
+ * every notch a change — for every layer of the ladder, so the measurement is
+ * told which base is the heaviest one the offset lands on. Measured once per
+ * family and base and cached; any failure (no canvas, no 2D context) falls back
+ * to the nominal window with single units.
  * @param {string} stack - resolved `font-family` value, "" for the page default.
+ * @param {number} [top] - the heaviest base the offset is added to; the ladder's
+ *   own top for the conversation and interface axes, the axis's base for code.
  * @returns {{min: number, max: number, step: number}} the slider shape.
  */
-function weightProfileFor(stack) {
-  var key = String(stack);
+function weightProfileFor(stack, top) {
+  var base = typeof top === "number" ? top : shared.WEIGHT_LADDER_TOP;
+  var key = String(stack) + "\u0000" + base;
   if (Object.prototype.hasOwnProperty.call(weightProfileCache, key)) {
     return weightProfileCache[key];
   }
   var profile = { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
   try {
-    var resolved = key === "" ? liveFamily() : key;
+    var resolved = String(stack) === "" ? liveFamily() : String(stack);
     profile = weightProfileFrom(function (weight) {
       return sampleWeightSignature(resolved, weight);
-    });
+    }, { top: base });
   } catch (error) {
     profile = { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
   }
@@ -983,6 +988,72 @@ function liveFamily() {
   } catch (error) {
     return "";
   }
+}
+
+/**
+ * The conversation's own line-height ratio, measured once.
+ *
+ * The dialog line-height axis is a percentage OF DSH's own height (`28px × 1.05`),
+ * so a preview that used the percentage as an ABSOLUTE ratio was wrong twice over:
+ * at 100% it fell back to DSH's real (taller) default, while 105% asked for 1.05 —
+ * shorter than that default and out of order with the notches above it.
+ *
+ * The base is read from a hidden node carrying the markdown class whose rule
+ * consumes DSH's markdown shorthand, so it is the same ratio the page multiplies.
+ * @returns {number} line height ÷ font size; a plain default when unmeasurable.
+ */
+var DIALOG_LINE_RATIO_FALLBACK = 1.5;
+var dialogLineRatioCache = null;
+function dialogLineRatio() {
+  if (typeof dialogLineRatioCache === "number") return dialogLineRatioCache;
+  if (typeof document === "undefined" || typeof document.defaultView === "undefined") {
+    return DIALOG_LINE_RATIO_FALLBACK;
+  }
+  try {
+    var className = "";
+    var sheets = document.styleSheets || [];
+    for (var index = 0; index < sheets.length && className === ""; index += 1) {
+      var rules = null;
+      try {
+        rules = sheets[index].cssRules;
+      } catch (error) {
+        rules = null;
+      }
+      if (!rules) continue;
+      for (var ruleIndex = 0; ruleIndex < rules.length; ruleIndex += 1) {
+        var selector = rules[ruleIndex].selectorText || "";
+        var body = rules[ruleIndex].style ? rules[ruleIndex].style.cssText : "";
+        if (selector.indexOf("_markdown_") < 0) continue;
+        if (body.indexOf("--dsw-font-markdown-base") < 0) continue;
+        var found = selector.match(/\.(_markdown_[A-Za-z0-9_-]+)/);
+        if (found) className = found[1];
+      }
+    }
+    if (className !== "") {
+      var host = document.createElement("div");
+      host.className = className;
+      host.setAttribute("data-dss-prose", "");
+      host.style.position = "absolute";
+      host.style.visibility = "hidden";
+      host.style.left = "-9999px";
+      var probe = document.createElement("p");
+      probe.textContent = "line";
+      probe.style.margin = "0";
+      host.appendChild(probe);
+      document.body.appendChild(host);
+      var style = document.defaultView.getComputedStyle(probe);
+      var size = parseFloat(style.fontSize);
+      var height = parseFloat(style.lineHeight);
+      if (isFinite(size) && size > 0 && isFinite(height) && height > 0) {
+        dialogLineRatioCache = Math.round((height / size) * 10000) / 10000;
+      }
+      if (host.parentNode) host.parentNode.removeChild(host);
+    }
+  } catch (error) {
+    /* the fallback stands */
+  }
+  if (typeof dialogLineRatioCache !== "number") dialogLineRatioCache = DIALOG_LINE_RATIO_FALLBACK;
+  return dialogLineRatioCache;
 }
 
 /**
@@ -2506,7 +2577,10 @@ function FontCard(props) {
   // measured on the page. The VALUE written to the document stays a weight offset,
   // so nothing stored before has to be migrated and the stylesheet is unchanged.
   var weightField = function (props) {
-    var profile = weightProfileFor(props.stack === undefined ? "" : props.stack);
+    var profile = weightProfileFor(
+      props.stack === undefined ? "" : props.stack,
+      props.top === undefined ? shared.WEIGHT_LADDER_STRONG : props.top
+    );
     var stored = props.value === WEIGHT_UNSET ? NEUTRAL_WEIGHT : props.value;
     // A stored offset outside the measured range (the font changed since it was
     // set) widens the control, so it is never unreachable.
@@ -2925,9 +2999,10 @@ function FontCard(props) {
    * @returns {number} the step count.
    */
   var weightCount = function (field, value) {
+    var isCode = field === CODE_WEIGHT_FIELD;
     var stack =
-      field === WEIGHT_DIALOG_FIELD ? dialogStack : field === CODE_WEIGHT_FIELD ? codeStack : uiStack;
-    var profile = weightProfileFor(stack);
+      field === WEIGHT_DIALOG_FIELD ? dialogStack : isCode ? codeStack : uiStack;
+    var profile = weightProfileFor(stack, isCode ? shared.WEIGHT_BASE : shared.WEIGHT_LADDER_STRONG);
     return weightStepRange(profile, value === WEIGHT_UNSET ? 0 : value).value;
   };
 
@@ -2944,9 +3019,13 @@ function FontCard(props) {
   // rule would otherwise paint into this box.
   if (dialogStack !== "") previewDialogStyle.fontFamily = dialogStack;
   previewDialogStyle.fontSize = 13 + editing[SIZE_DIALOG_FIELD] + "px";
-  if (editing[LINE_HEIGHT_DIALOG_FIELD] !== LINE_HEIGHT_MIN) {
-    previewDialogStyle.lineHeight = String(editing[LINE_HEIGHT_DIALOG_FIELD] / 100);
-  }
+  // The axis is a percentage OF DSH's own line height, so the preview multiplies the
+  // measured base by the same percentage — and does it at every notch including 100,
+  // or the preview would show a shorter line at 105% than at 100%.
+  previewDialogStyle.lineHeight = String(
+    Math.round(dialogLineRatio() * (editing[LINE_HEIGHT_DIALOG_FIELD] / LINE_HEIGHT_MIN) * 10000) /
+      10000
+  );
   if (editing[WEIGHT_DIALOG_FIELD] !== WEIGHT_UNSET) {
     // The offset, not a weight: the injected stylesheet's conversation ladder
     // reads `--dfp-wdelta` on this very class and re-states each element's own
@@ -3333,6 +3412,10 @@ function FontCard(props) {
               labelKey: "weight.codeLabel",
               hintKey: "weight.codeHint",
               value: editing[CODE_WEIGHT_FIELD],
+              // The code axis puts one weight on the whole surface, so its own base
+              // is the heaviest layer there is: any lower base would cap the range
+              // short of what code text can actually reach.
+              top: shared.WEIGHT_BASE,
               stack: codeStack,
             }),
             ligatureField(),

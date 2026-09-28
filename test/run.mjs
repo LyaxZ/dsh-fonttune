@@ -2245,7 +2245,7 @@ await test("the weight slider's range and notch come from the family", () => {
   const continuous = profile((weight) => "w" + weight);
   assert.equal(continuous.step, 1, "a continuous family keeps single units");
   assert.equal(continuous.min, -300, "and reaches down to the probe floor");
-  assert.equal(continuous.max, 500, "and up to the probe ceiling");
+  assert.equal(continuous.max, 200, "and up to the widest offset the axes allow");
   // Six named faces (a 300 hairline up to a 900 black), each requested weight
   // rounded to the nearest cut: the range stops where the faces stop, and only
   // steps of 100 always land on a different one.
@@ -2258,9 +2258,9 @@ await test("the weight slider's range and notch come from the family", () => {
     return "900";
   };
   const named = profile(faces);
-  assert.equal(named.step, 100, "one notch per face");
-  assert.equal(named.min, -100, "down to the lightest face");
-  assert.equal(named.max, 400, "up to the heaviest face, with no dead notch above it");
+  assert.equal(named.step, 100, "one notch per face for body and bold text");
+  assert.equal(named.min, -100, "down to the lightest face this fake has");
+  assert.equal(named.max, 200, "up to where bold text stops changing");
   // Faces every 25 units: the finer step is found and kept.
   const fine = profile((weight) => "f" + Math.floor(weight / 25));
   assert.equal(fine.step, 25);
@@ -2277,6 +2277,95 @@ await test("the weight slider's range and notch come from the family", () => {
   const capped = profile((weight) => "w" + weight, { floor: -100, ceil: 200 });
   assert.equal(capped.min, -100);
   assert.equal(capped.max, 200);
+});
+
+await test("no slider position can be read back as an old absolute weight", () => {
+  // A document written before the axes were relative stores an ABSOLUTE weight in
+  // `WEIGHT_MIN…WEIGHT_MAX`, and `clampWeightDelta` converts anything in there by
+  // −400. An offset must therefore never land in that window: the range used to
+  // reach +400 for a six-face family, and +3 was read back as −1 while +4 became
+  // indistinguishable from 0.
+  const sixFaces = (weight) => {
+    if (weight <= 350) return "300";
+    if (weight <= 450) return "400";
+    if (weight <= 550) return "500";
+    if (weight <= 650) return "600";
+    if (weight <= 750) return "700";
+    return "900";
+  };
+  const fonts = [
+    (weight) => "w" + weight,
+    (weight) => "f" + Math.floor(weight / 25),
+    (weight) => (weight >= 600 ? "bold" : "regular"),
+    sixFaces,
+  ];
+  for (const sample of fonts) {
+    const shape = shared.weightProfileFrom(sample);
+    for (let offset = shape.min; offset <= shape.max; offset += shape.step) {
+      assert.ok(
+        offset < shared.WEIGHT_MIN || offset > shared.WEIGHT_MAX,
+        `offset ${offset} sits in the absolute-weight window`
+      );
+      assert.equal(shared.clampWeightDelta(offset), offset, `offset ${offset} survives a read`);
+    }
+  }
+});
+
+await test("every position moves body text and bold text", () => {
+  // A notch has to move what you read and what you emphasise. The heading layer is
+  // deliberately not required to move at the very top: a family that spaces its
+  // heavy faces far apart (a 700 cut next to a 900) has already reached its boldest
+  // heading by then, and requiring it would shrink the whole control to one step.
+  const sample = (weight) => {
+    if (weight <= 350) return "300";
+    if (weight <= 450) return "400";
+    if (weight <= 550) return "500";
+    if (weight <= 650) return "600";
+    if (weight <= 750) return "700";
+    return "900";
+  };
+  const shape = shared.weightProfileFrom(sample);
+  const positions = [];
+  for (let offset = shape.min; offset <= shape.max; offset += shape.step) positions.push(offset);
+  assert.ok(positions.length >= 2, `expected a usable range, got ${JSON.stringify(shape)}`);
+  for (const base of [400, 600]) {
+    const seen = positions.map((offset) => sample(base + offset));
+    assert.equal(
+      new Set(seen).size,
+      seen.length,
+      `base ${base} repeats a face across ${JSON.stringify(positions)}`
+    );
+  }
+});
+
+await test("a family with a light face offers -2 … +2", () => {
+  // Measured on this machine: Noto Serif SC renders seven faces
+  // (100-250 / 300 / 400 / 500 / 600 / 700 / 800-900). The body can therefore step
+  // down twice and up twice, and each of those five positions changes body text
+  // and bold text.
+  const bands = [[100, 250], [300, 350], [400], [450, 500], [550, 600], [650, 780], [800, 900]];
+  const sample = (weight) => {
+    let best = 0;
+    let bestDistance = Infinity;
+    for (let index = 0; index < bands.length; index += 1) {
+      const low = bands[index][0];
+      const high = bands[index].length > 1 ? bands[index][1] : bands[index][0];
+      const distance = weight < low ? low - weight : weight > high ? weight - high : 0;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = index;
+      }
+    }
+    return "f" + best;
+  };
+  const shape = shared.weightProfileFrom(sample);
+  assert.deepEqual(shape, { min: -200, max: 200, step: 100 }, "five positions, one face apart");
+  assert.deepEqual(shared.weightStepRange(shape, 0), { min: -2, max: 2, unit: 100, value: 0 });
+  // +1 and +2 agree for HEADINGS (800 and 900 are one face) and differ for the
+  // rest — that is the trade the user asked for.
+  assert.equal(sample(700 + 100), sample(700 + 200), "headings saturate at the top");
+  assert.notEqual(sample(600 + 100), sample(600 + 200), "bold text keeps moving");
+  assert.notEqual(sample(400 + 100), sample(400 + 200), "body text keeps moving");
 });
 
 await test("a weight offset turns into the step count the slider shows", () => {

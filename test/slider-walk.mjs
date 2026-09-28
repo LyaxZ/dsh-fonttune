@@ -152,7 +152,7 @@ const main = async () => {
     const ops = [];
     const original = ${JSON.stringify(original)};
     for (const key of Object.keys(original)) ops.push({ op: "set", path: [key], value: original[key] });
-    for (const key of ["sans", "stackDialog", "mono", "sizeOffset", "sizeOffsetDialog", "sizeOffsetCode", "weight", "weightDialog", "weightCode"]) {
+    for (const key of ["sans", "stackDialog", "mono", "sizeOffset", "sizeOffsetDialog", "sizeOffsetCode", "weight", "weightDialog", "weightCode", "lineHeight", "lineHeightDialog", "lineHeightCode"]) {
       if (!Object.prototype.hasOwnProperty.call(original, key)) ops.push({ op: "unset", path: [key] });
     }
     const res = await fetch("/api/settings/mutate", {
@@ -279,6 +279,163 @@ const main = async () => {
   console.log("host after release:", afterSize, `(landed in ${sizeLanded.waitedMs} ms)`);
   check("releasing the size drag commits it", sizeLanded.landed, `saw ${sizeLanded.seen}`);
 
+  // --- the dialog line height: every notch has to make the text taller ---------
+  // The axis is a ratio in percent (100 = DSH's own, up to 160) applied by scaling
+  // the markdown line-height tokens, so "the control exists" proves nothing: the
+  // rendered height has to grow with each notch, and by the chosen ratio. A sandbox
+  // conversation has no messages, so the measurement uses a probe container that
+  // carries the markdown scope the ratio is applied through.
+  const lineBaseline = JSON.parse(
+    await evalJs(`(() => {
+      // The class has to be the one whose rule consumes the markdown base
+      // shorthand, which is what the ratio rebuilds; another module ships a markdown
+      // class of its own, and measuring that one reports "normal" even when the
+      // axis works.
+      let className = "";
+      for (const sheet of [...document.styleSheets]) {
+        let rules = [];
+        try { rules = [...sheet.cssRules]; } catch (error) { continue; }
+        for (const rule of rules) {
+          const selector = rule.selectorText || "";
+          const body = rule.style ? rule.style.cssText : "";
+          if (!/_markdown_/.test(selector) || !/--dsw-font-markdown-base/.test(body)) continue;
+          const found = selector.match(/\.(_markdown_[A-Za-z0-9_-]+)/);
+          if (found) className = found[1];
+        }
+      }
+      if (className === "") {
+        const markdown = document.querySelector('[class*="_markdown_" i]');
+        className = markdown ? markdown.className : "_markdown_probe";
+      }
+      const host = document.createElement("div");
+      host.id = "dfp-line-probe";
+      host.setAttribute("data-dss-prose", "");
+      host.className = className;
+      const paragraph = document.createElement("p");
+      paragraph.textContent = "line height probe";
+      paragraph.style.margin = "0";
+      host.appendChild(paragraph);
+      document.body.appendChild(host);
+      const style = getComputedStyle(paragraph);
+      return JSON.stringify({ lineHeight: style.lineHeight, fontSize: style.fontSize });
+    })()`)
+  );
+  console.log("line-height baseline:", lineBaseline);
+  const basePx = parseFloat(lineBaseline.lineHeight);
+  const measurePreview = async () => {
+    const raw = await evalJs(`(() => {
+      const node = document.querySelector(".dfp-previewDialog");
+      if (!node) return "null";
+      const style = getComputedStyle(node);
+      return JSON.stringify({ lineHeight: style.lineHeight, fontSize: style.fontSize });
+    })()`);
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      return { lineHeight: raw, fontSize: null };
+    }
+  };
+  const previewBase = parseFloat((await measurePreview()).lineHeight);
+  console.log("preview baseline:", previewBase);
+  const measureLine = async () => {
+    const raw = await evalJs(`(() => {
+      const paragraph = document.querySelector("#dfp-line-probe p");
+      if (!paragraph) return "null";
+      const style = getComputedStyle(paragraph);
+      return JSON.stringify({ lineHeight: style.lineHeight, fontSize: style.fontSize });
+    })()`);
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      return { lineHeight: raw, fontSize: null };
+    }
+  };
+  const lineShape = JSON.parse(
+    await evalJs(`(() => {
+      const input = [...document.querySelectorAll(".dfp-slider")][1];
+      if (!input) return "null";
+      return JSON.stringify({
+        min: Number(input.min),
+        max: Number(input.max),
+        step: Number(input.step),
+        value: Number(input.value),
+      });
+    })()`)
+  );
+  console.log("line-height slider:", lineShape);
+  const walkedLine = [];
+  let previousLine = field(await readUser(), "lineHeightDialog");
+  for (let notch = lineShape.min + lineShape.step; notch <= lineShape.max; notch += lineShape.step) {
+    await drag(1, [notch]);
+    await sleep(260);
+    await release();
+    // A late confirmation for the PREVIOUS notch must not count as this one landing,
+    // so wait for the exact value (falling back to "it moved" if it never arrives).
+    let landed = await waitForField("lineHeightDialog", notch, 4000);
+    if (!landed.landed) landed = await waitForChange("lineHeightDialog", previousLine);
+    previousLine = landed.seen;
+    // The host rewrites the stylesheet a moment after the document write, so keep
+    // sampling until the rendered height matches the ratio this notch asks for.
+    let measured = await measureLine();
+    // The ratio is a ratio of DSH's OWN height, so the untouched baseline is the
+    // reference; the host rewrites the stylesheet a moment after the document write
+    // (under load that is seconds), so keep sampling until it arrives.
+    const wanted = (basePx * notch) / 100;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const now = parseFloat(measured.lineHeight);
+      if (Number.isFinite(now) && Math.abs(now - wanted) < wanted * 0.02) break;
+      await sleep(400);
+      measured = await measureLine();
+    }
+    const preview = parseFloat((await measurePreview()).lineHeight);
+    walkedLine.push({ notch: notch, stored: landed.seen, preview: preview, ...measured });
+  }
+  console.log("line-height walk:", JSON.stringify(walkedLine));
+  const heights = walkedLine.map((row) => parseFloat(row.lineHeight));
+  check(
+    "the dialog line-height control changes the rendered height",
+    Number.isFinite(basePx) && Number.isFinite(heights[0]) && heights[0] !== basePx,
+    `baseline ${lineBaseline.lineHeight} → ${heights[0]}`
+  );
+  check(
+    "every line-height notch is taller than the one below it",
+    heights.every(
+      (height, index) => Number.isFinite(height) && (index === 0 || height > heights[index - 1])
+    ),
+    JSON.stringify(heights)
+  );
+  check(
+    "each line-height notch follows the chosen ratio",
+    Number.isFinite(basePx) &&
+      basePx > 0 &&
+      walkedLine.every((row) => {
+        const height = parseFloat(row.lineHeight);
+        const wanted = (basePx * row.notch) / 100;
+        return Number.isFinite(height) && Math.abs(height - wanted) < wanted * 0.03;
+      }),
+    JSON.stringify(walkedLine.map((row) => `${row.notch}%→${row.lineHeight}`))
+  );
+  // The card's own conversation preview has to move with the same notches: it used
+  // to treat the percentage as an ABSOLUTE ratio, so it showed DSH's default at 100%
+  // and a SHORTER line at 105% — taller at the bottom notch than above it.
+  const previews = walkedLine.map((row) => row.preview);
+  check(
+    "the card preview is taller at every notch",
+    Number.isFinite(previewBase) &&
+      previews.every(
+        (height, index) =>
+          Number.isFinite(height) &&
+          height > (index === 0 ? previewBase : previews[index - 1])
+      ),
+    `baseline ${previewBase} → ${JSON.stringify(previews)}`
+  );
+  const lineStored = walkedLine.filter((row) => row.stored !== row.notch);
+  check(
+    "each line-height notch lands in the settings document",
+    lineStored.length === 0,
+    JSON.stringify(lineStored)
+  );
+
   // The weight sliders are counted in FONT STEPS now ("-2 -1 0 +1 +2 +3 +4"), not
   // in weight units: how many positions they have is a property of the family,
   // measured on the page. The document still stores a weight offset — and a
@@ -318,15 +475,54 @@ const main = async () => {
     Number.isFinite(unit) && unit > 0 && unit <= 300,
     `step ${c1} wrote ${first.seen} → ${unit} per step`
   );
-  const c2 = up && c1 + 1 <= shape.max ? c1 + 1 : c1 - 1;
-  console.log(`weight drag to step ${c2}:`, await drag(2, [c2]));
-  await sleep(400);
-  await release();
-  const second = await waitForChange("weightDialog", first.seen);
+  // Walk every position the control offers. Each one has to write exactly its own
+  // step count as an offset, and NONE of them may land in `300…600`: that is the
+  // window an absolute weight from a pre-relative document occupies, and the
+  // migration rewrites anything in it. A range that reached inside turned +3 into
+  // −1 and +4 into 0 — two positions that then looked identical to the neutral
+  // one, which is exactly what a user reports as "the weight jumps / does not
+  // change". The neutral position unsets the axis instead.
+  const seenValues = new Map();
+  for (let count = shape.min; count <= shape.max; count += 1) {
+    if (count === c1) {
+      seenValues.set(count, first.seen);
+      continue;
+    }
+    const before = field(await readUser(), "weightDialog");
+    await drag(2, [count]);
+    await sleep(320);
+    await release();
+    await waitForChange("weightDialog", before);
+    seenValues.set(count, field(await readUser(), "weightDialog"));
+  }
+  const walked = [...seenValues.entries()].map(([count, stored]) => ({ count: count, stored: stored }));
+  console.log("positions walked:", JSON.stringify(walked));
+  const miswritten = walked.filter(
+    (row) => row.stored !== (row.count === 0 ? undefined : row.count * unit)
+  );
   check(
-    "two steps write exactly twice one step",
-    second.landed && Math.abs(second.seen - c2 * unit) < 0.001,
-    `saw ${second.seen} for ${c2} steps at ${unit} each`
+    "every position writes its own step count as an offset",
+    miswritten.length === 0,
+    `expected x${unit} per step, saw ${JSON.stringify(miswritten)}`
+  );
+  const collides = walked.filter(
+    (row) => typeof row.stored === "number" && row.stored >= 300 && row.stored <= 600
+  );
+  check(
+    "no position lands where the absolute-weight migration would rewrite it",
+    collides.length === 0,
+    JSON.stringify(collides)
+  );
+  // One step is worth the same everywhere: the counts on the control and the
+  // offsets in the document are the same number, up to that unit. A family can
+  // offer as few as two positions, so this is measured across the whole walk
+  // rather than between two hand-picked notches.
+  const weighted = walked.filter((row) => row.count !== 0 && typeof row.stored === "number");
+  const ratios = weighted.map((row) => row.stored / row.count);
+  check(
+    "every position is the same number of weight units per step",
+    ratios.length > 0 && ratios.every((ratio) => Math.abs(ratio - unit) < 0.001),
+    `ratios ${JSON.stringify(ratios)} against unit ${unit}`
   );
 
   // The notch must be the granularity the family can actually render: one notch
