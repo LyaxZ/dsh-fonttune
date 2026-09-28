@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.3.3] - 2026-09-28
+
+### Changed
+- **The supported DSH floor moved up**: 0.1.5-rc.3 is no longer supported, so upgrade to the 0.1.7 line first; 0.1.7 and 0.2.0-rc.1 stay supported.
+
 ## [0.3.2] - 2026-09-28
 
 ### Changed
