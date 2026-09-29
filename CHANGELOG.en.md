@@ -2,6 +2,16 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.3.6] - 2026-09-29
+
+### Fixes
+- **A weight change took a long time to take effect**: an adjustment now submits the setting once, and consecutive adjustments are merged.
+- **The text briefly jumped back while the weight was adjusted**: the page keeps the value you chose until the write is confirmed.
+- **A "not written to the document" notice appeared while the write was still going**: the notice now appears only when the host actually refuses the write.
+
+### Changes
+- **A weight change is reflected on the page immediately**, instead of after the setting has been written.
+
 ## [0.3.5] - 2026-09-29
 
 ### Fixed
