@@ -2,6 +2,16 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.3.4] - 2026-09-29
+
+### Fixed
+- **A slider quietly fell back to the document's value when the value never reached the document**: when a write was accepted but the document's value never followed, the slider jumped back after a moment with nothing to show for it. The control now says so underneath, and says the value came from the document.
+
+### Changed
+- **The weight hints name the smallest step**: the step is measured for the current font, and its smallest step is a small change by nature — the hints now say so.
+- **The faux bold and faux italic switches say what they actually do**: turning faux bold off adds at most one extra step for a font that ships no bold face and cannot invent the middle ones; turning both off is the same story.
+- **The follow hint is clearer**: while the interface follows the conversation, the interface section's own font and weight are ignored.
+
 ## [0.3.3] - 2026-09-28
 
 ### Changed
