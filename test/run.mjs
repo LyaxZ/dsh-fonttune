@@ -2049,6 +2049,47 @@ await test("both dictionaries carry the same keys, and every rendered key exists
     assert.ok(en.includes(key), `en is missing "${key}"`);
     assert.ok(zh.includes(key), `zh is missing "${key}"`);
   }
+  // A dictionary must stay in its own language. Key parity cannot see this: a
+  // few zh values once ended with a sentence of English appended to the Chinese
+  // (the appending script read the language off the key line, which is ASCII in
+  // both dictionaries).
+  const valueLines = (locale) => {
+    const start = source.indexOf(`\n  ${locale}: {`);
+    const end = source.indexOf("\n  },", start);
+    const lines = source
+      .slice(start, end)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("//"));
+    // A long value is wrapped onto its own line, so key and value are joined
+    // here; the checks below are about the pair.
+    const out = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (/^"[a-zA-Z.]+":\s*$/.test(lines[index]) && index + 1 < lines.length) {
+        out.push(lines[index] + " " + lines[(index += 1)]);
+      } else {
+        out.push(lines[index]);
+      }
+    }
+    return out;
+  };
+  for (const line of valueLines("zh")) {
+    // A Chinese value may legitimately open with English (the preview sample),
+    // so what is rejected is the append shape: Chinese sentence end, then an
+    // English sentence.
+    const run = line.match(/[。；！？]\s+[A-Za-z(]/);
+    assert.equal(run, null, `zh value continues in English after "${run && run[0]}"`);
+  }
+  for (const line of valueLines("en")) {
+    // The preview samples are deliberately bilingual in both dictionaries: they
+    // are there to show the two font slots side by side. Everything else is copy.
+    if (line.startsWith('"preview.')) continue;
+    assert.equal(
+      /\p{Script=Han}/u.test(line),
+      false,
+      `en value carries Chinese text: "${line.slice(0, 48)}"`
+    );
+  }
   // No conversation field may claim to follow the interface: the follow
   // direction is one-way (the interface follows the conversation).
   for (const locale of ["en", "zh"]) {

@@ -62,5 +62,19 @@ check(
   Object.values(expected).every((text) => text.charCodeAt(0) !== 0xfeff)
 );
 
+// The fallback notice (the write the document never took) only renders when the
+// slider that raised it was handed its text, so the two counts must agree.
+const sliders = [...expected["lib/client.js"].matchAll(/h\(NumberSlider, \{/g)].length;
+const noticeTexts = [...expected["lib/client.js"].matchAll(/revertedText: t\(/g)].length;
+check(
+  "every slider carries the fallback notice text",
+  sliders > 0 && sliders === noticeTexts,
+  `${sliders} slider(s), ${noticeTexts} notice text(s)`
+);
+check(
+  "the fallback notice has a style rule",
+  expected["lib/client.js"].includes(".dfp-sliderNotice{")
+);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
