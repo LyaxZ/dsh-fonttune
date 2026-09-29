@@ -232,7 +232,13 @@ function createScope(initial = {}) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async set(field, value) {
+    // The card sends one BATCH per turn and releases the next when the previous
+    // one settles, so a scope that answers synchronously keeps the walk-based
+    // checks (which drive many controls in one tick) meaningful; a batch sent in
+    // one turn arrives in the next microtask. The promise shapes — a refusal, a
+    // rejection — have their own scopes below. A scope WITHOUT `mutate` is also
+    // the older host line's shape: the card must still write field by field there.
+    set(field, value) {
       snapshot = {
         ...snapshot,
         value: { ...snapshot.value, [field]: value },
@@ -240,14 +246,16 @@ function createScope(initial = {}) {
         revision: snapshot.revision + 1,
       };
       for (const listener of listeners) listener();
+      return true;
     },
-    async unset(field) {
+    unset(field) {
       const value = { ...snapshot.value };
       const user = { ...snapshot.user };
       delete value[field];
       delete user[field];
       snapshot = { ...snapshot, value, user, revision: snapshot.revision + 1 };
       for (const listener of listeners) listener();
+      return true;
     },
   };
 }
@@ -328,6 +336,16 @@ function fire(name, handler, argument, log) {
 }
 
 /**
+ * Wait for the card's write window to close.
+ *
+ * The card waits {@link WRITE_QUIET_MS} for the user to stop and then sends
+ * everything one turn produced as ONE patch, so nothing reaches the scope until
+ * that window has passed. Waiting is all this does — no check is relaxed for it.
+ * @returns {Promise<void>} resolution after the window and its timer have run.
+ */
+const writeWindow = () => new Promise((resolve) => setTimeout(resolve, 420));
+
+/**
  * Exercise every handler a rendered card exposes: this is the class of check
  * that catches a control whose callback was never wired up (a typo'd binding
  * throws only when someone actually clicks it).
@@ -347,6 +365,10 @@ async function fireEveryHandler(options) {
     runtime.seed(2, section); // which section is expanded
     const out = { text: [], classes: [], tags: [], props: [] };
     walk(card.component({ scope, t: (key) => key }), runtime, out);
+    // The card waits out a short quiet window and then writes everything one turn
+    // produced as ONE patch, so a check that reads what a control wrote has to let
+    // that window close first — the assertions themselves are unchanged.
+    const flushTurn = () => writeWindow();
     for (const entry of out.props) {
       const props = entry.props;
       const where = `${String(section)}/${entry.tag}/${props.label ?? props.labelKey ?? ""}`;
@@ -362,6 +384,7 @@ async function fireEveryHandler(options) {
         // undefined binding, so a click threw and the pick was lost.
         if (typeof props.onPick === "function") {
           fire(`${where}.onPick`, props.onPick, "Microsoft YaHei", log);
+          await flushTurn();
           written[String(props.label)] = scope.getSnapshot().value;
         }
         if (typeof props.onRemove === "function") {
@@ -624,7 +647,7 @@ await test("switching the follow switch off carries the values it was showing", 
   assert.ok(follow, "the follow control renders");
   assert.equal(follow.props.value, "on");
   follow.props.onChange("off");
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await writeWindow();
   const written = scope.getSnapshot().value;
   assert.equal(written.uiFollowsDialog, false, "the switch is off");
   assert.equal(written.sans, "Inter", "the family it was showing becomes its own");
@@ -645,7 +668,7 @@ await test("an unset follow target leaves the interface on DSH's own values", as
   const out = { text: [], classes: [], tags: [], props: [] };
   walk(card.component({ scope, t: (key) => key }), runtime, out);
   out.props.find((entry) => entry.props.label === "ui.follow").props.onChange("off");
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await writeWindow();
   const snapshot = scope.getSnapshot();
   assert.equal(snapshot.value.uiFollowsDialog, false);
   assert.equal(Object.prototype.hasOwnProperty.call(snapshot.user, "weight"), false);
@@ -797,7 +820,7 @@ await test("a refused settings write says so instead of looking saved", async ()
   );
   assert.ok(slider, "the conversation size slider renders");
   slider.props.onChange(3);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await writeWindow();
   const status = runtime.sets
     .map((entry) => entry.value)
     .find((value) => value && typeof value === "object" && "text" in value);
@@ -817,6 +840,8 @@ await test("a refused write through a synchronous throw is caught too", async ()
   );
   assert.ok(follow, "the follow control renders");
   follow.props.onChange("off");
+  // The batch leaves in the next microtask, and so does the throw it earns.
+  await writeWindow();
   const status = runtime.sets
     .map((entry) => entry.value)
     .find((value) => value && typeof value === "object" && "text" in value);
@@ -841,7 +866,7 @@ await test("an export the clipboard refuses is handed over selected", async () =
     );
     assert.ok(button, "the export button renders");
     button.props.onClick();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await writeWindow();
     const values = runtime.sets.map((entry) => entry.value);
     // The whole JSON, not a 120-character prefix of it in the status row.
     const handed = values.find((value) => typeof value === "string" && value.startsWith("["));
@@ -898,7 +923,7 @@ await test("resetting every axis clears the retired ones too", async () => {
   );
   assert.ok(reset, "the reset-everything button renders");
   reset.props.onClick();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await writeWindow();
   const user = scope.getSnapshot().user;
   for (const field of ["weightDialog", "sizeOffset", "lineHeight"]) {
     assert.equal(
@@ -992,11 +1017,177 @@ await test("a boolean refusal from the alpha dialect is reported too", async () 
   );
   assert.ok(slider, "the conversation size slider renders");
   slider.props.onChange(3);
+  // The batch leaves in the next microtask, and so does the refusal it earns.
+  await writeWindow();
   const status = runtime.sets
     .map((entry) => entry.value)
     .find((value) => value && typeof value === "object" && "text" in value);
   assert.ok(status, "a refusal is reported, not swallowed");
   assert.equal(status.text, "preset.writeFailed");
+});
+
+await test("one turn's axis value and its preset snapshot travel in ONE call", async () => {
+  // Two calls would be two whole-document rewrites on the host (measured 1.0-5.1 s
+  // each, one document write each), and the user's click only needs one. The form
+  // face exposes `mutate(ops)` for exactly this.
+  const calls = [];
+  const scope = createScope({
+    value: {
+      presets: JSON.stringify([{ name: "one", values: { sizeOffsetDialog: 1 }, savedAt: 1 }]),
+      activePreset: "one",
+    },
+  });
+  scope.mutate = (ops) => {
+    calls.push(ops);
+    for (const op of ops) {
+      if (op.op === "unset") scope.unset(op.path[0]);
+      else scope.set(op.path[0], op.value);
+    }
+    return true;
+  };
+  const { out } = await renderSection(scope, "dialog");
+  const slider = out.props.find(
+    (entry) => entry.tag === "NumberSlider" && typeof entry.props.onChange === "function"
+  );
+  slider.props.onChange(3);
+  await writeWindow();
+  assert.equal(calls.length, 1, `expected one batched call, saw ${calls.length}`);
+  const paths = calls[0].map((op) => op.path[0]).sort();
+  assert.deepEqual(paths, ["presets", "sizeOffsetDialog"], `batch carried ${paths.join(", ")}`);
+  const stored = JSON.parse(scope.getSnapshot().value.presets);
+  assert.equal(stored[0].values.sizeOffsetDialog, 3, "the snapshot mirrors the value that landed");
+});
+
+await test("a preset snapshot is not rewritten when nothing in it moved", async () => {
+  // `savedAt` is a timestamp, so writing unconditionally made every re-pick of the
+  // value a preset already held a whole-document rewrite on the host.
+  const calls = [];
+  const scope = createScope({
+    value: {
+      presets: JSON.stringify([{ name: "one", values: { sizeOffsetDialog: 3 }, savedAt: 1 }]),
+      activePreset: "one",
+    },
+  });
+  scope.mutate = (ops) => {
+    calls.push(ops);
+    for (const op of ops) {
+      if (op.op === "unset") scope.unset(op.path[0]);
+      else scope.set(op.path[0], op.value);
+    }
+    return true;
+  };
+  const { out } = await renderSection(scope, "dialog");
+  const slider = out.props.find(
+    (entry) => entry.tag === "NumberSlider" && typeof entry.props.onChange === "function"
+  );
+  // The slider's own value is already 3, so this writes the value the preset holds.
+  slider.props.onChange(3);
+  await writeWindow();
+  assert.equal(calls.length, 1, `expected one call, saw ${calls.length}`);
+  assert.deepEqual(
+    calls[0].map((op) => op.path[0]),
+    ["sizeOffsetDialog"],
+    "no snapshot op for a value the snapshot already has"
+  );
+  assert.equal(JSON.parse(scope.getSnapshot().value.presets)[0].savedAt, 1, "savedAt untouched");
+});
+
+await test("a burst of picks leaves ONE write holding the last value", async () => {
+  // The host answers a settings call in 1.0-5.1 s, so a queue of stale values is
+  // seconds of work for values nobody wants any more.
+  const calls = [];
+  const scope = createScope({
+    value: {
+      presets: JSON.stringify([{ name: "one", values: {}, savedAt: 1 }]),
+      activePreset: "one",
+    },
+  });
+  let release = null;
+  scope.mutate = (ops) => {
+    calls.push(ops);
+    if (calls.length === 1) return new Promise((resolve) => { release = resolve; });
+    for (const op of ops) scope.set(op.path[0], op.value);
+    return true;
+  };
+  const { out } = await renderSection(scope, "dialog");
+  const slider = out.props.find(
+    (entry) => entry.tag === "NumberSlider" && typeof entry.props.onChange === "function"
+  );
+  // Four picks with no pause between them: the user has not stopped yet, so nothing
+  // may go out — the document would take on the first value and every one after it,
+  // and each of those states comes back to the page as a jump.
+  slider.props.onChange(1);
+  slider.props.onChange(2);
+  slider.props.onChange(3);
+  slider.props.onChange(4);
+  assert.equal(calls.length, 0, "nothing is written while the user is still moving");
+  await writeWindow();
+  assert.equal(calls.length, 1, `the run is ONE call, saw ${calls.length}`);
+  const carried = calls[0].find((op) => op.path[0] === "sizeOffsetDialog");
+  assert.equal(carried.value, 4, "the call carries the value the user stopped on");
+  // A pick that arrives while that call is in flight waits for it, then goes out as
+  // its own call: one call in flight at a time, and no value is dropped.
+  slider.props.onChange(5);
+  await writeWindow();
+  assert.equal(calls.length, 1, "nothing else goes out while a call is in flight");
+  release(true);
+  await writeWindow();
+  assert.equal(calls.length, 2, `the late pick is one more call, saw ${calls.length}`);
+  assert.equal(
+    calls[1].find((op) => op.path[0] === "sizeOffsetDialog").value,
+    5,
+    "the late pick kept its own value"
+  );
+});
+
+await test("two picks with a pause between them are two writes", async () => {
+  // The window tracks "the user stopped", not "a second has passed": a pick made
+  // after the window closed is a separate change and has to reach the document on
+  // its own, or the last value of a slow edit would never be stored.
+  const calls = [];
+  const scope = createScope({ value: { presets: JSON.stringify([]), activePreset: "one" } });
+  scope.mutate = (ops) => {
+    calls.push(ops);
+    for (const op of ops) scope.set(op.path[0], op.value);
+    return true;
+  };
+  const { out } = await renderSection(scope, "dialog");
+  const slider = out.props.find(
+    (entry) => entry.tag === "NumberSlider" && typeof entry.props.onChange === "function"
+  );
+  slider.props.onChange(1);
+  await writeWindow();
+  slider.props.onChange(2);
+  await writeWindow();
+  assert.equal(calls.length, 2, `two separate picks are two calls, saw ${calls.length}`);
+});
+
+await test("a refused write hands the control its refusal, not a clock", async () => {
+  // The value goes back to the document's because the HOST SAID NO — not because a
+  // timer guessed that a slow-but-healthy write had failed. Two halves: every
+  // slider is wired to the refusal signal, and a refusal lands in the card's state
+  // under the field it belonged to.
+  const scope = createScope();
+  scope.set = () => false;
+  scope.unset = () => false;
+  const { out, runtime } = await renderSection(scope, "dialog");
+  const sliders = out.props.filter(
+    (entry) => entry.tag === "NumberSlider" && typeof entry.props.onChange === "function"
+  );
+  assert.ok(sliders.length > 0, "the conversation sliders render");
+  for (const slider of sliders) {
+    assert.equal(typeof slider.props.refusedToken, "number", "every slider takes a refusal token");
+  }
+  sliders[0].props.onChange(3);
+  await writeWindow();
+  // The refusal is a functional state update, which is how it can count from
+  // whatever the previous refusal left behind.
+  const updater = runtime.sets
+    .map((entry) => entry.value)
+    .find((value) => typeof value === "function");
+  assert.ok(updater, `the refusal reached the card's state: ${JSON.stringify(runtime.sets)}`);
+  const next = updater({ sizeOffsetDialog: 4 });
+  assert.equal(next.sizeOffsetDialog, 5, `the token counts up: ${JSON.stringify(next)}`);
 });
 
 await test("the card renders in a seat that hands it no props", async () => {

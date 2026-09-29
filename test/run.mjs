@@ -2436,6 +2436,61 @@ await test("the preset snapshots move to the offset scale with the document", ()
   assert.deepEqual(shared.migratePresetWeights(null), { presets: [], changed: false });
 });
 
+await test("a locally painted move wins until the document echoes it", () => {
+  // The card paints a move the moment the user lets go, because the document only
+  // echoes it after the host's debounced write (0.7-5 s measured). Painting the
+  // document's value in the meantime would show the previous one again.
+  const document = { weightDialog: 100, weightCode: 50, sans: '"Inter"' };
+  const pending = { weightDialog: { op: shared.PENDING_SET, value: 400, at: 1000 } };
+  const painted = shared.overlayPendingValues(document, pending);
+  assert.equal(painted.weightDialog, 400, "the painted move wins");
+  assert.equal(painted.weightCode, 50, "the rest comes from the document");
+  assert.equal(painted.sans, '"Inter"');
+  assert.equal(document.weightDialog, 100, "the document object is not touched");
+  // A cleared field disappears, so the builder falls back to DSH's own value.
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      shared.overlayPendingValues(document, {
+        weightCode: { op: shared.PENDING_UNSET, value: 0, at: 1 },
+      }),
+      "weightCode"
+    ),
+    false
+  );
+  assert.deepEqual(shared.overlayPendingValues(null, null), {});
+});
+
+await test("a painted move keeps winning while the host may still be behind", () => {
+  const pending = {
+    weightDialog: { op: shared.PENDING_SET, value: 400, at: 1000 },
+    weightCode: { op: shared.PENDING_SET, value: 450, at: 1000 },
+  };
+  // The document agreeing is NOT a reason to retire the paint. The host debounces
+  // its writes, so a patch built EARLIER can land after a newer one and drag the
+  // document back to an older value — retiring on agreement is what made that echo
+  // visible (the weight jumped back and forth and only ended up right at the end).
+  const agreement = shared.reconcilePendingValues(
+    pending,
+    { weightDialog: 400, weightCode: 450 },
+    1200,
+    20000
+  );
+  assert.deepEqual(Object.keys(agreement).sort(), ["weightCode", "weightDialog"]);
+  // The patience is the backstop: a value the document never takes stops being
+  // painted, so the page cannot keep showing something that is not stored.
+  assert.deepEqual(shared.reconcilePendingValues(pending, {}, 30000, 20000), {});
+  // An unset move keeps winning too, until the patience runs out.
+  assert.deepEqual(
+    shared.reconcilePendingValues(
+      { sans: { op: shared.PENDING_UNSET, value: undefined, at: 1000 } },
+      {},
+      1100,
+      20000
+    ),
+    { sans: { op: shared.PENDING_UNSET, value: undefined, at: 1000 } }
+  );
+});
+
 await test("body text moves at every position, and bold text as far as it can", () => {
   // A notch has to move what the reader is reading. Bold text and headings are
   // allowed to saturate: the heaviest ladder layer sits at 600 and reaches the CSS

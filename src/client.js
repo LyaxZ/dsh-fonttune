@@ -920,6 +920,93 @@ var weightProbeCanvas = null;
 var weightProfileCache = {};
 
 /**
+ * Values the card has moved but the settings document has not confirmed yet.
+ *
+ * The card paints these over the document's own values the moment the user lets go
+ * (see `repaint`), and the document's later echo replaces them one by one. Without
+ * the overlay a late echo of the PREVIOUS value would snap the page back for a
+ * moment — the same "it jumped back" flicker the slider ledger exists to prevent.
+ */
+var pendingLocalValues = {};
+
+/** How long a locally painted value is trusted while the document has not echoed it. */
+var PAINT_PATIENCE_MS = 45000;
+
+/**
+ * When a control gives the user's value back on a host that answers NOTHING.
+ *
+ * A refusal is handled by result (`refuseField`), never by a clock. This is the last
+ * resort for a write whose answer never arrives at all, so it sits far above the
+ * slowest answer measured on this host line: one settings write took 1.0-5.14 s on
+ * an idle instance (median 1.3 s), and the 7-8 s a loaded instance needs for a click
+ * is two writes one after the other, i.e. about 4 s each. At 30 s this cannot fire
+ * for a write that is merely slow — which is exactly what the 6 s patience it
+ * replaces did, on writes that were all accepted.
+ */
+var WRITE_FALLBACK_MS = 30000;
+
+/**
+ * How long one settings call may stay unanswered before the next one is sent.
+ *
+ * One call is in flight at a time (see the card's write queue), so a settings call
+ * that never answers would stall every later click; this releases the queue. It is
+ * the same 30 s as the control's own fallback and deliberately not shorter: a queue
+ * released while its call is still in flight would put two patches for one field on
+ * the wire, and the older answer can then arrive last.
+ */
+var WRITE_SETTLE_TIMEOUT_MS = 30000;
+
+/**
+ * How long the card waits for the user to stop before it writes.
+ *
+ * Kept at 0 for this release: one move is written straight away, which is the
+ * behaviour that has been tried on a real page. A quiet window that folds a whole
+ * run of clicks into ONE write (300 ms) is implemented and covered by offline
+ * cases, but it has not been checked on a real page, so it waits for the next
+ * release.
+ */
+var WRITE_QUIET_MS = 0;
+
+/**
+ * How long a scheduled local paint may wait for its frame before it paints anyway.
+ *
+ * A frame is the right moment to paint (several moves inside one frame cost one
+ * rebuild), but frame production is not guaranteed: a throttled or backgrounded tab
+ * can stop it for as long as it likes, and a paint that waits forever is a page that
+ * looks frozen on the old value while the control shows the new one.
+ */
+var PAINT_BACKSTOP_MS = 250;
+
+/**
+ * Repaint the injected stylesheet from the document plus the pending values.
+ *
+ * Set by `apply`, which owns the `<style>` element; the card calls it through
+ * `requestAnimationFrame` when it queues a move, so a burst of moves paints once
+ * with the latest value instead of once per click.
+ */
+var repaint = null;
+
+/**
+ * Record one step of a slider's local-value ledger when the page is being probed.
+ *
+ * `globalThis.__DFP_PROBE__` is the same switch `apply` uses to describe the scope it
+ * bound. With it on, every commit, reconciliation, refusal and fallback is
+ * timestamped into `__DFP_PROBE_LOG__`, so a live run can be read back instead of
+ * inferred from what the page ended up showing. Inert in a normal session.
+ * @param {string} kind - which step of the ledger this is.
+ * @param {object} detail - what the ledger held at that moment.
+ */
+function probeLog(kind, detail) {
+  if (globalThis.__DFP_PROBE__ !== true) return;
+  var log = globalThis.__DFP_PROBE_LOG__;
+  if (!Array.isArray(log)) {
+    log = [];
+    globalThis.__DFP_PROBE_LOG__ = log;
+  }
+  log.push({ at: Date.now(), kind: kind, detail: detail });
+}
+
+/**
  * Render the sample at one weight and describe the result.
  *
  * The signature is the total ink (summed alpha) plus the advance width at high
@@ -1232,6 +1319,12 @@ function NumberSlider(props) {
         awaiting: awaitingRef.current,
         confirmed: props.value,
       });
+      probeLog("reconcile", {
+        pending: pendingRef.current,
+        awaiting: awaitingRef.current,
+        confirmed: props.value,
+        kept: next,
+      });
       awaitingRef.current = next.awaiting;
       setLocal(next.pending);
       return undefined;
@@ -1239,6 +1332,7 @@ function NumberSlider(props) {
     [props.value]
   );
   var commit = function (value) {
+    probeLog("commit", { value: value });
     awaitingRef.current = value;
     setReverted(false);
     props.onChange(value);
@@ -1250,19 +1344,45 @@ function NumberSlider(props) {
    * stops the "bounce back, then settle" flicker — but a write the host REFUSES
    * (an out-of-range value against an older schema, a read-only deployment) never
    * echoes, and the slider would then sit on a value the document does not have,
-   * i.e. it would look like it jumped somewhere else and stayed there. The
-   * document is the truth, so after a few seconds the local value yields to it.
+   * i.e. it would look like it jumped somewhere else and stayed there.
+   *
+   * Which is why the decision is made by RESULT, not by a clock. The card raises
+   * `refusedToken` the moment the host answers "no" (`false` or a rejection), and
+   * that is the only thing that takes the user's value off the screen right away.
+   * A write that is merely still in flight keeps showing what the user chose,
+   * however long the host takes: a timer short enough to fire during a healthy
+   * write was the whole reason a slow instance looked like it "reverted to the
+   * stored value, then moved again".
+   *
+   * The timer that remains only covers a host that answers NOTHING at all, so it
+   * sits far above the slowest answer ever measured here ({@link WRITE_FALLBACK_MS}).
    */
-  var COMMIT_PATIENCE_MS = 6000;
+  var refusedToken = typeof props.refusedToken === "number" ? props.refusedToken : 0;
+  useEffect(
+    function () {
+      if (refusedToken === 0) return undefined;
+      // The host looked at this write and said no: no echo is coming.
+      probeLog("refused", { token: refusedToken, awaiting: awaitingRef.current });
+      awaitingRef.current = null;
+      setLocal(null);
+      setReverted(true);
+      return undefined;
+    },
+    [refusedToken]
+  );
   useEffect(
     function () {
       if (awaitingRef.current === null) return undefined;
       var timer = setTimeout(function () {
+        // The ledger is the authority, not this timer: a value confirmed while the
+        // timer was pending must not report anything, whatever the timer was told.
+        if (awaitingRef.current === null) return;
+        probeLog("fallback", { awaiting: awaitingRef.current, pending: pendingRef.current });
         awaitingRef.current = null;
         setLocal(null);
-        // The document is the truth and it never took this value: say so once.
+        // Nothing came back at all, so the document is the only truth there is.
         setReverted(true);
-      }, COMMIT_PATIENCE_MS);
+      }, WRITE_FALLBACK_MS);
       return function () {
         clearTimeout(timer);
       };
@@ -1277,7 +1397,10 @@ function NumberSlider(props) {
         // The guard compares values instead of "is anything outstanding" — a
         // commit still waiting for the document must not swallow the next drag's
         // release, which silently dropped that adjustment on a slow host.
-        if (awaitingRef.current === pending) return;
+        if (awaitingRef.current === pending) {
+          probeLog("release-ignored", { pending: pending, awaiting: awaitingRef.current });
+          return;
+        }
         commit(pending);
       };
       window.addEventListener("pointerup", release, true);
@@ -1312,7 +1435,11 @@ function NumberSlider(props) {
         disabled: props.disabled,
         "aria-label": props.label,
         onChange: function (event) {
-          setPending(Number(event.target.value));
+          // Through `setLocal`, not `setPending`: the ref is what the reconciliation
+          // effect reads, and a ref that lags the state makes that effect clear a
+          // value the user is still holding — and leave the fallback timer of the
+          // cleared value running, which then reports a write that had been taken.
+          setLocal(Number(event.target.value));
         },
         onKeyUp: function () {
           if (pending !== null) commit(pending);
@@ -2389,6 +2516,14 @@ function FontCard(props) {
   /** True while the card itself writes a whole preset's values: the edits
    * must not mirror back into the very preset being applied. */
   var applyingRef = useRef(false);
+  /**
+   * Per field, how many times the host has refused a write for it.
+   *
+   * A counter rather than a flag so a control can tell one refusal from the next;
+   * see `refuseField`. This is what makes "give the user's value back" a result and
+   * not a guess about how long a healthy write may take.
+   */
+  var [refused, setRefused] = useState({});
   /** The pending auto-hide / fade-out timers of the preset message. */
   var statusIdRef = useRef(0);
   var statusTimerRef = useRef(null);
@@ -2433,27 +2568,27 @@ function FontCard(props) {
 
   /**
    * Mirror one axis value into the active preset's snapshot — the auto-save
-   * contract: with a preset selected, every change the user makes IS that
-   * preset from now on. Skipped while the card itself applies a whole preset.
+   * contract: with a preset selected, every change the user makes IS that preset
+   * from now on. Skipped while the card itself applies a whole preset.
+   *
+   * Only the INTENT is recorded here. The snapshot itself is built when the batch
+   * is sent (`presetSnapshotOp`), so a burst of clicks stores the values the user
+   * stopped on, and a write that would only move `savedAt` is not made at all.
    * @param {string} field - an axis field name.
    * @param {string|number|boolean} value - the value to store.
    */
   var mirrorPreset = function (field, value) {
-    if (!writable || applyingRef.current === true) return;
-    var index = -1;
-    for (var i = 0; i < presetList.length; i += 1) {
-      if (presetList[i].name === activeName) index = i;
+    if (!writable || applyingRef.current === true) {
+      probeLog("mirror-skipped", { field: field, writable: writable, applying: applyingRef.current });
+      return;
     }
-    if (index < 0) return;
-    var entry = presetList[index];
-    var values = {};
-    for (var key in entry.values) {
-      if (Object.prototype.hasOwnProperty.call(entry.values, key)) values[key] = entry.values[key];
+    if (activePresetEntry() === undefined) {
+      probeLog("mirror-no-preset", { field: field, activeName: activeName, presets: presetList.length });
+      return;
     }
-    values[field] = value;
-    var next = presetList.slice();
-    next[index] = { name: entry.name, values: values, savedAt: Date.now() };
-    writePresets(next);
+    pendingPresetValues[field] = { op: shared.PENDING_SET, value: value };
+    if (pendingPreset === null) pendingPreset = { kind: "mirror" };
+    scheduleFlush();
   };
 
   /**
@@ -2487,26 +2622,59 @@ function FontCard(props) {
     showStatus(t("preset.writeFailed", { message: message }));
   };
   /**
+   * Mark the controls a refused write belonged to, so each gives the user's value
+   * back and says so.
+   *
+   * A refusal is the one moment a local paint is provably wrong: the host looked at
+   * the patch and answered "no", so no echo is coming. It is also the ONLY thing
+   * allowed to take a value off the screen before the document echoes it — a write
+   * that is merely still in flight must keep showing what the user chose.
+   * @param {string[]} fields - the fields the refused write carried.
+   */
+  var refuseField = function (fields) {
+    setRefused(function (previous) {
+      var next = {};
+      for (var key in previous) {
+        if (Object.prototype.hasOwnProperty.call(previous, key)) next[key] = previous[key];
+      }
+      for (var index = 0; index < fields.length; index += 1) {
+        // A token, not a timestamp: two refusals inside one millisecond must still
+        // be two changes, or the control would ignore the second one.
+        next[fields[index]] = (previous[fields[index]] || 0) + 1;
+      }
+      return next;
+    });
+  };
+  /**
    * Follow one queued settings write.
    *
    * The two host lines answer differently: up to 0.1.5-rc.x the scope resolves
    * a promise that rejects on a transport failure, while 0.1.7-alpha.x resolves
    * `false` for a write the host refused (a stale revision, say). Both are
    * reported, and a refused write is never left looking saved.
+   * @param {string[]} fields - the fields this write carried.
    * @param {unknown} result - what the scope returned.
+   * @param {(applied: boolean) => void} [onSettled] - called once with the verdict.
    */
-  var followWrite = function (result) {
+  var followWrite = function (fields, result, onSettled) {
+    var done = function (applied, error) {
+      if (applied === false) {
+        refuseField(fields);
+        writeFailed(error);
+      }
+      if (typeof onSettled === "function") onSettled(applied);
+    };
     if (result === false) {
-      writeFailed(result);
+      done(false, result);
       return;
     }
     if (result && typeof result.then === "function") {
       result.then(function (accepted) {
-        if (accepted === false) writeFailed(accepted);
+        done(accepted !== false, accepted);
       }, function (error) {
         // The scope reloads the Host state itself; the status row is what
         // keeps the user from thinking the change stuck.
-        writeFailed(error);
+        done(false, error);
       });
       return;
     }
@@ -2515,30 +2683,379 @@ function FontCard(props) {
         writeFailed(error);
       });
     }
+    done(true);
+  };
+  /**
+   * Our own writes: one batch in flight, newest value per field.
+   *
+   * Two measured facts shape this. A settings call is expensive — the host answers
+   * one by rewriting the whole profile document and re-applying the whole patch list
+   * to the loader, 1.0-5.14 s per call and one document write each — so a click must
+   * not spend two of them, and a burst of clicks must not spend one per click. And
+   * DSH validates a patch against the revision it was built from, so patches that
+   * overlap in flight can be refused as stale or land out of order.
+   *
+   * Hence: intents are collected per field (the newest wins), everything one turn
+   * produced goes out as ONE call, and the next call waits for this one's answer.
+   */
+  var pendingOps = {};
+  /** The order fields were touched in, so a batch keeps a stable order. */
+  var pendingOrder = [];
+  /** The preset snapshot the pending axis values imply; `null` when none is due. */
+  var pendingPreset = null;
+  /** The axis values the pending preset snapshot must end up holding. */
+  var pendingPresetValues = {};
+  /** One call at a time: a batch that arrives while one is in flight waits. */
+  var writing = false;
+  /** The quiet window's timer; null when no window is armed. */
+  var flushTimer = null;
+  /**
+   * Stop painting a local move once its fate is known.
+   * @param {string} field - the field the patch was for.
+   */
+  var retireLocalMove = function (field) {
+    delete pendingLocalValues[field];
+  };
+  /**
+   * The preset entry the axis edits mirror into, if there is one.
+   * @returns {{name: string, values: object}|undefined}
+   */
+  var activePresetEntry = function () {
+    for (var index = 0; index < presetList.length; index += 1) {
+      if (presetList[index].name === activeName) return presetList[index];
+    }
+    return undefined;
+  };
+  /**
+   * The preset snapshot the pending axis values imply, as one op — or `null` when
+   * there is nothing to store.
+   *
+   * The snapshot is derived HERE rather than where the click happened, because a
+   * burst is one write: what must land is the snapshot the LAST value implies, not
+   * the one the first click saw. `savedAt` alone never justifies a write — that is
+   * why the stored values are compared before one is built.
+   * @returns {{op: string, path: string[], value: unknown}|null}
+   */
+  var presetSnapshotOp = function () {
+    if (pendingPreset === null) return null;
+    if (pendingPreset.kind === "json") {
+      // An explicit list (save, delete, import, migration) is the user's own edit
+      // and wins over the mirror.
+      probeLog("preset-op", { kind: "json" });
+      return { op: shared.PENDING_SET, path: [PRESETS_FIELD], value: pendingPreset.value };
+    }
+    var entry = activePresetEntry();
+    if (entry === undefined) {
+      probeLog("preset-op", { kind: "mirror", why: "no active entry" });
+      return null;
+    }
+    var values = {};
+    var key;
+    for (key in entry.values) {
+      if (Object.prototype.hasOwnProperty.call(entry.values, key)) values[key] = entry.values[key];
+    }
+    var changed = false;
+    for (key in pendingPresetValues) {
+      if (!Object.prototype.hasOwnProperty.call(pendingPresetValues, key)) continue;
+      var move = pendingPresetValues[key];
+      if (move.op === shared.PENDING_UNSET) {
+        if (Object.prototype.hasOwnProperty.call(values, key)) {
+          delete values[key];
+          changed = true;
+        }
+        continue;
+      }
+      if (values[key] !== move.value) {
+        values[key] = move.value;
+        changed = true;
+      }
+    }
+    // Nothing moved: the only difference would be the `savedAt` timestamp, and a
+    // whole-document rewrite for a timestamp is a write nobody asked for.
+    if (!changed) {
+      probeLog("preset-op", { kind: "mirror", why: "unchanged", values: values });
+      return null;
+    }
+    var next = presetList.slice();
+    for (var index = 0; index < next.length; index += 1) {
+      if (next[index].name === entry.name) {
+        next[index] = { name: entry.name, values: values, savedAt: Date.now() };
+      }
+    }
+    return { op: shared.PENDING_SET, path: [PRESETS_FIELD], value: JSON.stringify(next) };
+  };
+  /**
+   * Everything one flush must write, as ordered settings ops.
+   * @returns {{op: string, path: string[], value?: unknown}[]}
+   */
+  var collectOps = function () {    var ops = [];
+    for (var index = 0; index < pendingOrder.length; index += 1) {
+      var field = pendingOrder[index];
+      if (field === PRESETS_FIELD) continue; // always rebuilt from the newest axes
+      var patch = pendingOps[field];
+      if (patch === undefined) continue;
+      ops.push({ op: patch.op, path: [field], value: patch.value });
+    }
+    var snapshot = presetSnapshotOp();
+    if (snapshot !== null) ops.push(snapshot);
+    probeLog("batch", {
+      ops: ops.map(function (op) {
+        return op.path[0] + "=" + String(op.value).slice(0, 24);
+      }),
+      preset: pendingPreset === null ? "none" : pendingPreset.kind,
+    });
+    return ops;
+  };
+  /**
+   * Send one batch, through `mutate` when the running host offers it.
+   *
+   * 0.1.7-alpha.x's config form exposes `mutate(ops)`, which the host applies as ONE
+   * patch — that is what lets the axis value and the preset snapshot that mirrors it
+   * share a single document write. A host whose scope only takes one field at a time
+   * still works: the batch is written field by field there and the last verdict is
+   * the batch's.
+   * @param {{op: string, path: string[], value?: unknown}[]} ops - the batch.
+   * @param {(applied: boolean) => void} done - called once with the verdict.
+   */
+  var sendOps = function (ops, done) {
+    var fields = [];
+    for (var index = 0; index < ops.length; index += 1) {
+      if (ops[index].path[0] !== PRESETS_FIELD) fields.push(ops[index].path[0]);
+    }
+    var canBatch =
+      typeof scope.canMutate === "function" ? scope.canMutate() : typeof scope.mutate === "function";
+    if (canBatch) {
+      var batch = null;
+      try {
+        batch = scope.mutate(ops);
+      } catch (error) {
+        writeFailed(error);
+        done(false);
+        return;
+      }
+      followWrite(fields, batch, done);
+      return;
+    }
+    var at = 0;
+    var step = function () {
+      if (at >= ops.length) {
+        done(true);
+        return;
+      }
+      var op = ops[at];
+      at += 1;
+      var single = null;
+      try {
+        single = op.op === shared.PENDING_UNSET ? scope.unset(op.path[0]) : scope.set(op.path[0], op.value);
+      } catch (error) {
+        writeFailed(error);
+        done(false);
+        return;
+      }
+      followWrite(op.path[0] === PRESETS_FIELD ? fields : [op.path[0]], single, function (applied) {
+        if (applied === false) {
+          done(false);
+          return;
+        }
+        step();
+      });
+    };
+    step();
+  };
+  /** Send what is pending, if the previous batch has been answered. */
+  var flushWrites = function () {
+    if (writing) return;
+    var ops = collectOps();
+    if (ops.length === 0) return;
+    var sent = [];
+    for (var index = 0; index < pendingOrder.length; index += 1) {
+      if (pendingOrder[index] !== PRESETS_FIELD) sent.push(pendingOrder[index]);
+    }
+    pendingOps = {};
+    pendingOrder = [];
+    pendingPreset = null;
+    pendingPresetValues = {};
+    // A local move that is now on the wire is not re-painted from the document: the
+    // overlay keeps the user's value until the echo arrives.
+    writing = true;
+    var settled = false;
+    var watchdog = globalThis.setTimeout(function () {
+      // Nothing came back at all. Release the queue for later clicks; the control
+      // yields to the document through its own fallback, not through this.
+      finish(true);
+    }, WRITE_SETTLE_TIMEOUT_MS);
+    var finish = function (applied) {
+      if (settled) return;
+      settled = true;
+      globalThis.clearTimeout(watchdog);
+      writing = false;
+      if (applied === false) {
+        for (var at = 0; at < sent.length; at += 1) retireLocalMove(sent[at]);
+      }
+      // What arrived while this one was in flight is the next batch — but only once
+      // the user has stopped: while a quiet window is armed IT decides, so a burst
+      // that straddles two writes still ends on one write carrying its last value.
+      if (flushTimer === null && hasPending()) flushWrites();
+    };
+    sendOps(ops, finish);
+  };
+  /** Whether anything is waiting to be written. */
+  var hasPending = function () {
+    return pendingOrder.length > 0 || pendingPreset !== null;
+  };
+  /**
+   * Wait for the user to stop, then write everything they did as ONE patch.
+   *
+   * Every queued move re-arms the window, so a run of clicks — on one control or
+   * across several — leaves exactly one settings call behind, holding the value the
+   * user stopped on. That is what takes the last of the jumping out: the document
+   * used to take on the first click's value and every intermediate one, and each of
+   * those states echoed back into the page.
+   *
+   * The window is short enough to stay invisible (the page already shows the change
+   * the moment the user lets go — see `rememberLocalMove`) and long enough to span a
+   * person clicking faster than they can read the number. What it costs is covered
+   * by `flushPendingWrites`: a page that goes away inside the window.
+   */
+  var scheduleFlush = function () {
+    if (flushTimer !== null) globalThis.clearTimeout(flushTimer);
+    flushTimer = globalThis.setTimeout(function () {
+      flushTimer = null;
+      flushWrites();
+    }, WRITE_QUIET_MS);
+  };
+  /** Write what is pending right now, whatever the window says. */
+  var flushPendingWrites = function () {
+    if (flushTimer !== null) {
+      globalThis.clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    flushWrites();
+  };
+  /**
+   * Record one move: paint it now, write it with the next batch.
+   * @param {string} field - a settings field name.
+   * @param {string} op - `PENDING_SET` or `PENDING_UNSET`.
+   * @param {string|number|boolean} value - the value to paint and send.
+   */
+  var queuePatch = function (field, op, value) {
+    rememberLocalMove(field, op, value);
+    if (pendingOps[field] === undefined) pendingOrder.push(field);
+    pendingOps[field] = { op: op, value: value };
+    scheduleFlush();
   };
   var submit = function (field, value) {
-    var result;
-    try {
-      result = scope.set(field, value);
-    } catch (error) {
-      writeFailed(error);
-      return;
-    }
-    followWrite(result);
+    queuePatch(field, shared.PENDING_SET, value);
   };
   var clear = function (field) {
-    var result;
-    try {
-      result = scope.unset(field);
-    } catch (error) {
-      writeFailed(error);
+    queuePatch(field, shared.PENDING_UNSET, undefined);
+  };
+  /** The frame handle for the next local paint; null when no paint is scheduled. */
+  var paintFrame = null;
+  /** The backstop timer for that paint; null when none is armed. */
+  var paintBackstop = null;
+  /**
+   * Paint one move locally, right now.
+   *
+   * This is what makes a click land immediately: the settings document only echoes
+   * the value after the host itself has taken a whole write (measured 1.0-5.1 s),
+   * and until that echo arrives the page would keep showing the previous value —
+   * clicking through several notches then stalls once per notch, each stall as long
+   * as the write took.
+   *
+   * The paint is deferred to the next frame, so several moves inside one frame paint
+   * once (the latest wins) instead of once per move. It carries a timer as well
+   * because a frame the browser never produces (a throttled or backgrounded tab)
+   * would otherwise take the paint with it — and leave the handle set, which skips
+   * every LATER move too, on a page that looks like it stopped following.
+   * @param {string} field - a settings field name.
+   * @param {string} op - `PENDING_SET` or `PENDING_UNSET`.
+   * @param {string|number|boolean} value - the value to paint.
+   */
+  var rememberLocalMove = function (field, op, value) {
+    // A snapshot or a selection is not a value the stylesheet can show, so it is
+    // never painted over the document's own.
+    if (field === PRESETS_FIELD || field === ACTIVE_PRESET_FIELD) return;
+    // A re-assert of the SAME value keeps its counter; a fresh choice starts over.
+    var previous = pendingLocalValues[field];
+    var same = previous !== undefined && previous.op === op && previous.value === value;
+    pendingLocalValues[field] = {
+      op: op,
+      value: value,
+      at: Date.now(),
+      tries: same ? previous.tries || 0 : 0,
+    };
+    if (paintFrame !== null || typeof globalThis.requestAnimationFrame !== "function") {
+      probeLog("remember-skipped", {
+        field: field,
+        value: value,
+        pendingFrame: paintFrame !== null,
+        hasRaf: typeof globalThis.requestAnimationFrame === "function",
+      });
       return;
     }
-    followWrite(result);
+    var done = false;
+    var paintNow = function (why) {
+      if (done) return;
+      done = true;
+      paintFrame = null;
+      if (paintBackstop !== null) {
+        globalThis.clearTimeout(paintBackstop);
+        paintBackstop = null;
+      }
+      probeLog("paint", { field: field, why: why, painter: typeof repaint === "function" });
+      if (typeof repaint === "function") repaint();
+    };
+    paintFrame = globalThis.requestAnimationFrame(function () {
+      paintNow("frame");
+    });
+    paintBackstop = globalThis.setTimeout(function () {
+      paintNow("backstop");
+    }, PAINT_BACKSTOP_MS);
   };
   var overridden = function (field) {
     return Object.prototype.hasOwnProperty.call(user, field);
   };
+  /**
+   * The queue as the LAST render saw it, for listeners that outlive that render.
+   *
+   * Everything this card queues lives in render-scoped bindings (`flushTimer`,
+   * `pendingOps`, `pendingOrder`), and a function component gets a fresh set of them
+   * on every render. The listeners below are registered once, by the render that
+   * mounted the card, so their `flushPendingWrites` reads the queue THAT render had
+   * — which by the time a user has moved a control is the empty one it started with.
+   * Measured: a move queued in render 2, `pagehide` at +91 ms flushed render 1's
+   * empty queue, and the write only left at +306 ms when the window expired. The ref
+   * is refreshed on every render, so the early close always closes the live window.
+   */
+  var flushRef = useRef(null);
+  flushRef.current = flushPendingWrites;
+  /**
+   * Close the quiet window early whenever the page is about to stop being able to.
+   *
+   * Waiting for the user to stop is only safe if "the user stopped" cannot be
+   * followed by "the page went away" before the window expires. Three moments cover
+   * that: the settings sheet closing (this effect's cleanup), the page being hidden
+   * (a tab switch, a minimise, most ways of leaving), and `pagehide` (navigation,
+   * bfcache). What remains is a hard kill with no event at all, which no client-side
+   * debounce can cover — the exposure is the window itself, a few hundred ms.
+   */
+  useEffect(function () {
+    var closeWindow = function () {
+      // Through the ref: this closure is the mount render's, the queue is not.
+      if (typeof flushRef.current === "function") flushRef.current();
+    };
+    var onHidden = function () {
+      if (document.visibilityState === "hidden") closeWindow();
+    };
+    globalThis.addEventListener("pagehide", closeWindow);
+    document.addEventListener("visibilitychange", onHidden);
+    return function () {
+      globalThis.removeEventListener("pagehide", closeWindow);
+      document.removeEventListener("visibilitychange", onHidden);
+      closeWindow();
+    };
+  }, []);
 
   // ---- family stack handlers ----
   var pickWest = function (field, family) {
@@ -2572,6 +3089,7 @@ function FontCard(props) {
         disabled: !writable,
         label: t(props.labelKey),
         revertedText: t("write.reverted"),
+        refusedToken: refused[props.field] || 0,
         readout: props.text + " " + t("size.unit"),
         minLabel: SIZE_MIN + " " + t("size.unit"),
         maxLabel: "+" + SIZE_MAX + " " + t("size.unit"),
@@ -2627,6 +3145,7 @@ function FontCard(props) {
         disabled: !writable,
         label: t(props.labelKey),
         revertedText: t("write.reverted"),
+        refusedToken: refused[props.field] || 0,
         // One notch is one family step, so every notch changes what is on screen.
         step: 1,
         // The readout is the STEP COUNT, not the weight: "+2" is two faces
@@ -2672,6 +3191,7 @@ function FontCard(props) {
         disabled: !writable,
         label: t(props.labelKey),
         revertedText: t("write.reverted"),
+        refusedToken: refused[props.field] || 0,
         readout: props.value + " " + t("line.unit"),
         minLabel: LINE_HEIGHT_MIN + " " + t("line.unit"),
         maxLabel: LINE_HEIGHT_MAX + " " + t("line.unit"),
@@ -2709,6 +3229,7 @@ function FontCard(props) {
         disabled: !writable,
         label: t("line.codeLabel"),
         revertedText: t("write.reverted"),
+        refusedToken: refused[CODE_LINE_HEIGHT_FIELD] || 0,
         readout: (value > 0 ? "+" + value : String(value)) + "px",
         minLabel: CODE_LINE_HEIGHT_MIN + "px",
         maxLabel: "+" + CODE_LINE_HEIGHT_MAX + "px",
@@ -2848,9 +3369,17 @@ function FontCard(props) {
     [presetStatus.id]
   );
 
+  /**
+   * Write a whole preset list the caller built (save, delete, import, migration).
+   *
+   * An explicit list, so it is not compared against what is stored: the caller
+   * decided, and a no-op here would silently drop a rename or a deletion.
+   * @param {{name: string, values: object}[]} next - the list to store.
+   */
   var writePresets = function (next) {
     if (next.length > shared.MAX_PRESETS) next = next.slice(0, shared.MAX_PRESETS);
-    submit(PRESETS_FIELD, JSON.stringify(next));
+    pendingPreset = { kind: "json", value: JSON.stringify(next) };
+    scheduleFlush();
   };
 
   /**
@@ -2863,27 +3392,45 @@ function FontCard(props) {
    * convert whatever is still absolute (the three fields and every saved snapshot),
    * then set the marker.
    *
+   * The values are read from the RAW settings document, not from the normalized
+   * `config`: normalization has already converted a legacy absolute weight
+   * (`450 → 50`), so looking for one on the converted side finds nothing — and the
+   * marker would then re-label the stored `450` as +450, turning a +50 code weight
+   * into +450 in one click.
+   *
    * Values first, marker last: a stylesheet rebuild between the two still sees
    * values that render exactly as before, and a marked document is never left
    * holding an unconverted absolute weight.
    *
-   * The three fields are read from `config`, not from the expanded `editing` set:
-   * while the interface follows the conversation, `editing` mirrors the
-   * conversation's weight into the interface's own field, and writing that back
-   * would silently freeze the follow.
+   * The three fields are read from the document rather than from the expanded
+   * `editing` set too: while the interface follows the conversation, `editing`
+   * mirrors the conversation's weight into the interface's own field, and writing
+   * that back would silently freeze the follow.
    */
   var adoptWeightScale = function () {
     if (config[WEIGHT_OFFSETS_FIELD] === true) return;
+    var raw = snapshot.value !== null && typeof snapshot.value === "object" ? snapshot.value : {};
     for (var index = 0; index < shared.WEIGHT_FIELDS.length; index += 1) {
       var field = shared.WEIGHT_FIELDS[index];
-      var stored = Number(config[field]);
+      var stored = Number(raw[field]);
       if (!isFinite(stored) || stored < shared.WEIGHT_MIN || stored > shared.WEIGHT_MAX) {
         continue;
       }
       submit(field, stored - shared.WEIGHT_BASE);
     }
-    var migrated = shared.migratePresetWeights(config[PRESETS_FIELD]);
-    if (migrated.changed) writePresets(migrated.presets);
+    // The snapshots are migrated from their stored JSON for the same reason: the
+    // normalized list has already been converted, so it would report no change.
+    var rawPresets = raw[PRESETS_FIELD];
+    if (typeof rawPresets === "string" && rawPresets.trim() !== "") {
+      var parsed = null;
+      try {
+        parsed = JSON.parse(rawPresets);
+      } catch (error) {
+        parsed = null;
+      }
+      var migrated = shared.migratePresetWeights(parsed);
+      if (migrated.changed) writePresets(migrated.presets);
+    }
     submit(WEIGHT_OFFSETS_FIELD, true);
   };
 
@@ -3709,6 +4256,26 @@ export function apply(ctx) {
         }
         return target.set(field, value);
       },
+      /**
+       * The one-call batch, when the adopted scope has it.
+       *
+       * Answered at CALL time, not at bind time: the seat is decided while the host
+       * is still describing itself, and the older `settingsScope` dialect has no
+       * `mutate` at all. `canMutate` is what the card asks first, so a host without
+       * it takes the one-field-per-call path instead of an error.
+       */
+      canMutate: function () {
+        return target !== null && typeof target.mutate === "function";
+      },
+      mutate: function (ops) {
+        if (target === null) {
+          return Promise.reject(new Error("the settings service is still starting"));
+        }
+        if (typeof target.mutate !== "function") {
+          return Promise.reject(new Error("this host writes one field at a time"));
+        }
+        return target.mutate(ops);
+      },
       unset: function (field) {
         if (target === null) {
           return Promise.reject(new Error("the settings service is still starting"));
@@ -3845,10 +4412,26 @@ export function apply(ctx) {
   var sync = function () {
     var snapshot = scope.getSnapshot();
     if (snapshot.value === undefined) return;
+    // A move the card already painted wins until the document echoes it, so a late
+    // echo of an OLDER value neither steps the page backwards nor costs a repaint.
+    pendingLocalValues = shared.reconcilePendingValues(
+      pendingLocalValues,
+      snapshot.value,
+      Date.now(),
+      PAINT_PATIENCE_MS
+    );
     // Light and dark share one value set in this release: the stored flag (if
     // any) is ignored, so no prefixed dark rules are ever emitted.
-    var unified = normalizeConfig(snapshot.value);
+    var unified = normalizeConfig(shared.overlayPendingValues(snapshot.value, pendingLocalValues));
     unified[PER_THEME_FIELD] = false;
+    probeLog("sync", {
+      overlay: Object.keys(pendingLocalValues).map(function (key) {
+        return key + "=" + String(pendingLocalValues[key].value);
+      }),
+      dialog: unified[WEIGHT_DIALOG_FIELD],
+      followed: unified[WEIGHT_FIELD],
+      size: unified[SIZE_DIALOG_FIELD],
+    });
     applyCss(unified);
     applyTokenOverrides(unified);
   };
@@ -3859,6 +4442,8 @@ export function apply(ctx) {
     "dsh-fonttune: settings adoption"
   );
   sync();
+  // The card paints a move the moment the user lets go; this is that painter.
+  repaint = sync;
 
   // Which selectors the sheet can be narrowed to depends on what the page
   // contains, and the conversation renders AFTER this bundle activates: the

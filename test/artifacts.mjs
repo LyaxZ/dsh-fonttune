@@ -76,5 +76,27 @@ check(
   expected["lib/client.js"].includes(".dfp-sliderNotice{")
 );
 
+// Everything the card queues (`flushTimer`, `pendingOps`, `pendingOrder`) is a
+// binding of ONE render, and a function component gets fresh ones on every render.
+// The early-close listeners are registered once, by the render that mounted the
+// card, so a listener calling the render's own `flushPendingWrites` closes the
+// window that the MOUNT render had — the empty one it started with. Measured live
+// before this was fixed: a move queued in render 2, `pagehide` arriving at +91 ms
+// flushed render 1's empty queue (ops `[]`), and the write only left at +306 ms
+// when the window expired anyway. Hence the flush goes through a ref that every
+// render refreshes.
+const closeWindow = expected["lib/client.js"].match(/var closeWindow = function \(\) \{[\s\S]{0,400}?\};/);
+check(
+  "the early-close listeners flush the live queue, not the mount render's",
+  closeWindow !== null &&
+    closeWindow[0].includes("flushRef.current()") &&
+    !closeWindow[0].includes("flushPendingWrites()"),
+  closeWindow === null ? "no closeWindow in the bundle" : closeWindow[0].replace(/\s+/g, " ")
+);
+check(
+  "that ref is refreshed on every render",
+  expected["lib/client.js"].includes("flushRef.current = flushPendingWrites;")
+);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

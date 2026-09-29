@@ -460,6 +460,20 @@ const main = async () => {
     shape.step === 1 && shape.min < 0 && shape.max > 0 && Math.abs(shape.max) <= 12 && Math.abs(shape.min) <= 12,
     JSON.stringify(shape)
   );
+  // The code axis is the last weight rule in the stylesheet, and the walk never
+  // touches it here — so its offset is the tell for a legacy absolute weight that
+  // adoption failed to convert (`+50` would become `+450`). Read from the RENDERED
+  // stylesheet on purpose: the settings API hands back NORMALIZED values, so a
+  // stored 450 that was wrongly re-labelled as an offset still reads as 50 through
+  // it — an earlier version of this check compared those normalized values and
+  // therefore passed while the bug was live.
+  const codeOffset = async () =>
+    evalJs(`(() => {
+      const text = [...document.querySelectorAll('style[data-plugin-css="dsh-fonttune"]')].map((s) => s.textContent || "").join("");
+      const all = text.match(/--dfp-wdelta:-?[0-9]+/g) || [];
+      return all.length > 0 ? Number(all[all.length - 1].split(":")[1]) : null;
+    })()`);
+  const codeBefore = await codeOffset();
   const raw0 = field(await readUser(), "weightDialog");
   const up = shape.value + 1 <= shape.max;
   const c1 = up ? shape.value + 1 : shape.value - 1;
@@ -512,20 +526,13 @@ const main = async () => {
     JSON.stringify(document)
   );
   // Adoption converts what is still on the absolute scale, exactly once and before
-  // the marker goes in: a legacy `450` left next to the marker would render as +450
-  // instead of +50. Only fields the walk itself did not overwrite can be compared,
-  // which is why the code axis is the interesting one here.
-  const legacyFields = ["weight", "weightDialog", "weightCode"].filter((name) => {
-    const value = field(originalUser, name);
-    return typeof value === "number" && value >= 300 && value <= 600;
-  });
-  const unconverted = legacyFields.filter(
-    (name) => field(document, name) === field(originalUser, name)
-  );
+  // the marker goes in: a legacy `450` left next to the marker renders as +450
+  // instead of +50.
+  const codeAfter = await codeOffset();
   check(
-    "a legacy absolute weight is converted when the scale is adopted",
-    unconverted.length === 0,
-    `of ${JSON.stringify(legacyFields)} these still hold the absolute value: ${JSON.stringify(unconverted)}`
+    "adopting the offset scale does not re-label a legacy code weight",
+    codeAfter === codeBefore,
+    `the code axis moved from ${codeBefore} to ${codeAfter}`
   );
   // One step is worth the same everywhere: the counts on the control and the
   // offsets in the document are the same number, up to that unit. A family can
