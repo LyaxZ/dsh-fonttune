@@ -192,10 +192,28 @@ export function renderClient(sharedSource, clientSource) {
 export function renderArtifacts(sources) {
   verifyHost(sources.host);
   return {
-    "lib/client.js": renderClient(sources.shared, sources.client),
-    "lib/shared.cjs": sources.shared,
-    "lib/index.js": sources.host,
+    "lib/client.js": toLf(renderClient(sources.shared, sources.client)),
+    "lib/shared.cjs": toLf(sources.shared),
+    "lib/index.js": toLf(sources.host),
   };
+}
+
+/**
+ * Normalise one artifact to LF.
+ *
+ * The shipped bundles must be byte-identical wherever they are built: the
+ * release workflow rebuilds them on a Linux checkout and attaches the result to
+ * the GitHub release, while the npm tarball is packed from this machine. A
+ * Windows checkout with `core.autocrlf=true` hands the build CRLF sources, so
+ * without this the two artifacts differed by one byte per source line (0.3.4:
+ * 342 bytes, and only the client bundle). `.gitattributes` pins LF as well;
+ * this is the belt to that pair of braces, so an artifact built from a
+ * differently checked-out tree still matches.
+ * @param {string} text - rendered artifact.
+ * @returns {string} the same text with LF endings.
+ */
+export function toLf(text) {
+  return text.replace(/\r\n/g, "\n");
 }
 
 /**

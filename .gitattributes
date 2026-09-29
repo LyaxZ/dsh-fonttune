@@ -1,0 +1,10 @@
+# Generated artifacts must be byte-identical on every machine.
+#
+# The plugin ships `lib/` in its npm tarball, and the release workflow rebuilds
+# the same bundle on a Linux checkout. With `core.autocrlf=true` on Windows the
+# working tree holds CRLF while a Linux checkout holds LF, so the same sources
+# produced two different bundles: the GitHub release asset was 342 bytes bigger
+# than the npm tarball for 0.3.4 (identical only after normalising line endings).
+# Pinning LF here makes every checkout agree, and `build.mjs` normalises its
+# output as well so a hand-edited artifact cannot reintroduce the drift.
+* text=auto eol=lf
