@@ -26,9 +26,11 @@
 
 | Plugin version | Supported DSH versions |
 | --- | --- |
-| **0.3.3** (latest) | 0.1.7-alpha.1 / alpha.2, 0.1.7-rc.1 / rc.2, 0.2.0-rc.1 |
+| **0.3.x** (latest, 0.3.4) | 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2, 0.2.0-rc.1 |
+| 0.2.x (0.2.8) | 0.1.5-rc.3, 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2 |
 
-`engines.dsh` is declared as **`>=0.1.7-alpha.1 <0.3.0-0`** (a prerelease needs its own branch: node-semver admits one only when some comparator in the range sits on that version's exact `major.minor.patch` tuple and carries a prerelease tag of its own, so a plain `>=0.1.5-rc.3` never matches `0.1.7-alpha.1`).
+Each major version lists only its newest patch: defects a feature introduced were fixed in the patches after it, so within a major version the newest patch is the one to use; older patches keep working, because the plugin does not break its existing interfaces.
+
 ## Install
 
 Install through the DSH CLI:
