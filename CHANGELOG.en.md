@@ -2,6 +2,15 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.3.5] - 2026-09-29
+
+### Fixed
+- **A weight offset inside the old absolute-weight range was rewritten on the way back**: such an offset was read as a pre-relative absolute weight and converted again, which is the "the notch jumps to −1" report from 0.3.1 as soon as the range reaches past +200. The document now states which scale its weight fields are on, so a legacy value is converted once and only where that statement is missing.
+- **The highest notch of the weight slider wrote a value the slider itself cannot show**: rounding the top position up passed the ceiling measured for the font. Every position is now a whole number of steps from the neutral one and stays inside the range.
+
+### Changed
+- **The weight slider picks its step so that every notch is a change you can see**: one notch is the smallest jump between the font's own faces that is clearly visible rather than the smallest possible one, so the control may offer fewer positions than before while every one of them shows; body text changes at every position, and bold text and headings stop once they reach their heaviest face.
+
 ## [0.3.4] - 2026-09-29
 
 ### Fixed
