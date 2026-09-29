@@ -55,6 +55,7 @@ var NO_SYNTHETIC_BOLD_FIELD = shared.NO_SYNTHETIC_BOLD_FIELD;
 var PER_THEME_FIELD = shared.PER_THEME_FIELD;
 var DARK_VALUES_FIELD = shared.DARK_VALUES_FIELD;
 var PRESETS_FIELD = shared.PRESETS_FIELD;
+var WEIGHT_OFFSETS_FIELD = shared.WEIGHT_OFFSETS_FIELD;
 var ACTIVE_PRESET_FIELD = shared.ACTIVE_PRESET_FIELD;
 var UI_FOLLOWS_FIELD = shared.UI_FOLLOWS_FIELD;
 var VALUE_FIELDS = shared.VALUE_FIELDS;
@@ -2638,6 +2639,8 @@ function FontCard(props) {
         // the document confirmed it).
         pendingText: text,
         onChange: function (count) {
+          // Once per document, before anything is written on the new scale.
+          adoptWeightScale();
           // The neutral position means "leave the axis alone" rather than "write
           // it on every element".
           if (count === 0) resetField(props.field);
@@ -2848,6 +2851,40 @@ function FontCard(props) {
   var writePresets = function (next) {
     if (next.length > shared.MAX_PRESETS) next = next.slice(0, shared.MAX_PRESETS);
     submit(PRESETS_FIELD, JSON.stringify(next));
+  };
+
+  /**
+   * Adopt the offset scale, once per document.
+   *
+   * A document written before the weight axes became relative stores absolute
+   * weights inside `300…600`, and once a document is marked a stored `450` means
+   * +450 — the two scales overlap, so the conversion must happen exactly once and
+   * never again. This is that moment: before the first weight this card writes,
+   * convert whatever is still absolute (the three fields and every saved snapshot),
+   * then set the marker.
+   *
+   * Values first, marker last: a stylesheet rebuild between the two still sees
+   * values that render exactly as before, and a marked document is never left
+   * holding an unconverted absolute weight.
+   *
+   * The three fields are read from `config`, not from the expanded `editing` set:
+   * while the interface follows the conversation, `editing` mirrors the
+   * conversation's weight into the interface's own field, and writing that back
+   * would silently freeze the follow.
+   */
+  var adoptWeightScale = function () {
+    if (config[WEIGHT_OFFSETS_FIELD] === true) return;
+    for (var index = 0; index < shared.WEIGHT_FIELDS.length; index += 1) {
+      var field = shared.WEIGHT_FIELDS[index];
+      var stored = Number(config[field]);
+      if (!isFinite(stored) || stored < shared.WEIGHT_MIN || stored > shared.WEIGHT_MAX) {
+        continue;
+      }
+      submit(field, stored - shared.WEIGHT_BASE);
+    }
+    var migrated = shared.migratePresetWeights(config[PRESETS_FIELD]);
+    if (migrated.changed) writePresets(migrated.presets);
+    submit(WEIGHT_OFFSETS_FIELD, true);
   };
 
   /**

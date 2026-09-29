@@ -152,7 +152,7 @@ const main = async () => {
     const ops = [];
     const original = ${JSON.stringify(original)};
     for (const key of Object.keys(original)) ops.push({ op: "set", path: [key], value: original[key] });
-    for (const key of ["sans", "stackDialog", "mono", "sizeOffset", "sizeOffsetDialog", "sizeOffsetCode", "weight", "weightDialog", "weightCode", "lineHeight", "lineHeightDialog", "lineHeightCode"]) {
+    for (const key of ["sans", "stackDialog", "mono", "sizeOffset", "sizeOffsetDialog", "sizeOffsetCode", "weight", "weightDialog", "weightCode", "weightOffsets", "lineHeight", "lineHeightDialog", "lineHeightCode"]) {
       if (!Object.prototype.hasOwnProperty.call(original, key)) ops.push({ op: "unset", path: [key] });
     }
     const res = await fetch("/api/settings/mutate", {
@@ -476,12 +476,12 @@ const main = async () => {
     `step ${c1} wrote ${first.seen} → ${unit} per step`
   );
   // Walk every position the control offers. Each one has to write exactly its own
-  // step count as an offset, and NONE of them may land in `300…600`: that is the
-  // window an absolute weight from a pre-relative document occupies, and the
-  // migration rewrites anything in it. A range that reached inside turned +3 into
-  // −1 and +4 into 0 — two positions that then looked identical to the neutral
-  // one, which is exactly what a user reports as "the weight jumps / does not
-  // change". The neutral position unsets the axis instead.
+  // step count as an offset. Positions MAY land inside `300…600` now: that window is
+  // the one an absolute weight from a pre-relative document occupies, but the
+  // document says which scale it is on (the card adopts it on the first weight
+  // write), so a marked document's offsets are never rewritten. The check below is
+  // therefore about the marker, not about avoiding the window — with the marker
+  // missing, +2 (written as 400) would be read back as the neutral position.
   const seenValues = new Map();
   for (let count = shape.min; count <= shape.max; count += 1) {
     if (count === c1) {
@@ -505,13 +505,27 @@ const main = async () => {
     miswritten.length === 0,
     `expected x${unit} per step, saw ${JSON.stringify(miswritten)}`
   );
-  const collides = walked.filter(
-    (row) => typeof row.stored === "number" && row.stored >= 300 && row.stored <= 600
+  const document = await readUser();
+  check(
+    "the document says it is on the offset scale before a wide offset is written",
+    field(document, "weightOffsets") === true,
+    JSON.stringify(document)
+  );
+  // Adoption converts what is still on the absolute scale, exactly once and before
+  // the marker goes in: a legacy `450` left next to the marker would render as +450
+  // instead of +50. Only fields the walk itself did not overwrite can be compared,
+  // which is why the code axis is the interesting one here.
+  const legacyFields = ["weight", "weightDialog", "weightCode"].filter((name) => {
+    const value = field(originalUser, name);
+    return typeof value === "number" && value >= 300 && value <= 600;
+  });
+  const unconverted = legacyFields.filter(
+    (name) => field(document, name) === field(originalUser, name)
   );
   check(
-    "no position lands where the absolute-weight migration would rewrite it",
-    collides.length === 0,
-    JSON.stringify(collides)
+    "a legacy absolute weight is converted when the scale is adopted",
+    unconverted.length === 0,
+    `of ${JSON.stringify(legacyFields)} these still hold the absolute value: ${JSON.stringify(unconverted)}`
   );
   // One step is worth the same everywhere: the counts on the control and the
   // offsets in the document are the same number, up to that unit. A family can

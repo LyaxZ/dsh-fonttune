@@ -2277,19 +2277,23 @@ await test("the interface-follow flag defaults on and stores off", () => {
 });
 
 await test("the weight slider's range and notch come from the family", () => {
-  // A family can only be made as light or as heavy as the faces it ships, so the
-  // slider spans the reachable weights and steps between them; that is also what
-  // makes every notch a change instead of a stretch of nothing.
+  // A family can only be made as light or as heavy as the faces it ships, and only
+  // in jumps between them. The notch is the COARSEST step that still leaves four
+  // positions with body text changing at each one: a finer step splits a single
+  // face into several positions that all render the same, which is what made the
+  // control feel dead.
   const profile = (sample, options) => shared.weightProfileFrom(sample, options);
-  // A variable axis: every weight renders differently, so the slider covers the
-  // whole probe window in single units.
+  // A variable axis: every weight renders differently, but single units would be
+  // four hundred positions nobody can see apart, so the coarse step wins.
   const continuous = profile((weight) => "w" + weight);
-  assert.equal(continuous.step, 1, "a continuous family keeps single units");
-  assert.equal(continuous.min, -300, "and reaches down to the probe floor");
-  assert.equal(continuous.max, 200, "and up to the widest offset the axes allow");
+  assert.deepEqual(
+    continuous,
+    { min: -200, max: 400, step: 200 },
+    "a continuous family still gets the coarse, visible step"
+  );
   // Six named faces (a 300 hairline up to a 900 black), each requested weight
-  // rounded to the nearest cut: the range stops where the faces stop, and only
-  // steps of 100 always land on a different one.
+  // rounded to the nearest cut: the range stops where the faces stop, and body text
+  // must land on a different cut at every position.
   const faces = (weight) => {
     if (weight <= 350) return "300";
     if (weight <= 450) return "400";
@@ -2299,15 +2303,17 @@ await test("the weight slider's range and notch come from the family", () => {
     return "900";
   };
   const named = profile(faces);
-  assert.equal(named.step, 100, "one notch per face for body and bold text");
+  assert.equal(named.step, 100, "faces a hundred apart are a hundred apart on the slider");
   assert.equal(named.min, -100, "down to the lightest face this fake has");
-  assert.equal(named.max, 200, "up to where bold text stops changing");
-  // Faces every 25 units: the finer step is found and kept.
+  assert.equal(named.max, 300, "up to where body text still changes");
+  // Faces every 25 units: the range stops where body text stops moving, and the
+  // step is still the coarse one (25 would be four positions of the same face).
   const fine = profile((weight) => "f" + Math.floor(weight / 25));
-  assert.equal(fine.step, 25);
+  assert.deepEqual(fine, { min: -200, max: 400, step: 200 });
   // Regular and bold only (what a two-face CJK family such as SimSun renders):
   // the range is exactly the two faces, and the notch is the whole jump, so
-  // there is no dead position in between.
+  // there is no dead position in between. Fewer positions than asked for is still
+  // a usable control.
   const pair = profile((weight) => (weight >= 600 ? "bold" : "regular"));
   assert.deepEqual(pair, { min: 0, max: 200, step: 200 }, "two faces, two positions");
   // One face and no synthesis: every request renders the same thing, so there is
@@ -2320,43 +2326,121 @@ await test("the weight slider's range and notch come from the family", () => {
   assert.equal(capped.max, 200);
 });
 
-await test("no slider position can be read back as an old absolute weight", () => {
-  // A document written before the axes were relative stores an ABSOLUTE weight in
-  // `WEIGHT_MIN…WEIGHT_MAX`, and `clampWeightDelta` converts anything in there by
-  // −400. An offset must therefore never land in that window: the range used to
-  // reach +400 for a six-face family, and +3 was read back as −1 while +4 became
-  // indistinguishable from 0.
-  const sixFaces = (weight) => {
-    if (weight <= 350) return "300";
-    if (weight <= 450) return "400";
-    if (weight <= 550) return "500";
-    if (weight <= 650) return "600";
-    if (weight <= 750) return "700";
-    return "900";
-  };
-  const fonts = [
+await test("every slider position is a whole number of steps from the neutral one", () => {
+  // The control counts steps and multiplies by the unit, so a position that is not
+  // on the grid would write an offset the slider cannot show again. The first
+  // version rounded the top position UP, which also pushed it past the widest
+  // offset the axes allow.
+  const models = [
     (weight) => "w" + weight,
-    (weight) => "f" + Math.floor(weight / 25),
+    (weight) => (weight <= 350 ? "300" : weight <= 450 ? "400" : weight <= 550 ? "500" : weight <= 650 ? "600" : weight <= 750 ? "700" : "900"),
     (weight) => (weight >= 600 ? "bold" : "regular"),
-    sixFaces,
+    (weight) => "f" + Math.floor(weight / 25),
   ];
-  for (const sample of fonts) {
+  for (const sample of models) {
+    const shape = shared.weightProfileFrom(sample);
+    assert.ok(shape.step > 0, "a step is always positive");
+    assert.ok(shape.min % shape.step === 0, `min ${shape.min} is off the ${shape.step} grid`);
+    assert.ok(shape.max % shape.step === 0, `max ${shape.max} is off the ${shape.step} grid`);
+    assert.ok(
+      shape.max <= shared.WEIGHT_DELTA_UP_LIMIT,
+      `max ${shape.max} runs past the widest offset (${shared.WEIGHT_DELTA_UP_LIMIT})`
+    );
+    assert.ok(shape.min >= shared.WEIGHT_DELTA_FLOOR, `min ${shape.min} runs past the floor`);
+    // The card's step counts must land back on exactly these offsets.
+    const counts = shared.weightStepRange(shape, 0);
+    assert.equal(counts.unit, shape.step, "the unit is the measured step");
+    assert.equal(counts.min * shape.step, shape.min, "the lowest count maps back to min");
+    assert.equal(counts.max * shape.step, shape.max, "the highest count maps back to max");
+  }
+});
+
+await test("a legacy absolute weight converts once, and only on an unmarked document", () => {
+  // Before 0.2.8 the document stored an absolute weight inside 300…600, and the two
+  // scales overlap — a stored 450 means +450 on the offset scale. The document's own
+  // marker is what tells them apart, so the conversion happens once and never again.
+  assert.equal(shared.WEIGHT_OFFSETS_FIELD, "weightOffsets");
+  // Unmarked: the legacy window converts, exactly as it always did.
+  const legacy = shared.normalizeConfig({ weightCode: 450, weightDialog: 480, weight: 300 });
+  assert.equal(legacy.weightCode, 50, "450 was an absolute weight, not +450");
+  assert.equal(legacy.weightDialog, 80);
+  assert.equal(legacy.weight, -100);
+  assert.equal(legacy.weightOffsets, false, "an old document carries no marker");
+  // Marked: the same numbers are offsets and are left alone, however large.
+  const marked = shared.normalizeConfig({ weightCode: 450, weight: 400, weightOffsets: true });
+  assert.equal(marked.weightCode, 450, "a marked document stores offsets");
+  assert.equal(marked.weight, 400, "400 is a legal offset now, not 'normal'");
+  assert.equal(marked.weightOffsets, true);
+  // The marker also covers the sparse value sets, so a preset saved before the
+  // switch cannot smuggle an absolute weight into a marked document.
+  assert.equal(shared.normalizeValueSet({ weightCode: 450 }).weightCode, 50);
+  assert.equal(shared.normalizeValueSet({ weightCode: 450 }, true).weightCode, 450);
+  assert.equal(
+    shared.normalizePresets(JSON.stringify([{ name: "p", values: { weightCode: 450 } }]))[0].values
+      .weightCode,
+    50
+  );
+  assert.equal(
+    shared.normalizePresets(JSON.stringify([{ name: "p", values: { weightCode: 450 } }]), true)[0]
+      .values.weightCode,
+    450
+  );
+  // Every position the slider can reach survives a read once the document is
+  // marked — this is the invariant the +200 ceiling used to enforce by geometry.
+  for (const sample of [
+    (weight) => "w" + weight,
+    (weight) => (weight >= 600 ? "bold" : "regular"),
+    (weight) => "f" + Math.floor(weight / 25),
+  ]) {
     const shape = shared.weightProfileFrom(sample);
     for (let offset = shape.min; offset <= shape.max; offset += shape.step) {
-      assert.ok(
-        offset < shared.WEIGHT_MIN || offset > shared.WEIGHT_MAX,
-        `offset ${offset} sits in the absolute-weight window`
+      assert.equal(
+        shared.clampWeightDelta(offset, true),
+        offset,
+        `offset ${offset} survives a read on a marked document`
       );
-      assert.equal(shared.clampWeightDelta(offset), offset, `offset ${offset} survives a read`);
+      // Without the marker the same number means something else — but only inside
+      // the legacy window; anywhere else the two readings agree.
+      const unmarked = shared.clampWeightDelta(offset);
+      if (offset >= shared.WEIGHT_MIN && offset <= shared.WEIGHT_MAX) {
+        assert.notEqual(unmarked, offset, `offset ${offset} would be rescaled without the marker`);
+      } else {
+        assert.equal(unmarked, offset, `offset ${offset} reads the same either way`);
+      }
     }
   }
 });
 
-await test("every position moves body text and bold text", () => {
-  // A notch has to move what you read and what you emphasise. The heading layer is
-  // deliberately not required to move at the very top: a family that spaces its
-  // heavy faces far apart (a 700 cut next to a 900) has already reached its boldest
-  // heading by then, and requiring it would shrink the whole control to one step.
+await test("the preset snapshots move to the offset scale with the document", () => {
+  // A snapshot saved before the switch holds absolute weights; if it were left
+  // alone, applying it to a marked document would read 450 as +450.
+  const presets = [
+    { name: "legacy", values: { weightCode: 450, weightDialog: 100, sans: '"X"' }, savedAt: 1 },
+    { name: "fresh", values: { weightDialog: 300 }, savedAt: 2 },
+  ];
+  const migrated = shared.migratePresetWeights(presets);
+  assert.equal(migrated.changed, true, "an absolute value was found");
+  assert.equal(migrated.presets[0].values.weightCode, 50, "the absolute weight converts");
+  assert.equal(migrated.presets[0].values.weightDialog, 100, "an offset is left alone");
+  assert.equal(migrated.presets[0].values.sans, '"X"', "other axes are untouched");
+  assert.equal(migrated.presets[0].savedAt, 1, "the entry keeps everything else");
+  // A 0.3.x snapshot is already offsets: nothing is written at all.
+  const clean = shared.migratePresetWeights([{ name: "fresh", values: { weightDialog: 100 } }]);
+  assert.equal(clean.changed, false, "an offset-only snapshot needs no write");
+  assert.equal(clean.presets[0].values.weightDialog, 100);
+  // Idempotent: converting the converted list changes nothing more.
+  const again = shared.migratePresetWeights(migrated.presets);
+  assert.equal(again.changed, false, "the conversion does not run twice");
+  assert.deepEqual(again.presets, migrated.presets);
+  // Junk in, junk out — never a crash.
+  assert.deepEqual(shared.migratePresetWeights(null), { presets: [], changed: false });
+});
+
+await test("body text moves at every position, and bold text as far as it can", () => {
+  // A notch has to move what the reader is reading. Bold text and headings are
+  // allowed to saturate: the heaviest ladder layer sits at 600 and reaches the CSS
+  // ceiling at +300, so no usable range can move it at the top — requiring it would
+  // collapse the control to one wide step.
   const sample = (weight) => {
     if (weight <= 350) return "300";
     if (weight <= 450) return "400";
@@ -2369,21 +2453,19 @@ await test("every position moves body text and bold text", () => {
   const positions = [];
   for (let offset = shape.min; offset <= shape.max; offset += shape.step) positions.push(offset);
   assert.ok(positions.length >= 2, `expected a usable range, got ${JSON.stringify(shape)}`);
-  for (const base of [400, 600]) {
-    const seen = positions.map((offset) => sample(base + offset));
-    assert.equal(
-      new Set(seen).size,
-      seen.length,
-      `base ${base} repeats a face across ${JSON.stringify(positions)}`
-    );
-  }
+  const body = positions.map((offset) => sample(400 + offset));
+  assert.equal(new Set(body).size, body.length, `body text repeats a face across ${JSON.stringify(positions)}`);
+  // Bold text still moves through the part of the range it can reach.
+  const bold = positions.map((offset) => sample(600 + offset));
+  assert.ok(new Set(bold).size >= positions.length - 1, "bold text moves at all but the saturated top");
 });
 
-await test("a family with a light face offers -2 … +2", () => {
+await test("a family with a light face offers -1 … +2", () => {
   // Measured on this machine: Noto Serif SC renders seven faces
-  // (100-250 / 300 / 400 / 500 / 600 / 700 / 800-900). The body can therefore step
-  // down twice and up twice, and each of those five positions changes body text
-  // and bold text.
+  // (100-250 / 300 / 400 / 500 / 600 / 700 / 800-900). Its light end is reached one
+  // 200-weight step below neutral, so a symmetric -2 … +2 at that step does not
+  // exist; the honest shape is four positions, each of them a visible change
+  // (one 200-weight step is a +30% change in ink, one 100-weight step +16%).
   const bands = [[100, 250], [300, 350], [400], [450, 500], [550, 600], [650, 780], [800, 900]];
   const sample = (weight) => {
     let best = 0;
@@ -2400,13 +2482,17 @@ await test("a family with a light face offers -2 … +2", () => {
     return "f" + best;
   };
   const shape = shared.weightProfileFrom(sample);
-  assert.deepEqual(shape, { min: -200, max: 200, step: 100 }, "five positions, one face apart");
-  assert.deepEqual(shared.weightStepRange(shape, 0), { min: -2, max: 2, unit: 100, value: 0 });
-  // +1 and +2 agree for HEADINGS (800 and 900 are one face) and differ for the
-  // rest — that is the trade the user asked for.
-  assert.equal(sample(700 + 100), sample(700 + 200), "headings saturate at the top");
-  assert.notEqual(sample(600 + 100), sample(600 + 200), "bold text keeps moving");
-  assert.notEqual(sample(400 + 100), sample(400 + 200), "body text keeps moving");
+  assert.deepEqual(shape, { min: -200, max: 400, step: 200 }, "four positions, one 200-weight step each");
+  assert.deepEqual(shared.weightStepRange(shape, 0), { min: -1, max: 2, unit: 200, value: 0 });
+  // Body text changes at every position, including the ones the light end clamps.
+  const body = [];
+  for (let offset = shape.min; offset <= shape.max; offset += shape.step) body.push(sample(400 + offset));
+  assert.equal(new Set(body).size, body.length, "body text changes at every position");
+  // +1 and +2 agree for BOLD text and headings (800 and 900 are one face) and
+  // differ for body text — that is the trade the user asked for.
+  assert.equal(sample(600 + 200), sample(600 + 400), "bold text saturates at the top");
+  assert.equal(sample(700 + 200), sample(700 + 400), "headings saturate at the top");
+  assert.notEqual(sample(400 + 200), sample(400 + 400), "body text keeps moving");
 });
 
 await test("a weight offset turns into the step count the slider shows", () => {

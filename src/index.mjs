@@ -217,6 +217,12 @@ export const Config = volatileWhenSupported(z.object({
     .description(
       `Code font-weight offset; added to each code surface's own weight and independent of the interface weight (the slider spans whatever weights the chosen font can render), ${shared.WEIGHT_UNSET} keeps DSH's own weights. A legacy absolute weight (${shared.WEIGHT_MIN}..${shared.WEIGHT_MAX}) is accepted and converted to its offset.`
     ),
+  [shared.WEIGHT_OFFSETS_FIELD]: z
+    .boolean()
+    .default(false)
+    .description(
+      "Scale marker: the three weight fields hold offsets, not legacy absolute weights (set automatically the first time the card writes a weight)"
+    ),
   [LINE_HEIGHT_FIELD]: z
     .number()
     .min(shared.LINE_HEIGHT_MIN)
