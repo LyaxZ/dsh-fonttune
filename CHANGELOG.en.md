@@ -2,6 +2,21 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.4.0] - 2026-10-01
+
+### Added
+- **A floating tuning panel**: the dot in the conversation's corner unfolds into a card with the conversation's font size, line height and weight at hand. The dot snaps to the conversation region's corners and unfolds from its own, and the panel remembers its size and position.
+- **A settings entry on the panel**: the button left of its close takes you straight to this plugin's own settings page, no hunting through the plugin list.
+- **A text rendering choice**: follow the system, sharp, or smooth — the same face drawn with a different stroke feel.
+- **A master switch for the panel**: the settings page can turn the floating panel off, and the corner dot is gone for good.
+
+### Fixes
+- **The settings page stuttered the first time it was opened after a refresh or restart**: the first open is now as smooth as every later one.
+
+### Changes
+- **The panel's unfold and fold ignore the system's "reduce motion" setting**: the animations play even with reduced motion on.
+- **Compact choices moved onto their title row**: controls like the code ligature choice no longer sit under the hint text, but line up with the other switches.
+
 ## [0.3.6] - 2026-09-29
 
 ### Fixes
