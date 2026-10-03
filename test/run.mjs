@@ -1898,9 +1898,12 @@ await test("the polling refresh walks the CSS only when something moved", async 
     clearInterval: globalThis.clearInterval,
     setTimeout: globalThis.setTimeout,
     clearTimeout: globalThis.clearTimeout,
+    requestIdleCallback: globalThis.requestIdleCallback,
+    cancelIdleCallback: globalThis.cancelIdleCallback,
   };
   const intervals = [];
   const timeouts = [];
+  const idles = [];
   globalThis.setInterval = (callback) => {
     intervals.push(callback);
     return intervals.length;
@@ -1911,6 +1914,14 @@ await test("the polling refresh walks the CSS only when something moved", async 
     return timeouts.length;
   };
   globalThis.clearTimeout = () => {};
+  // The weight warm-up schedules through idle when the host offers it, and this
+  // suite counts the POLL's timers: the warm slices get their own channel here
+  // so "one timer" still means what it always meant.
+  globalThis.requestIdleCallback = (callback) => {
+    idles.push(callback);
+    return idles.length;
+  };
+  globalThis.cancelIdleCallback = () => {};
   try {
     let reads = 0;
     const dom = createDocument({
@@ -1944,6 +1955,7 @@ await test("the polling refresh walks the CSS only when something moved", async 
     const initial = reads;
     assert.ok(initial >= 1, "applying read the tokens once");
     assert.equal(timeouts.length, 1, "the boot refresh is the only timer");
+    assert.ok(idles.length >= 1, "the weight warm-up rides idle, not the poll's timer");
     for (const fire of timeouts) fire(); // the forced first refresh
     const afterForced = reads;
     assert.ok(afterForced > initial, "the boot refresh reads them again");
@@ -1975,6 +1987,10 @@ await test("the polling refresh walks the CSS only when something moved", async 
     globalThis.clearInterval = saved.clearInterval;
     globalThis.setTimeout = saved.setTimeout;
     globalThis.clearTimeout = saved.clearTimeout;
+    if (saved.requestIdleCallback === undefined) delete globalThis.requestIdleCallback;
+    else globalThis.requestIdleCallback = saved.requestIdleCallback;
+    if (saved.cancelIdleCallback === undefined) delete globalThis.cancelIdleCallback;
+    else globalThis.cancelIdleCallback = saved.cancelIdleCallback;
   }
 });
 
@@ -2851,6 +2867,742 @@ await test("a composition without the theme service skips the override layer", a
   await loadClientBundle(ctx); // must not throw
   const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
   assert.ok(tag.textContent.includes('font-family:"Inter"'), "the stylesheet path still applies");
+});
+
+section("0.4.0: panel chrome, and fields the plugin no longer has");
+
+await test("a removed field is tolerated, never resurrected", () => {
+  // The "paper mode" overlay and the "fitting room" walker were withdrawn, so
+  // a document that still carries their keys (an older profile, a sandbox
+  // copy, a preset exported before the removal) must normalize without
+  // throwing, without a stray rule, and without bringing either key back.
+  // The keys are assembled below so the removal grep over src/ and test/
+  // keeps passing: no live reference to a withdrawn field may remain.
+  const deleted = "selection" + "Color";
+  const paper = "paper" + "Mode";
+  const fitting = "fitting" + "Room";
+  const pseudo = "::" + "selection";
+  const config = shared.normalizeConfig({
+    [deleted]: "#b3d7ff",
+    [paper]: true,
+    [fitting]: "Inter",
+    unknownField: 1,
+  });
+  assert.equal(deleted in config, false, "the deleted key stays out of the config");
+  assert.equal(paper in config, false, "the withdrawn overlay key stays out");
+  assert.equal(fitting in config, false, "the withdrawn room key stays out");
+  assert.equal("unknownField" in config, false, "unknown keys stay out of the config");
+  const kept = shared.normalizeValueSet({ [deleted]: "#b3d7ff", [paper]: true }, true);
+  assert.equal(deleted in kept, false, "value sets drop it too");
+  assert.equal(paper in kept, false, "value sets drop the withdrawn key too");
+  assert.equal(shared.buildFontCss(config, shared.FALLBACK_TOKENS).includes(pseudo), false);
+  // The withdrawn keys are not value axes any more, so no preset carries them.
+  assert.equal(shared.VALUE_FIELDS.includes(paper), false, "the withdrawn key is not an axis");
+  assert.equal(shared.VALUE_FIELDS.includes(fitting), false, "the withdrawn room is not an axis");
+  // A preset snapshot that still carries the withdrawn keys (written by a
+  // sandbox copy before the removal) normalizes without throwing and drops
+  // them, while the live axes in the same snapshot survive.
+  const legacyPresets = shared.normalizePresets(
+    JSON.stringify([
+      { name: "day", values: { [deleted]: "#b3d7ff", [paper]: true, stackDialog: "Inter" }, savedAt: 7 },
+    ]),
+    true
+  );
+  assert.equal(legacyPresets.length, 1, "the preset itself survives");
+  assert.equal(deleted in legacyPresets[0].values, false, "snapshots drop it too");
+  assert.equal(paper in legacyPresets[0].values, false, "snapshots drop the withdrawn key");
+  assert.equal(legacyPresets[0].values.stackDialog, "Inter", "the live axes survive");
+  // A document whose ONLY content is a withdrawn key renders nothing, exactly
+  // like an empty document: dormant, not a stray overlay.
+  const onlyPaper = shared.buildFontCss(
+    shared.normalizeConfig({ [paper]: true }),
+    shared.FALLBACK_TOKENS
+  );
+  assert.equal(onlyPaper, shared.buildFontCss(shared.normalizeConfig({}), shared.FALLBACK_TOKENS));
+});
+
+await test("the panel chrome normalizes, parses and never rides a preset", () => {
+  const defaults = shared.normalizeConfig({});
+  assert.equal(defaults.panelEnabled, true, "the dot shows by default");
+  assert.equal(defaults.panelPos, "", "no position stored by default");
+  assert.equal(shared.normalizeConfig({ panelEnabled: false }).panelEnabled, false);
+  assert.deepEqual(shared.parsePanelPos("10,20"), { x: 10, y: 20 });
+  assert.equal(shared.parsePanelPos("nope"), null);
+  assert.equal(shared.parsePanelPos(""), null);
+  assert.equal(shared.normalizePanelPos("99999,-3"), "5000,0", "coordinates clamp into range");
+  assert.equal(shared.VALUE_FIELDS.includes(shared.PANEL_ENABLED_FIELD), false, "the master switch is chrome");
+  assert.equal(shared.VALUE_FIELDS.includes(shared.PANEL_POS_FIELD), false, "the position is chrome");
+  const kept = shared.normalizeValueSet(
+    { stackDialog: "Inter", panelEnabled: false, panelPos: "1,2" },
+    true
+  );
+  assert.equal(kept.stackDialog, "Inter");
+  assert.equal("panelEnabled" in kept, false, "chrome is dropped from value sets");
+  assert.equal("panelPos" in kept, false, "chrome is dropped from value sets");
+});
+
+await test("the float panel maps quadrants to origins, directions and snaps", () => {
+  // Item 4: the dot's quadrant decides the expand direction (away from the
+  // nearest edges); item 1: the animation origin sits on the dot's side.
+  assert.equal(shared.floatQuadrant(100, 100, 1000, 800), "tl");
+  assert.equal(shared.floatQuadrant(900, 100, 1000, 800), "tr");
+  assert.equal(shared.floatQuadrant(100, 700, 1000, 800), "bl");
+  assert.equal(shared.floatQuadrant(900, 700, 1000, 800), "br");
+  assert.equal(shared.floatExpandDirection("tl"), "right-down");
+  assert.equal(shared.floatExpandDirection("tr"), "left-down");
+  assert.equal(shared.floatExpandDirection("bl"), "right-up");
+  assert.equal(shared.floatExpandDirection("br"), "left-up");
+  assert.equal(shared.floatTransformOrigin("tl"), "0 0");
+  assert.equal(shared.floatTransformOrigin("tr"), "100% 0");
+  assert.equal(shared.floatTransformOrigin("bl"), "0 100%");
+  assert.equal(shared.floatTransformOrigin("br"), "100% 100%");
+  // Item 2: release snaps to the nearest corner (a 26 px dot, 16 px margin).
+  assert.deepEqual(shared.floatSnapCorner(100, 100, 1000, 800), { x: 16, y: 16 });
+  assert.deepEqual(shared.floatSnapCorner(900, 100, 1000, 800), { x: 958, y: 16 });
+  assert.deepEqual(shared.floatSnapCorner(100, 700, 1000, 800), { x: 16, y: 758 });
+  assert.deepEqual(shared.floatSnapCorner(900, 700, 1000, 800), { x: 958, y: 758 });
+  // Item 3: below the threshold a press is a click, past it a drag.
+  assert.equal(shared.floatDragExceeded(3, 4), false, "5 px stays a click");
+  assert.equal(shared.floatDragExceeded(4, 5), true, "past 6 px is a drag");
+  assert.equal(shared.FLOAT_DRAG_THRESHOLD, 6);
+});
+
+await test("the panel's bounds are the conversation area, or the window", () => {
+  // Item 1 of the bounds work: with sidebars on both sides and a top bar, the
+  // dot must snap inside the CONVERSATION, not on the window's own corners.
+  const viewport = { width: 1000, height: 800 };
+  const whole = { left: 0, top: 0, right: 1000, bottom: 800, width: 1000, height: 800 };
+  // Nothing to measure (a settings page has no conversation at all): the whole
+  // window stands in, exactly as it did before.
+  assert.deepEqual(shared.floatBoundsFrom([], viewport), whole);
+  assert.deepEqual(shared.floatBoundsFrom([null, undefined, {}, "nope"], viewport), whole);
+  // The scroll container the conversation lives in wins over the prose inside it.
+  const scroller = { left: 220, top: 56, right: 820, bottom: 800, width: 600, height: 744 };
+  const prose = { left: 236, top: 72, right: 804, bottom: 2400, width: 568, height: 2328 };
+  assert.deepEqual(shared.floatBoundsFrom([scroller, prose], viewport), {
+    left: 220,
+    top: 56,
+    right: 820,
+    bottom: 800,
+    width: 600,
+    height: 744,
+  });
+  // The prose alone is the region when no ancestor scrolls, and an element that
+  // reaches past the window is CLIPPED to it rather than snapping off screen.
+  assert.deepEqual(shared.floatBoundsFrom([prose], viewport), {
+    left: 236,
+    top: 72,
+    right: 804,
+    bottom: 800,
+    width: 568,
+    height: 728,
+  });
+  // A box that cannot hold one dot is no region: the next candidate stands in.
+  const sliver = { left: 0, top: 0, width: 30, height: 400 };
+  assert.equal(shared.floatBoundsFrom([sliver], viewport).width, 1000, "a sliver is not a region");
+  assert.equal(shared.floatBoundsFrom([sliver, scroller], viewport).left, 220, "the next candidate wins");
+  assert.deepEqual(
+    shared.floatBoundsFrom([{ left: 0, top: 0, width: 0, height: 0 }, { left: NaN, top: 0, width: 10, height: 10 }], viewport),
+    whole,
+    "a degenerate or unreadable rect never wins"
+  );
+  // A page that reports no viewport at all is measured against the fallback.
+  assert.deepEqual(shared.floatBoundsFrom([], { width: 0, height: NaN }), {
+    left: 0,
+    top: 0,
+    right: shared.FLOAT_VIEWPORT_W,
+    bottom: shared.FLOAT_VIEWPORT_H,
+    width: shared.FLOAT_VIEWPORT_W,
+    height: shared.FLOAT_VIEWPORT_H,
+  });
+  // Snapping uses the REGION's own corners, margin and all.
+  const bounds = shared.floatBoundsFrom([scroller], viewport);
+  assert.deepEqual(shared.floatSnapTo(bounds, 240, 90), { x: 236, y: 72 });
+  assert.deepEqual(shared.floatSnapTo(bounds, 800, 700), { x: 778, y: 758 });
+  assert.deepEqual(shared.floatSnapTo(bounds, 1000, 800), { x: 778, y: 758 }, "a point outside still lands inside");
+  // The viewport signature is exactly that region with a zero origin, so the
+  // 0.4.0 behaviour is the special case rather than a second rule.
+  for (const [x, y] of [[100, 100], [900, 100], [100, 700], [900, 700]]) {
+    assert.deepEqual(
+      shared.floatSnapCorner(x, y, 1000, 800),
+      shared.floatSnapTo({ left: 0, top: 0, right: 1000, bottom: 800 }, x, y),
+      `${x},${y} snaps the same either way`
+    );
+  }
+  // Every region corner is a snap corner, and the dot stays inside the region.
+  for (const [cx, cy] of [[240, 90], [800, 90], [240, 700], [800, 700]]) {
+    const parked = shared.floatSnapTo(bounds, cx, cy);
+    assert.ok(parked.x >= bounds.left && parked.y >= bounds.top, `${parked.x},${parked.y} left the region`);
+    assert.ok(
+      parked.x + shared.FLOAT_DOT <= bounds.right && parked.y + shared.FLOAT_DOT <= bounds.bottom,
+      `${parked.x},${parked.y} hangs off the region`
+    );
+  }
+  // The quadrant is measured INSIDE the region: its middle is not the window's,
+  // so the expand direction follows the conversation the dot lives in. The band
+  // between the two middles is where the two rules disagree.
+  assert.equal(shared.floatQuadrantIn(bounds, 700, 410), "tr", "above the region's own middle");
+  assert.equal(shared.floatQuadrant(700, 410, 1000, 800), "br", "...while the window calls the same point bottom");
+  assert.equal(shared.floatQuadrantIn(bounds, 236, 72), "tl");
+  assert.equal(shared.floatQuadrantIn(bounds, 778, 72), "tr");
+  assert.equal(shared.floatQuadrantIn(bounds, 240, 700), "bl");
+  assert.equal(shared.floatQuadrantIn(bounds, 800, 700), "br");
+  // The minimum region is one dot plus a margin on both sides.
+  assert.equal(shared.FLOAT_BOUNDS_MIN, shared.FLOAT_DOT + 2 * shared.FLOAT_MARGIN);
+});
+
+await test("which candidate is the region is one rule, and it names the box to watch", () => {
+  // A real session log keeps its FIRST markdown block in an off-screen,
+  // ZERO-height scroll holder (that is what a virtualised transcript does with its
+  // old turns), so the first candidate the caller hands in is a box that is not
+  // the conversation at all. The rule has to SKIP it — that much the bounds work
+  // already did — and it has to say WHICH candidate won, because the box whose
+  // size change means "the region changed" is that one and no other. Watching the
+  // first prose element's scroll parent instead is the reported "the dot stopped
+  // following": that holder never changes size.
+  const viewport = { width: 1000, height: 800 };
+  const whole = { left: 0, top: 0, right: 1000, bottom: 800, width: 1000, height: 800 };
+  const deadHolder = { left: 160, top: -10989, right: 840, bottom: -10989, width: 680, height: 0 };
+  const conversation = { left: 220, top: 56, right: 820, bottom: 800, width: 600, height: 744 };
+  const pick = shared.floatBoundsPick([deadHolder, conversation], viewport);
+  assert.equal(pick.index, 1, "the dead holder is skipped and the conversation wins");
+  assert.deepEqual(pick.bounds, {
+    left: 220,
+    top: 56,
+    right: 820,
+    bottom: 800,
+    width: 600,
+    height: 744,
+  });
+  // The bounds are exactly the winning candidate's, so the two answers cannot
+  // drift apart: `floatBoundsFrom` IS the pick, without the index.
+  assert.deepEqual(shared.floatBoundsFrom([deadHolder, conversation], viewport), pick.bounds);
+  // Nothing usable (a settings page): the whole window stands in, and the index
+  // says so rather than naming a candidate that lost.
+  const nothing = shared.floatBoundsPick([deadHolder, { left: 0, top: 0, width: 30, height: 400 }], viewport);
+  assert.equal(nothing.index, -1, "no candidate won");
+  assert.deepEqual(nothing.bounds, whole);
+  assert.equal(shared.floatBoundsPick([], viewport).index, -1);
+  // A candidate that is unreadable or degenerate never wins, so the index always
+  // points at a box the panel can actually be measured against.
+  assert.equal(
+    shared.floatBoundsPick([{ left: NaN, top: 0, width: 10, height: 10 }, conversation], viewport).index,
+    1
+  );
+  assert.equal(shared.floatBoundsPick([null, undefined, "nope"], viewport).index, -1);
+  // And the winner is the FIRST usable one, in the caller's order: a second
+  // conversation-shaped box further down the list does not take over.
+  const narrower = { left: 220, top: 56, right: 550, bottom: 800, width: 330, height: 744 };
+  assert.equal(shared.floatBoundsPick([conversation, narrower], viewport).index, 0);
+  assert.equal(
+    shared.floatBoundsPick([conversation, narrower], viewport).bounds.right,
+    820,
+    "the first usable candidate is the region"
+  );
+});
+
+await test("the fallback watcher answers a changed rectangle, and a detached box is a change", () => {
+  // The third report: "it followed for a while after a refresh, then stopped for
+  // good". An observer holds a NODE, and a host that re-renders the conversation
+  // REPLACES it — the old box is detached, keeps its size forever and never reports
+  // again, while the resolve that would find the new node lives in the callback
+  // that will not come. Two rules are what keep that from being deafness, and both
+  // are stated here rather than only inside the bundle.
+  //
+  // Rule 1: the reading the fallback takes every tick is compared on the FOUR
+  // numbers of the winning rectangle, so an unchanged shape costs comparisons and
+  // reaches no settle, no render and no write.
+  const box = { left: 220, top: 56, right: 820, bottom: 800, width: 600, height: 744 };
+  assert.equal(shared.sameWatchBounds(box, { left: 220, top: 56, right: 820, bottom: 800 }), true);
+  assert.equal(shared.sameWatchBounds(box, box), true, "the same reading twice is no change");
+  assert.equal(
+    shared.sameWatchBounds(box, { left: 220, top: 56, right: 550, bottom: 800, width: 330, height: 744 }),
+    false,
+    "the right sidebar opening is a change"
+  );
+  assert.equal(
+    shared.sameWatchBounds(box, { left: 260, top: 56, right: 820, bottom: 800, width: 560, height: 744 }),
+    false,
+    "an edge that moved is a change, even with the other one still"
+  );
+  assert.equal(
+    shared.sameWatchBounds(box, { left: 220, top: 56, right: 820, bottom: 900, width: 600, height: 844 }),
+    false,
+    "the bottom edge alone is a change too"
+  );
+  // A rectangle that could not be read is NOT a confirmation: it is either the
+  // arming reading (settling on it would place a dot nobody moved) or an
+  // unreadable region, and both are "no answer" rather than "nothing happened".
+  assert.equal(shared.sameWatchBounds(null, box), false);
+  assert.equal(shared.sameWatchBounds(box, null), false);
+  assert.equal(shared.sameWatchBounds(null, null), false);
+  assert.equal(shared.sameWatchBounds(undefined, box), false);
+  // And `floatBoundsFrom` is what feeds it: the picked region, four numbers.
+  const picked = shared.floatBoundsFrom([box], { width: 1000, height: 800 });
+  assert.equal(shared.sameWatchBounds(picked, box), true, "the winner is compared as it was read");
+  // Rule 2: a box the host took out of the tree makes the observed SET changed,
+  // however identical the list of nodes looks — that is the state the body is
+  // watched alongside the candidates to escape.
+  const live = { id: "conversation" };
+  const replaced = { id: "conversation (rebuilt)" };
+  const doc = { contains: (node) => node === live };
+  assert.equal(shared.floatTargetsConnected(doc, [live]), true);
+  assert.equal(shared.floatTargetsConnected(doc, [live, live]), true);
+  assert.equal(shared.floatTargetsConnected(doc, [live, replaced]), false, "a replaced element is a change");
+  assert.equal(shared.floatTargetsConnected(doc, [replaced]), false);
+  assert.equal(shared.floatTargetsConnected(doc, []), true, "an empty set has nothing detached in it");
+  // A document that cannot answer, or a list that is not one, is left alone: a
+  // host without `contains` keeps the observer it has instead of re-pointing per
+  // callback.
+  assert.equal(shared.floatTargetsConnected(null, [replaced]), true);
+  assert.equal(shared.floatTargetsConnected({}, [replaced]), true);
+  assert.equal(shared.floatTargetsConnected(doc, null), true);
+  assert.equal(
+    shared.floatTargetsConnected(
+      {
+        contains: () => {
+          throw new Error("a document mid-teardown");
+        },
+      },
+      [live]
+    ),
+    true,
+    "a throwing document is not a verdict"
+  );
+});
+
+await test("the dot's corner is an identity, and its position is the consequence", () => {
+  // The report: the dot was parked on the conversation's bottom-right corner,
+  // opening the right sidebar made it follow (that corner moved left with the
+  // region), and shutting the sidebar snapped it to the bottom LEFT. The dot's
+  // own coordinates — still those of the narrow region — sat past the middle of
+  // the widened one, so "the nearest corner" came out on the other side. The
+  // corner is the dot's IDENTITY: it is read back from the document, and only
+  // its coordinates are recomputed for the region as it is now.
+  const wide = { left: 220, top: 56, right: 1196, bottom: 874 };
+  const narrow = { left: 220, top: 56, right: 550, bottom: 874 };
+  const parked = shared.floatCornerPoint(wide, "br");
+  assert.deepEqual(parked, { x: 1154, y: 832 });
+  const followed = shared.floatCornerPoint(narrow, "br");
+  assert.deepEqual(followed, { x: 508, y: 832 }, "the same corner, at the new region's coordinates");
+  // What re-deciding the corner from those coordinates does — the reported flip.
+  assert.equal(shared.floatNearestCorner(wide, followed.x, followed.y), "bl", "the reported flip");
+  assert.deepEqual(shared.floatSnapTo(wide, followed.x, followed.y), { x: 236, y: 832 }, "and where it landed");
+  // What the identity does instead: bottom-right is still bottom-right.
+  assert.deepEqual(shared.floatCornerPoint(wide, "br"), parked, "the identity survives the round trip");
+  assert.equal(shared.floatNearestCorner(narrow, parked.x, parked.y), "br", "the follow itself is the same corner");
+  // The two questions are one box: "which corner is nearest" and "where is that
+  // corner" can never disagree, on any region or any point.
+  for (const box of [wide, narrow, { left: 0, top: 0, right: 1000, bottom: 800 }]) {
+    for (const [x, y] of [[-1e6, -1e6], [0, 0], [300, 90], [700, 410], [1e6, 1e6]]) {
+      const name = shared.floatNearestCorner(box, x, y);
+      assert.deepEqual(
+        shared.floatSnapTo(box, x, y),
+        shared.floatCornerPoint(box, name),
+        `${x},${y} snaps to the corner it named`
+      );
+    }
+  }
+  // The four names, and nothing else, survive normalization.
+  assert.equal(shared.PANEL_CORNER_FIELD, "panelCorner");
+  for (const name of ["tl", "tr", "bl", "br"]) {
+    assert.equal(shared.normalizePanelCorner(name), name);
+    assert.equal(shared.normalizePanelCorner(" " + name.toUpperCase() + " "), name, "case and space are forgiven");
+    assert.equal(shared.parsePanelCorner(name), name);
+    assert.deepEqual(shared.floatCornerPoint(wide, name), shared.floatSnapTo(wide, ...(
+      name === "tl" ? [-1e6, -1e6] : name === "tr" ? [1e6, -1e6] : name === "bl" ? [-1e6, 1e6] : [1e6, 1e6]
+    )));
+  }
+  assert.equal(shared.normalizePanelCorner("left-top"), "", "a name that is not one of the four is not a corner");
+  assert.equal(shared.normalizePanelCorner(undefined), "");
+  assert.equal(shared.parsePanelCorner(""), null, "an empty field means 'no corner named yet'");
+  assert.equal(shared.parsePanelCorner("middle"), null);
+  // Chrome, like the position: durable, never a value axis, never in a preset.
+  assert.equal(shared.normalizeConfig({}).panelCorner, "", "no corner stored by default");
+  assert.equal(shared.normalizeConfig({ panelCorner: "BR" }).panelCorner, "br");
+  assert.equal(shared.normalizeConfig({ panelCorner: "middle" }).panelCorner, "");
+  assert.equal(shared.DEFAULTS.panelCorner, "");
+  assert.equal(shared.DURABLE_FIELDS.includes(shared.PANEL_CORNER_FIELD), true);
+  assert.equal(shared.VALUE_FIELDS.includes(shared.PANEL_CORNER_FIELD), false, "the corner is chrome");
+  assert.equal(
+    "panelCorner" in shared.normalizeValueSet({ paperMode: true, panelCorner: "br" }, true),
+    false,
+    "chrome is dropped from value sets"
+  );
+  assert.equal(
+    shared.mirrorPresetSnapshot([{ name: "day", values: {}, savedAt: 1 }], "day", { panelCorner: "br" }),
+    null,
+    "chrome never mirrors"
+  );
+});
+
+await test("the shared half exports every name the client half reads", async () => {
+  // A field constant the client reads but shared does not export is `undefined`,
+  // and an `undefined` field name travels all the way into a settings write as
+  // the literal key "undefined" — a document corrupted silently. The client
+  // reads ~111 names off `shared`; every one of them has to exist.
+  const source = await readFile(join(ROOT, "src", "client.js"), "utf8");
+  const referenced = new Set(
+    [...source.matchAll(/\bshared\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[1])
+  );
+  // The file's own name in the prose (`shared.cjs`), not a name of it.
+  referenced.delete("cjs");
+  assert.ok(referenced.size > 100, `only ${referenced.size} shared name(s) were found`);
+  const missing = [...referenced].filter((name) => shared[name] === undefined);
+  assert.deepEqual(missing, [], "the client reads names shared does not export");
+});
+
+await test("the card anchors on the dot's own corner and grows away from it", () => {
+  // The rework: the card's anchored corner reaches past the dot's own corner
+  // (the dot sits in that slot, painted above the card), so the two read as one
+  // object, and the expansion starts at that shared corner. The anchor edge on
+  // each axis is therefore the OPPOSITE of the direction the card grows in.
+  assert.deepEqual(shared.floatCardAnchor("tl"), { h: "left", v: "top", origin: "0 0" });
+  assert.deepEqual(shared.floatCardAnchor("tr"), { h: "right", v: "top", origin: "100% 0" });
+  assert.deepEqual(shared.floatCardAnchor("bl"), { h: "left", v: "bottom", origin: "0 100%" });
+  assert.deepEqual(shared.floatCardAnchor("br"), { h: "right", v: "bottom", origin: "100% 100%" });
+  for (const quadrant of ["tl", "tr", "bl", "br"]) {
+    const anchor = shared.floatCardAnchor(quadrant);
+    const [horizontal, vertical] = shared.floatExpandDirection(quadrant).split("-");
+    assert.equal(anchor.h, horizontal === "right" ? "left" : "right", `${quadrant} anchors on the far side`);
+    assert.equal(anchor.v, vertical === "down" ? "top" : "bottom", `${quadrant} anchors on the far side`);
+    assert.equal(anchor.origin, shared.floatTransformOrigin(quadrant), `${quadrant} shares the origin`);
+    // The shared corner is also the snap target: a dot parked in that corner
+    // stays exactly there, which is what keeps it from moving on open/close.
+    const parked = shared.floatSnapCorner(
+      anchor.h === "left" ? 16 : 1000 - 16 - shared.FLOAT_DOT,
+      anchor.v === "top" ? 16 : 800 - 16 - shared.FLOAT_DOT,
+      1000,
+      800
+    );
+    assert.deepEqual(
+      parked,
+      {
+        x: anchor.h === "left" ? 16 : 958,
+        y: anchor.v === "top" ? 16 : 758,
+      },
+      `${quadrant} is a snap corner`
+    );
+  }
+});
+
+await test("the panel unfolds out of the dot's own rectangle", async () => {
+  // The user asked for a panel that grows out of the dot instead of fading in
+  // beside it: the card's anchored corner IS the dot's corner, and the clip the
+  // animation starts from is exactly the dot's rectangle inside that card. The
+  // 0.4.0 "corner slot" — FLOAT_DOT_PAD of card surface around the dot, plus the
+  // per-quadrant header padding that kept the title clear of it — is gone: the
+  // dot fades out while the card is open, so nothing has to be held open for it.
+  assert.equal(shared.FLOAT_DOT_PAD, undefined, "the corner slot is gone");
+  assert.equal(shared.FLOAT_HEAD_GAP, undefined, "the slot's gap is gone");
+  assert.equal(shared.FLOAT_DOT, 26);
+  assert.equal(shared.FLOAT_CLOSE, 22);
+  assert.equal(shared.FLOAT_CLOSE_INSET, 8);
+  assert.equal(shared.FLOAT_CLOSE_GAP, 8);
+  assert.equal(shared.FLOAT_CARD_PAD, 12);
+  assert.equal(shared.FLOAT_CARD_RADIUS, 16);
+  for (const quadrant of ["tl", "tr", "bl", "br"]) {
+    const anchor = shared.floatCardAnchor(quadrant);
+    const clip = shared.floatClipStart(264, 194, quadrant, shared.FLOAT_DOT);
+    const [lengths, radius] = clip.split("round");
+    const parts = lengths.match(/-?\d+(?:\.\d+)?/g).map(Number);
+    assert.equal(parts.length, 4, `${quadrant} insets four lengths`);
+    assert.equal(radius.replace(")", "").trim(), "13px", `${quadrant} starts at the dot's own radius`);
+    // What is left visible IS the dot: 26px of card on both axes, flush with
+    // the corner the card is anchored on.
+    assert.equal(264 - parts[1] - parts[3], shared.FLOAT_DOT, `${quadrant} clips to the dot on x`);
+    assert.equal(194 - parts[0] - parts[2], shared.FLOAT_DOT, `${quadrant} clips to the dot on y`);
+    assert.equal(parts[anchor.v === "top" ? 0 : 2], 0, `${quadrant} is flush on its vertical edge`);
+    assert.equal(parts[anchor.h === "left" ? 3 : 1], 0, `${quadrant} is flush on its horizontal edge`);
+    assert.ok(parts.every((value) => value >= 0), `${quadrant} never grows the box`);
+  }
+  // A card narrower than the dot still yields a usable (all-zero) rectangle
+  // instead of a negative inset.
+  assert.equal(shared.floatClipStart(10, 10, "br", shared.FLOAT_DOT), "inset(0px 0px 0px 0px round 13px)");
+  // The resting shape must be a real shape and not `none`: `none` does not
+  // interpolate, so the unfold would snap at the halfway point instead of
+  // growing. The sheet has to rest on the very same shape.
+  assert.equal(shared.floatClipRest(), "inset(0px 0px 0px 0px round 16px)");
+  const sheet = await readFile(join(ROOT, "src", "client.js"), "utf8");
+  assert.ok(
+    sheet.includes("clip-path:" + shared.floatClipRest()),
+    "the card does not rest on the shared rest shape"
+  );
+  assert.ok(
+    sheet.includes("clip-path:var(--dfp-clipStart"),
+    "the enter and leave frames do not read the armed rectangle"
+  );
+  // The header's one plain strip: the round close plus a gap, less the card's
+  // own padding. It is the same on every side of the viewport — that is the
+  // whole simplification — and the narrowest card still fits a title beside it.
+  const strip = shared.FLOAT_CLOSE_INSET + shared.FLOAT_CLOSE + shared.FLOAT_CLOSE_GAP - shared.FLOAT_CARD_PAD;
+  assert.equal(strip, 26);
+  assert.ok(
+    strip + 24 <= shared.PANEL_SIZE_MIN_W,
+    `a ${strip}px strip leaves no title in ${shared.PANEL_SIZE_MIN_W}px`
+  );
+  // The dot sits at a snapped corner, so the card's own corner is on screen.
+  const parked = shared.floatSnapCorner(0, 0, 1000, 800);
+  assert.ok(parked.x >= 0 && parked.y >= 0, `the card's corner ${parked.x} leaves the viewport`);
+});
+
+await test("every corner in the stylesheet is a real round", async () => {
+  // One scale for the whole sheet: outer surfaces 16px, blocks inside them
+  // 12px, controls 8px or fully round. A 0–4px radius is a square corner with
+  // extra steps, and the user asked for those to be gone.
+  const source = await readFile(join(ROOT, "src", "client.js"), "utf8");
+  const start = source.indexOf("var CARD_CSS = [");
+  const end = source.indexOf('].join("");', start);
+  assert.ok(start > 0 && end > start, "could not slice CARD_CSS");
+  const block = source.slice(start, end);
+  const radii = [...block.matchAll(/border-radius:([^;"}]+)/g)].map((match) => match[1].trim());
+  assert.ok(radii.length >= 20, `expected the whole sheet, saw ${radii.length} radii`);
+  for (const value of radii) {
+    const round = value === "50%" || value === "999px";
+    assert.ok(round || parseFloat(value) >= 8, `"${value}" is a near-square corner`);
+  }
+  assert.ok(/\.dfp-card\{[^}]*border-radius:16px/.test(block), "the card's outer surface is not 16px");
+  assert.ok(/\.dfp-panel\{[^}]*border-radius:16px/.test(block), "the preset popover is not 16px");
+  assert.ok(/\.dfp-drop\{[^}]*border-radius:16px/.test(block), "the dropdown is not 16px");
+  assert.ok(/\.dfp-previewBox\{[^}]*border-radius:12px/.test(block), "the preview block is not 12px");
+  assert.ok(/\.dfp-select\{[^}]*border-radius:8px/.test(block), "the select is not 8px");
+  assert.ok(/\.dfp-chipButton\{[^}]*border-radius:50%/.test(block), "the chip's icon button is not round");
+});
+
+await test("the float panel size normalizes, parses and never rides a preset", () => {
+  // Item 5: the card size persists next to the position, never in a preset.
+  const defaults = shared.normalizeConfig({});
+  assert.equal(defaults.panelSize, "", "no size stored by default");
+  assert.deepEqual(shared.parsePanelSize("300,400"), { w: 300, h: 400 });
+  assert.deepEqual(shared.parsePanelSize("300,0"), { w: 300, h: 0 }, "a zero height means auto");
+  assert.equal(shared.parsePanelSize("nope"), null);
+  assert.equal(shared.parsePanelSize(""), null);
+  assert.equal(shared.normalizePanelSize("10,10"), "200,160", "too small clamps to the minimum");
+  assert.equal(shared.normalizePanelSize("9999,9999"), "520,800", "too big clamps to the maximum");
+  assert.equal(shared.normalizePanelSize("300,0"), "300,0", "auto height survives");
+  assert.equal(shared.VALUE_FIELDS.includes(shared.PANEL_SIZE_FIELD), false, "the size is chrome");
+  const kept = shared.normalizeValueSet(
+    { stackDialog: '"Inter"', panelSize: "300,400" },
+    true
+  );
+  assert.equal("panelSize" in kept, false, "chrome is dropped from value sets");
+  assert.equal(shared.mirrorPresetSnapshot([{ name: "day", values: {}, savedAt: 1 }], "day", { panelSize: "300,400" }), null, "chrome never mirrors");
+});
+
+await test("one axis write implies its preset snapshot, or nothing", () => {
+  const list = [{ name: "day", values: { sizeOffsetDialog: 1 }, savedAt: 7 }];
+  const op = shared.mirrorPresetSnapshot(list, "day", { stackDialog: '"Inter"' });
+  assert.ok(op !== null, "a real change builds an op");
+  assert.deepEqual(op.path, ["presets"]);
+  const stored = JSON.parse(op.value);
+  assert.equal(stored[0].values.stackDialog, '"Inter"', "the axis value lands in the snapshot");
+  assert.equal(stored[0].values.sizeOffsetDialog, 1, "the untouched values survive");
+  assert.equal(shared.mirrorPresetSnapshot(list, "day", { sizeOffsetDialog: 1 }), null, "an unchanged write builds nothing");
+  assert.equal(shared.mirrorPresetSnapshot(list, "night", { stackDialog: '"Inter"' }), null, "an unknown preset builds nothing");
+  assert.equal(shared.mirrorPresetSnapshot(list, "day", { panelPos: "1,2" }), null, "chrome never mirrors");
+  assert.equal(shared.mirrorPresetSnapshot([], "day", { stackDialog: '"Inter"' }), null, "no list builds nothing");
+});
+
+await test("the host schema accepts and refuses the panel chrome fields", async () => {
+  const { module } = await loadHostHalf(undefined);
+  const schema = module.Config;
+  const resolved = module.plainConfigValue(
+    schema({ panelEnabled: false, panelPos: "10,20", panelCorner: "br", panelSize: "300,400" })
+  );
+  assert.equal(resolved.panelEnabled, false);
+  assert.equal(resolved.panelPos, "10,20");
+  assert.equal(resolved.panelCorner, "br");
+  assert.equal(resolved.panelSize, "300,400");
+  // A withdrawn field passes through the schema untouched: schemastery strips
+  // unknown keys instead of rejecting the document, which is exactly the
+  // tolerance a document written before the removal needs (keys assembled, see
+  // the removal case above).
+  const legacy = module.plainConfigValue(
+    schema({ ["selection" + "Color"]: "#b3d7ff", ["paper" + "Mode"]: true })
+  );
+  assert.equal("selection" + "Color" in legacy, false, "the deleted key is stripped, not stored");
+  assert.equal("paper" + "Mode" in legacy, false, "the withdrawn key is stripped, not stored");
+  assert.throws(() => schema({ panelPos: "here" }));
+  assert.throws(() => schema({ panelCorner: "middle" }), "only the four corner names are accepted");
+  assert.throws(() => schema({ panelSize: "here" }));
+  const defaults = module.plainConfigValue(schema({}));
+  assert.equal("paper" + "Mode" in defaults, false, "the withdrawn key has no default");
+  assert.equal(defaults.panelEnabled, true);
+  assert.equal(defaults.panelPos, "");
+  assert.equal(defaults.panelCorner, "", "an older document names no corner until one is settled");
+  assert.equal(defaults.panelSize, "");
+});
+
+await test("a document holding a withdrawn key still paints nothing", async () => {
+  // The end of the same tolerance story through the CLIENT half, not just the
+  // pure functions: a stored document that still carries the withdrawn keys
+  // must reach the page as an empty sheet (the axes are all dormant), and must
+  // not ask the host for a style tag it no longer knows how to fill.
+  const scope = createScope({ value: { ["paper" + "Mode"]: true } });
+  resetDom();
+  const { ctx } = cardContext(scope);
+  await loadClientBundle(ctx);
+  const tag = globalThis.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
+  assert.ok(tag, "the stylesheet tag is still installed");
+  assert.equal(
+    tag.textContent,
+    shared.buildFontCss(shared.normalizeConfig({}), shared.FALLBACK_TOKENS),
+    "a withdrawn key alone paints exactly what an empty document paints"
+  );
+  // The bundle itself carries no name for the withdrawn features any more.
+  const bundle = await readFile(join(ROOT, "lib", "client.js"), "utf8");
+  for (const gone of [
+    "paper" + "Mode",
+    "PAPER_" + "BACKGROUND",
+    "fitting" + "Candidates",
+    "Fitting" + "Room",
+    "dfp-fit",
+    "fitting.",
+  ]) {
+    assert.equal(bundle.includes(gone), false, `the bundle still carries "${gone}"`);
+  }
+});
+
+/* ------------------------------------------------------------------ */
+
+section("shared: reaching this plugin's own page");
+
+/** One element stand-in: everything the shared lookup readers touch. */
+function stubNode(tag, options = {}) {
+  return {
+    tagName: tag,
+    textContent: options.text ?? "",
+    getAttribute: (name) => (options.attrs && name in options.attrs ? options.attrs[name] : null),
+    closest: (selector) => (options.insideOwnPanel && selector === ".dfp-floatHost" ? {} : null),
+    querySelectorAll: (selector) => (selector === "button" ? (options.buttons ?? []) : []),
+    dispatchEvent: options.dispatchEvent ?? (() => true),
+  };
+}
+
+await test("the navigation names match the shipped package", async () => {
+  const manifest = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
+  assert.equal(shared.PLUGIN_BUNDLE_NAME, manifest.name, "the bundle route must open THIS package");
+  assert.equal(shared.PLUGIN_PANEL_ID, "plugins", "the panel the layout service selects");
+  assert.equal(shared.PLUGIN_ITEM_ATTR, "data-plugin-item");
+  assert.equal(shared.PLUGIN_ITEM_VALUE, "fonttune", "the entry id this plugin registers");
+});
+
+await test("the entry card is found by the host's own id, never by prose", () => {
+  const card = stubNode("LI", { attrs: { "data-plugin-item": "fonttune" } });
+  const doc = { querySelector: (selector) => (selector === '[data-plugin-item="fonttune"]' ? card : null) };
+  assert.equal(shared.pluginEntryCard(doc), card);
+  assert.equal(shared.pluginEntryCard(null), null);
+  assert.equal(shared.pluginEntryCard({}), null);
+  // The card inside OUR own floating panel is never the host's entry.
+  const ours = stubNode("LI", { attrs: { "data-plugin-item": "fonttune" }, insideOwnPanel: true });
+  assert.equal(shared.pluginEntryCard({ querySelector: () => ours }), null);
+});
+
+await test("the click lands on the entry card's title button", () => {
+  const title = stubNode("BUTTON", { text: "Font tune" });
+  const card = stubNode("LI", { attrs: { "data-plugin-item": "fonttune" }, buttons: [title] });
+  assert.equal(shared.pluginClickTarget(card), title, "the card is a list item; its title button opens the page");
+  assert.equal(shared.pluginClickTarget(title), title, "an already-clickable node is itself");
+  assert.equal(shared.pluginClickTarget(stubNode("LI", {})), null);
+  assert.equal(shared.pluginClickTarget(null), null);
+});
+
+await test("a conversation naming the plugin is never a navigation entry", () => {
+  // The false positive this pins away: the only match on a real screen was a
+  // list item in the conversation QUOTING the plugin's name, the lookup
+  // "clicked" it and reported success while nothing happened.
+  const chatLine = stubNode("LI", { text: "the entry does 字体增强 things" });
+  const doc = {
+    querySelectorAll: (selector) => (selector === "button" ? [] : [chatLine]),
+    querySelector: () => null,
+  };
+  assert.equal(shared.findSettingsEntry(doc), null, "prose must not become a plan");
+});
+
+await test("the legacy chain opens the page through the title button", () => {
+  const clicks = [];
+  const title = stubNode("BUTTON", {
+    text: "Font tune",
+    dispatchEvent: (event) => {
+      clicks.push(event.type);
+      return true;
+    },
+  });
+  const card = stubNode("LI", { attrs: { "data-plugin-item": "fonttune" }, buttons: [title] });
+  const doc = {
+    querySelectorAll: (selector) => (selector === "button" ? [] : [card]),
+    querySelector: () => null,
+  };
+  const plan = shared.findSettingsEntry(doc);
+  assert.ok(plan, "the entry card is a plan");
+  assert.equal(plan.kind, "sidebar-entry");
+  plan.run();
+  assert.deepEqual(clicks, ["click"], "the click lands on the title button, not on the list item");
+});
+
+/* ------------------------------------------------------------------ */
+
+section("client: the weight shapes are measured off the first frame");
+
+await test("the weight shapes are warmed before any card mounts", async () => {
+  // The shape measurement — around eighty canvas readbacks per family — used
+  // to run on the card's own first render: the stall the user feels on the
+  // first settings open after every refresh. The bundle now measures in idle
+  // slices from the settings sync, and one journal entry per axis is the
+  // observable proof.
+  // Let any previous test's warm-up slices settle first: they ride real timers
+  // and would otherwise land one stray journal entry inside this window.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  globalThis.__DFP_PROBE__ = true;
+  globalThis.__DFP_PROBE_LOG__ = [];
+  resetDom();
+  const scope = createScope({
+    value: { stackDialog: "FTWarmProbe", mono: "FTWarmMono" },
+  });
+  const { ctx } = cardContext(scope);
+  await loadClientBundle(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const warmed = (globalThis.__DFP_PROBE_LOG__ || []).filter((entry) => entry.kind === "weight-warm");
+  assert.deepEqual(
+    warmed.map((entry) => entry.detail.axis),
+    ["dialog", "ui", "code"],
+    "one warm slice per weight axis, in order"
+  );
+  assert.ok(String(warmed[0].detail.stack).includes("FTWarmProbe"), "the warm measures the dialog stack");
+  assert.ok(String(warmed[2].detail.stack).includes("FTWarmMono"), "the code axis warms against the code family");
+  globalThis.__DFP_PROBE__ = false;
+});
+
+/* ------------------------------------------------------------------ */
+
+section("shared: the text rendering preference");
+
+await test("the rendering preference is clamped, durable and never a preset value", () => {
+  assert.equal(shared.DEFAULTS.fontSmoothing, shared.SMOOTHING_AUTO, "installing changes nothing");
+  assert.equal(shared.clampSmoothing("sharp"), "sharp");
+  assert.equal(shared.clampSmoothing("smooth"), "smooth");
+  assert.equal(shared.clampSmoothing("nonsense"), shared.SMOOTHING_AUTO);
+  assert.equal(shared.clampSmoothing(undefined), shared.SMOOTHING_AUTO);
+  assert.ok(shared.DURABLE_FIELDS.includes("fontSmoothing"), "the document keeps it");
+  assert.ok(!shared.VALUE_FIELDS.includes("fontSmoothing"), "a preset never snapshots it");
+  assert.equal(shared.normalizeConfig({ fontSmoothing: "smooth" }).fontSmoothing, "smooth");
+  assert.equal(shared.normalizeConfig({ fontSmoothing: "dear host" }).fontSmoothing, "auto");
+});
+
+await test("the rendering preference paints even with every axis dormant", () => {
+  // "the strokes are drawn the other way" is its own use case: the rule has to
+  // survive an all-dormant configuration, and auto has to paint nothing at all.
+  assert.equal(shared.buildFontCss({}), "");
+  assert.equal(shared.buildFontCss({ fontSmoothing: "auto" }), "");
+  const smooth = shared.buildFontCss({ fontSmoothing: "smooth" });
+  assert.ok(smooth.includes("body{-webkit-font-smoothing:antialiased !important"), "grayscale for smooth");
+  assert.ok(smooth.includes("-moz-osx-font-smoothing:grayscale !important"), "and the matching macOS side");
+  const sharp = shared.buildFontCss({ fontSmoothing: "sharp" });
+  assert.ok(sharp.includes("body{-webkit-font-smoothing:subpixel-antialiased !important"), "subpixel for sharp");
+  assert.ok(sharp.includes("-moz-osx-font-smoothing:auto !important"), "and plain smoothing on macOS");
+  const mixed = shared.buildFontCss({ sans: '"Inter"', fontSmoothing: "smooth" });
+  assert.ok(mixed.includes("-webkit-font-smoothing:antialiased"), "the rule rides along with the axes");
+  assert.ok(mixed.indexOf("-webkit-font-smoothing") > mixed.indexOf("font-family"), "and lands after them");
 });
 
 /* ------------------------------------------------------------------ */

@@ -119,6 +119,19 @@ var NO_SYNTHETIC_ITALIC_FIELD = "noSyntheticItalic";
 /** Disable synthetic (faux) bold, for faces without a real bold. */
 var NO_SYNTHETIC_BOLD_FIELD = "noSyntheticBold";
 
+/**
+ * How the browser draws the strokes: `SMOOTHING_AUTO` leaves the system's own
+ * rendering alone, `SMOOTHING_SHARP` asks for the crisp subpixel kind and
+ * `SMOOTHING_SMOOTH` for the soft grayscale kind. The same face reads firmer
+ * under one and softer under the other, so this is a look the reader feels
+ * rather than measures — durable, but never part of a preset snapshot.
+ */
+var SMOOTHING_FIELD = "fontSmoothing";
+var SMOOTHING_AUTO = "auto";
+var SMOOTHING_SHARP = "sharp";
+var SMOOTHING_SMOOTH = "smooth";
+var SMOOTHING_VALUES = [SMOOTHING_AUTO, SMOOTHING_SHARP, SMOOTHING_SMOOTH];
+
 /** Whether the dark theme keeps its own value set (sparse overrides). */
 var PER_THEME_FIELD = "perTheme";
 
@@ -142,6 +155,43 @@ var ACTIVE_PRESET_FIELD = "activePreset";
  * for an axis the conversation does not set.
  */
 var UI_FOLLOWS_FIELD = "uiFollowsDialog";
+
+/**
+ * The floating panel's master switch. Chrome, not typography: it never rides
+ * a preset snapshot, so switching presets cannot hide or move the panel.
+ */
+var PANEL_ENABLED_FIELD = "panelEnabled";
+
+/**
+ * The floating panel's last position, as `"x,y"` in CSS pixels from the
+ * viewport's top-left (empty = the default corner). Chrome, not typography:
+ * kept out of presets for the same reason as the master switch.
+ */
+var PANEL_POS_FIELD = "panelPos";
+
+/**
+ * The corner the floating panel LIVES in: one of `"tl"`, `"tr"`, `"bl"`, `"br"`,
+ * or "" while no corner has been chosen yet.
+ *
+ * The corner is the dot's identity and the position is only its consequence. A
+ * region that changes shape — a sidebar folding away, a top bar appearing, a
+ * window resize — MOVES the corner the dot sits on, and the dot follows that
+ * corner; it does not re-decide which one it belongs to from the coordinates the
+ * old region gave it. Only a release the user made themselves re-decides (the
+ * nearest corner, see `floatNearestCorner`), and this field is what carries that
+ * decision across every later region change. Chrome, not typography: kept out of
+ * presets for the same reason as the master switch.
+ */
+var PANEL_CORNER_FIELD = "panelCorner";
+
+/**
+ * The floating panel's last size, as `"w,h"` in CSS pixels (empty = default).
+ * Chrome, not typography: persisted next to the position, never snapshotted.
+ */
+var PANEL_SIZE_FIELD = "panelSize";
+
+/** The four corners a remembered identity may name, in reading order. */
+var PANEL_CORNERS = ["tl", "tr", "bl", "br"];
 
 /* ------------------------------------------------------------------ *
  * ranges and constants
@@ -288,11 +338,16 @@ var DEFAULTS = {
   codeFeatures: "",
   noSyntheticItalic: false,
   noSyntheticBold: false,
+  fontSmoothing: SMOOTHING_AUTO,
   perTheme: false,
   darkValues: "{}",
   presets: "[]",
   activePreset: "",
   uiFollowsDialog: true,
+  panelEnabled: true,
+  panelPos: "",
+  panelCorner: "",
+  panelSize: "",
 };
 
 /**
@@ -337,7 +392,14 @@ var RETIRED_FIELDS = [SIZE_FIELD, LINE_HEIGHT_FIELD];
  * axis — a preset must never carry it, or applying that preset would re-label a
  * document still holding absolute weights).
  */
-var DURABLE_FIELDS = VALUE_FIELDS.concat(RETIRED_FIELDS, [WEIGHT_OFFSETS_FIELD]);
+var DURABLE_FIELDS = VALUE_FIELDS.concat(RETIRED_FIELDS, [
+  WEIGHT_OFFSETS_FIELD,
+  PANEL_ENABLED_FIELD,
+  PANEL_POS_FIELD,
+  PANEL_CORNER_FIELD,
+  PANEL_SIZE_FIELD,
+  SMOOTHING_FIELD,
+]);
 
 /**
  * Longest accepted font stack, in characters (mirrored by the host schema).
@@ -451,6 +513,1018 @@ function sanitizeFeatures(value) {
 /** Characters a `font-feature-settings` value cannot contain. */
 var FEATURES_UNSAFE = /[^a-zA-Z0-9"' ,]/g;
 
+/** The widest panel coordinate the position field accepts, in CSS pixels. */
+var PANEL_POS_MAX = 5000;
+
+/** The floating panel's default and clamped size, in CSS pixels. */
+var PANEL_SIZE_DEFAULT_W = 264;
+var PANEL_SIZE_DEFAULT_H = 0;
+var PANEL_SIZE_MIN_W = 200;
+var PANEL_SIZE_MAX_W = 520;
+var PANEL_SIZE_MIN_H = 160;
+var PANEL_SIZE_MAX_H = 800;
+
+/** The dot's own diameter, the snap margin, and the click-vs-drag threshold. */
+var FLOAT_DOT = 26;
+var FLOAT_MARGIN = 16;
+var FLOAT_DRAG_THRESHOLD = 6;
+
+/** The window size a page that reports no usable viewport is measured against. */
+var FLOAT_VIEWPORT_W = 1024;
+var FLOAT_VIEWPORT_H = 768;
+
+/**
+ * The smallest rectangle the dot can be snapped inside, in CSS pixels.
+ *
+ * One snapped dot needs its own diameter PLUS a margin on both sides, so
+ * anything smaller is not a region the dot can live in: the candidate is
+ * rejected and the next one (the window, last) stands in for it.
+ */
+var FLOAT_BOUNDS_MIN = FLOAT_DOT + 2 * FLOAT_MARGIN;
+
+/**
+ * The air the title keeps beside the round close button, in CSS pixels.
+ *
+ * The close is out of flow in the card's own top-right corner, so the header
+ * carries a plain strip on that side: no per-corner arithmetic, no slot for the
+ * dot (the dot is faded out while the card is open, so nothing has to be kept
+ * clear for it).
+ */
+var FLOAT_CLOSE_GAP = 8;
+
+/** The round close button's diameter, in CSS pixels (its stylesheet uses it). */
+var FLOAT_CLOSE = 22;
+
+/** How far the close button sits from the card's own corner, in CSS pixels. */
+var FLOAT_CLOSE_INSET = 8;
+
+/**
+ * The air between the two round buttons in the card's head, in CSS pixels.
+ *
+ * Both are out of flow and pinned to the card's own top-right corner, so the
+ * settings entry sits one diameter plus this gap to the LEFT of the close. It
+ * is the same 8px the header already uses between its rows, so the pair reads
+ * as one group rather than as two unrelated circles.
+ */
+var FLOAT_SETTINGS_GAP = 8;
+
+/** The card's own horizontal padding, in CSS pixels (mirrors `.dfp-floatCard`). */
+var FLOAT_CARD_PAD = 12;
+
+/** The radius the expanded card rests at, in CSS pixels (`.dfp-floatCard`). */
+var FLOAT_CARD_RADIUS = 16;
+
+/* ------------------------------------------------------------------ *
+ * reaching the settings screen
+ * ------------------------------------------------------------------ */
+
+/**
+ * The setting that ships DSH's Plugins screen, as a stable `data-*` attribute.
+ *
+ * Measured on the shipped builds (0.2.0-rc.2): `ui-settings-plugins` registers
+ * its navigation entry with `id: "plugins"` and the settings shell renders each
+ * entry as `<button aria-current>`; the alpha line names the same entry
+ * `plugins.item` and opens it as a page. The attribute below is the one form a
+ * host actually SHIPS, and it is checked first because it is the only one that
+ * does not depend on a label's language.
+ */
+var SETTINGS_NAV_ITEM_ATTR = "data-section";
+var SETTINGS_NAV_ITEM_VALUE = "plugins";
+
+/** The attribute the settings shell marks its navigation cells with. */
+var SETTINGS_NAV_CURRENT_ATTR = "aria-current";
+
+/** The attribute the sidebar's settings launcher gets: it opens a dialog. */
+var SETTINGS_LAUNCHER_HASPOPUP = "dialog";
+
+/** The attribute a plugin's own row ships with, and this plugin's id inside it. */
+var PLUGIN_ITEM_ATTR = "data-plugin-item";
+var PLUGIN_ITEM_VALUE = "fonttune";
+
+/**
+ * Every spelling of this plugin's row, and of the tab that opens its settings.
+ *
+ * The row is found by its shipped id first (`data-plugin-item="fonttune"`); these
+ * labels are the fallback for a host that renders no such attribute, matched
+ * case-insensitively by substring so a decorated label still hits.
+ */
+var PLUGIN_TEXTS = ["字体增强", "font tune", "fonttune"];
+var PLUGIN_CONFIG_TEXTS = ["插件配置", "plugin configuration", "plugin config"];
+
+/** What the plugin row and its tab can be, before the predicate narrows it. */
+var PLUGIN_ITEM_CANDIDATES = "[data-plugin-item], button, a, li, [role=button], [role=tab], [role=treeitem], [role=option], [role=link]";
+var PLUGIN_TAB_CANDIDATES = "button, a, [role=tab], [role=button]";
+
+/**
+ * Every spelling of the Plugins navigation entry the supported languages use.
+ *
+ * A host that names its entry in the DOM ships it as translated text, so the
+ * text form is a genuine fallback and not the primary route (see
+ * `isSettingsNavItem`). Matched case-insensitively by substring, so a host that
+ * decorates the label ("Built-in plugins") still hits.
+ */
+var SETTINGS_NAV_TEXTS = [
+  "插件",
+  "Plugins",
+  "Plugin",
+  "プラグイン",
+  "플러그인",
+  "Plugins", // de/es/fr/pt all ship "Plugins"; kept explicit for the table's sake
+];
+
+/**
+ * The names the sidebar's settings launcher answers to, per language.
+ *
+ * The launcher is the LAST resort: it opens the settings dialog on whichever
+ * section was last active, so a caller that lands here still has to be told
+ * which cell to pick. It is the only route that cannot fail on a wrong name,
+ * because the attribute it is found by (`aria-haspopup="dialog"`) is structural.
+ */
+var SETTINGS_LAUNCHER_TEXTS = ["设置", "Settings", "設定", "설정", "Einstellungen"];
+
+/**
+ * Read an element's own text, tolerating a host without `textContent`.
+ * @param {object} node - the candidate element.
+ * @returns {string} its text, or "".
+ */
+function readNodeText(node) {
+  if (node === null || node === undefined) return "";
+  var text = node.textContent;
+  return typeof text === "string" ? text : "";
+}
+
+/**
+ * Read one attribute, tolerating a host without `getAttribute`.
+ * @param {object} node - the candidate element.
+ * @param {string} name - the attribute name.
+ * @returns {string} its value, or "".
+ */
+function readNodeAttr(node, name) {
+  if (node === null || node === undefined || typeof node.getAttribute !== "function") return "";
+  var value = node.getAttribute(name);
+  return value === null || value === undefined ? "" : String(value);
+}
+
+/**
+ * Read an element's classes as a space-separated string.
+ * @param {object} node - the candidate element.
+ * @returns {string} its classes, or "".
+ */
+function readNodeClass(node) {
+  if (node === null || node === undefined) return "";
+  var name = node.className;
+  return typeof name === "string" ? name : "";
+}
+
+/**
+ * Whether one element is a settings navigation cell that opens the Plugins
+ * screen.
+ *
+ * Two host shapes are accepted, in the order they can be trusted:
+ *  1. the entry's OWN id, rendered as a `data-section="plugins"` attribute
+ *     (the settings shell's list of `settings.section` entries);
+ *  2. the entry's translated label, read from a cell the shell marked with
+ *     `aria-current` — the same attribute the shell puts on every cell it
+ *     renders, so an unrelated button cannot match by accident.
+ * @param {object} node - the candidate element.
+ * @returns {boolean} whether it is the Plugins cell.
+ */
+function isSettingsNavItem(node) {
+  if (node === null || node === undefined || typeof node !== "object") return false;
+  if (readNodeAttr(node, SETTINGS_NAV_ITEM_ATTR) === SETTINGS_NAV_ITEM_VALUE) return true;
+  if (readNodeAttr(node, SETTINGS_NAV_CURRENT_ATTR) === "") return false;
+  var text = readNodeText(node).trim().toLowerCase();
+  if (text === "") return false;
+  for (var index = 0; index < SETTINGS_NAV_TEXTS.length; index += 1) {
+    if (text.indexOf(SETTINGS_NAV_TEXTS[index].toLowerCase()) >= 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether one element is THIS plugin's own row in the Plugins list.
+ *
+ * The shipped id is checked first — `data-plugin-item="fonttune"` is data the host
+ * publishes, so it survives a language change; the translated label is the
+ * fallback. Only clickable shapes are accepted, so a heading that merely contains
+ * the name cannot swallow the click.
+ * @param {object} node - the candidate element.
+ * @returns {boolean} whether it is the row to open.
+ */
+function isPluginEntry(node) {
+  if (node === null || node === undefined || typeof node !== "object") return false;
+  if (readNodeAttr(node, PLUGIN_ITEM_ATTR) === PLUGIN_ITEM_VALUE) return true;
+  var tag = typeof node.tagName === "string" ? node.tagName.toLowerCase() : "";
+  var role = readNodeAttr(node, "role").toLowerCase();
+  // A bare `li` is NOT clickable, so the text fallback must never accept one:
+  // a conversation message that merely QUOTES the plugin's name would become
+  // "the entry" and swallow the click (seen on a real page, where the report
+  // naming this plugin was the only match on screen).
+  if (tag !== "button" && tag !== "a" && role !== "button" && role !== "tab" && role !== "treeitem" && role !== "option" && role !== "link") {
+    return false;
+  }
+  var text = readNodeText(node).trim().toLowerCase();
+  if (text === "") return false;
+  for (var index = 0; index < PLUGIN_TEXTS.length; index += 1) {
+    if (text.indexOf(PLUGIN_TEXTS[index].toLowerCase()) >= 0) return true;
+  }
+  return false;
+}
+
+/** The package name the host's own navigation service opens for this plugin. */
+var PLUGIN_BUNDLE_NAME = "dsh-fonttune";
+
+/** The main panel id the Plugins page lives in (what `layout.selectPanel` takes). */
+var PLUGIN_PANEL_ID = "plugins";
+
+/**
+ * Whether a node sits inside this plugin's own floating panel.
+ *
+ * The panel can carry the plugin's own name, and a lookup that mistakes it for
+ * a host entry would click ourselves.
+ * @param {object} node - the candidate element.
+ * @returns {boolean} true when the node is ours, not the host's.
+ */
+function isOwnPanelNode(node) {
+  if (node === null || node === undefined) return true;
+  try {
+    return typeof node.closest === "function" && node.closest(".dfp-floatHost") !== null;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * THIS plugin's own card on the host's Plugins page, or null.
+ *
+ * The Plugins page publishes every entry as `data-plugin-item="<id>"` and this
+ * plugin's registration id is `fonttune`: the attribute is host-published data,
+ * so the lookup survives a language change and can never match a sentence that
+ * merely names the plugin.
+ * @param {object} doc - the document to search (a stub is fine).
+ * @returns {object|null} the card element, or null.
+ */
+function pluginEntryCard(doc) {
+  if (doc === null || doc === undefined || typeof doc.querySelector !== "function") return null;
+  var card = null;
+  try {
+    card = doc.querySelector("[" + PLUGIN_ITEM_ATTR + '="' + PLUGIN_ITEM_VALUE + '"]');
+  } catch (error) {
+    return null;
+  }
+  if (card === null || card === undefined) return null;
+  return isOwnPanelNode(card) ? null : card;
+}
+
+/**
+ * The element that actually opens a plugin's page from its entry card.
+ *
+ * The card itself is a list item with no handler of its own; the host renders
+ * the title button inside it as the open gesture, and that button is the first
+ * one the card carries. A node that is already the clickable is returned as-is.
+ * @param {object} node - the card, or a clickable candidate.
+ * @returns {object|null} the element to click, or null.
+ */
+function pluginClickTarget(node) {
+  if (node === null || node === undefined) return null;
+  var tag = typeof node.tagName === "string" ? node.tagName.toLowerCase() : "";
+  var role = readNodeAttr(node, "role").toLowerCase();
+  if (tag === "button" || tag === "a" || role === "button" || role === "tab" || role === "link") return node;
+  var buttons = typeof node.querySelectorAll === "function" ? node.querySelectorAll("button") : [];
+  return buttons.length > 0 ? buttons[0] : null;
+}
+
+/**
+ * Whether one element opens this plugin's own configuration page inside its row.
+ *
+ * Optional by design: a host that shows the configuration inline has no such tab,
+ * and the caller treats "not found" as success rather than as a failure.
+ * @param {object} node - the candidate element.
+ * @returns {boolean} whether it is the configuration tab.
+ */
+function isPluginConfigTab(node) {
+  if (node === null || node === undefined || typeof node !== "object") return false;
+  var text = readNodeText(node).trim().toLowerCase();
+  if (text === "") return false;
+  for (var index = 0; index < PLUGIN_CONFIG_TEXTS.length; index += 1) {
+    if (text.indexOf(PLUGIN_CONFIG_TEXTS[index].toLowerCase()) >= 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether one element is the sidebar's settings launcher.
+ *
+ * Structural, not textual: DSH's shell renders it as a button whose
+ * `aria-haspopup` is `dialog`. Its label only has to CONFIRM the reading, so a
+ * host that renames the section list still opens the dialog, and a random
+ * `aria-haspopup="dialog"` button (a menu elsewhere on the page) is rejected by
+ * the label rather than by position.
+ * @param {object} node - the candidate element.
+ * @returns {boolean} whether it is the settings launcher.
+ */
+function isSettingsLauncher(node) {
+  if (node === null || node === undefined || typeof node !== "object") return false;
+  if (readNodeAttr(node, "aria-haspopup") !== SETTINGS_LAUNCHER_HASPOPUP) return false;
+  var label = (readNodeAttr(node, "aria-label") || readNodeAttr(node, "title") || readNodeText(node))
+    .trim()
+    .toLowerCase();
+  if (label === "") return false;
+  for (var index = 0; index < SETTINGS_LAUNCHER_TEXTS.length; index += 1) {
+    if (label.indexOf(SETTINGS_LAUNCHER_TEXTS[index].toLowerCase()) >= 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Hand a synthetic event to a node, reporting whether the host took it.
+ *
+ * `cancelable` matters: a host may `preventDefault` the event to mark it as
+ * consumed, and that is the only acknowledgement available here.
+ * @param {object} node - the element to dispatch on.
+ * @param {string} type - the event type.
+ * @returns {boolean} whether the host ran without throwing.
+ */
+function dispatchSynthetic(node, type) {
+  if (node === null || node === undefined || typeof node.dispatchEvent !== "function") return false;
+  var win = typeof globalThis !== "undefined" ? globalThis : null;
+  var View = win !== null && win.MouseEvent !== undefined ? win.MouseEvent : null;
+  var event = null;
+  try {
+    event = View !== null
+      ? new View(type, { bubbles: true, cancelable: true, view: win })
+      : { type: type, bubbles: true, cancelable: true, defaultPrevented: false, preventDefault: function () {} };
+  } catch (error) {
+    event = { type: type, bubbles: true, cancelable: true, defaultPrevented: false, preventDefault: function () {} };
+  }
+  try {
+    node.dispatchEvent(event);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Resolve the shortest route to DSH's Plugins settings screen — or null.
+ *
+ * The panel's settings button must not guess at a fragile long selector, and it
+ * must not throw when the host is not there at all (the memory scope, a host
+ * line this package no longer supports, a page rendered before the shell
+ * mounted). So the lookup is a list of NARROWED plans, each with the evidence
+ * it rests on, and a `run` that performs the step:
+ *
+ *  1. `section-attr` — the Plugins cell, found by the entry's own id rendered as
+ *     a `data-*` attribute. Stable by construction: it is data the host
+ *     publishes, not text it translates.
+ *  2. `section-text` — the same cell found by its translated label among the
+ *     cells the shell marked `aria-current="true"`. Same click, weaker key; it
+ *     is what a host that renders no per-entry attribute needs.
+ *  3. `launcher` — no cell yet, so the sidebar's settings launcher is clicked
+ *     first and the cell is looked for again on a later frame. The caller hands
+ *     the retry in as `retry`, so this function stays pure about the DOM it can
+ *     see right now.
+ *
+ * Every step is a plain `click()`, which is what a user does; nothing here pokes
+ * at a framework's internals, and nothing depends on element coordinates.
+ *
+ * @param {object} doc - the document to search (a stub is fine).
+ * @param {{retry?: (select: Function) => boolean}} [options] - retry runner.
+ * @returns {{kind: string, why: string, node: object, run: Function}|null} the plan, or null.
+ */
+function findSettingsEntry(doc, options) {
+  if (doc === null || doc === undefined || typeof doc !== "object") return null;
+  var settings = options !== null && typeof options === "object" ? options : {};
+  var all = function () {
+    var found = typeof doc.querySelectorAll === "function" ? doc.querySelectorAll("button") : null;
+    return found === null || found === undefined ? [] : found;
+  };
+  var first = function (predicate) {
+    var nodes = all();
+    for (var index = 0; index < nodes.length; index += 1) {
+      if (predicate(nodes[index])) return nodes[index];
+    }
+    return null;
+  };
+  var cellWithAttr = function () {
+    return first(function (node) {
+      return readNodeAttr(node, SETTINGS_NAV_ITEM_ATTR) === SETTINGS_NAV_ITEM_VALUE;
+    });
+  };
+  var cellByText = function () {
+    return first(function (node) {
+      return readNodeAttr(node, SETTINGS_NAV_CURRENT_ATTR) !== "" && isSettingsNavItem(node);
+    });
+  };
+  var launcher = function () {
+    return first(isSettingsLauncher);
+  };
+  // The plugin row and its configuration tab are not necessarily `button`s, so the
+  // search is by shape instead of by tag alone.
+  var firstIn = function (selector, predicate) {
+    var nodes = typeof doc.querySelectorAll === "function" ? doc.querySelectorAll(selector) : [];
+    for (var index = 0; index < nodes.length; index += 1) {
+      if (predicate(nodes[index])) return nodes[index];
+    }
+    return null;
+  };
+  var pluginEntry = function () {
+    var found = firstIn(PLUGIN_ITEM_CANDIDATES, function (node) {
+      // Our own floating panel may carry the plugin's own name; never click ourselves.
+      try {
+        if (typeof node.closest === "function" && node.closest(".dfp-floatHost") !== null) return false;
+      } catch (error) {
+        // A node without closest cannot be ours anyway.
+      }
+      return isPluginEntry(node);
+    });
+    if (found === null) return null;
+    // The entry card is a list item with no handler of its own: the click lands
+    // on the title button the host renders inside it.
+    return pluginClickTarget(found) || found;
+  };
+  var pluginConfigTab = function () {
+    return firstIn(PLUGIN_TAB_CANDIDATES, isPluginConfigTab);
+  };
+  // A plan that just clicks the cell it names.
+  var sectionPlan = function (kind, why, node) {
+    return {
+      kind: kind,
+      why: why,
+      node: node,
+      run: function () {
+        return dispatchSynthetic(node, "click");
+      },
+    };
+  };
+  /**
+   * Give a plan the tail every route shares: open the Plugins cell, then THIS
+   * plugin's own row inside it, then its configuration tab when the host has one.
+   *
+   * The row mounts one commit after the cell, so the waiting belongs to the
+   * caller's `retry` runner and this function stays pure about what it can see.
+   * A host with no separate tab is normal, not a failure: the row click is the
+   * answer in that case.
+   * @param {object} plan - a plan that opens the Plugins screen.
+   * @returns {object} the same plan with the tail attached.
+   */
+  var withPluginEntry = function (plan) {
+    var opened = plan.run;
+    plan.run = function () {
+      var reached = opened();
+      if (typeof settings.retry !== "function") return reached;
+      var entry = settings.retry(pluginEntry);
+      if (entry === null) return reached;
+      return settings.retry(pluginConfigTab) || entry;
+    };
+    return plan;
+  };
+  // The plugin's own settings may be its own SIDEBAR entry — a page of its own,
+  // not a section of the settings dialog. When the shell publishes one, clicking
+  // it opens the configuration directly and there is no settings route to walk.
+  // The user's host lists the plugin in the sidebar, and this is that entry.
+  var sidebarEntry = pluginEntry();
+  if (sidebarEntry !== null) {
+    return {
+      kind: "sidebar-entry",
+      why: "the plugin ships its own entry; it opens the configuration directly",
+      node: sidebarEntry,
+      run: function () {
+        return dispatchSynthetic(sidebarEntry, "click");
+      },
+    };
+  }
+  var canonical = cellWithAttr();
+  if (canonical !== null) {
+    return withPluginEntry(
+      sectionPlan("section-attr", "the Plugins entry ships its own id as a data attribute", canonical)
+    );
+  }
+  var byText = cellByText();
+  if (byText !== null) {
+    return withPluginEntry(
+      sectionPlan("section-text", "the Plugins entry was matched by its translated label", byText)
+    );
+  }
+  var opener = launcher();
+  if (opener === null) return null;
+  return withPluginEntry({
+    kind: "launcher",
+    why: "only the sidebar's settings launcher is on screen; the entry is picked after it opens",
+    node: opener,
+    run: function () {
+      var reached = dispatchSynthetic(opener, "click");
+      if (typeof settings.retry !== "function") return reached;
+      return settings.retry(cellWithAttr) || settings.retry(cellByText) || reached;
+    },
+  });
+}
+
+/**
+ * Normalize the floating panel's stored position.
+ * @param {unknown} value - candidate `"x,y"` text.
+ * @returns {string} the normalized `"x,y"` text, or "" when unusable.
+ */
+function normalizePanelPos(value) {
+  if (typeof value !== "string") return "";
+  var parts = value.trim().split(",");
+  if (parts.length !== 2) return "";
+  var x = Math.round(Number(parts[0]));
+  var y = Math.round(Number(parts[1]));
+  if (!isFinite(x) || !isFinite(y)) return "";
+  x = Math.min(PANEL_POS_MAX, Math.max(0, x));
+  y = Math.min(PANEL_POS_MAX, Math.max(0, y));
+  return x + "," + y;
+}
+
+/**
+ * Read the floating panel's stored position for placement.
+ * @param {unknown} value - candidate `"x,y"` text.
+ * @returns {{x: number, y: number}|null} the coordinates, or null when unset.
+ */
+function parsePanelPos(value) {
+  var text = normalizePanelPos(value);
+  if (text === "") return null;
+  var parts = text.split(",");
+  return { x: Number(parts[0]), y: Number(parts[1]) };
+}
+
+/**
+ * Normalize the floating panel's remembered corner.
+ * @param {unknown} value - candidate corner name.
+ * @returns {string} one of `PANEL_CORNERS`, or "" when it names none.
+ */
+function normalizePanelCorner(value) {
+  if (typeof value !== "string") return "";
+  var text = value.trim().toLowerCase();
+  return PANEL_CORNERS.indexOf(text) >= 0 ? text : "";
+}
+
+/**
+ * Read the floating panel's remembered corner for placement.
+ * @param {unknown} value - candidate corner name.
+ * @returns {string|null} the corner, or null when the document names none (an
+ *   older document, or one nothing has settled yet).
+ */
+function parsePanelCorner(value) {
+  var text = normalizePanelCorner(value);
+  return text === "" ? null : text;
+}
+
+/**
+ * Normalize the floating panel's stored size.
+ *
+ * A height of 0 means "auto" (the card sizes to its content); any other
+ * height clamps into the resizable window, like the width always does.
+ * @param {unknown} value - candidate `"w,h"` text.
+ * @returns {string} the normalized `"w,h"` text, or "" when unusable.
+ */
+function normalizePanelSize(value) {
+  if (typeof value !== "string") return "";
+  var parts = value.trim().split(",");
+  if (parts.length !== 2) return "";
+  var w = Math.round(Number(parts[0]));
+  var h = Math.round(Number(parts[1]));
+  if (!isFinite(w) || !isFinite(h)) return "";
+  w = Math.min(PANEL_SIZE_MAX_W, Math.max(PANEL_SIZE_MIN_W, w));
+  if (h !== 0) h = Math.min(PANEL_SIZE_MAX_H, Math.max(PANEL_SIZE_MIN_H, h));
+  return w + "," + h;
+}
+
+/**
+ * Read the floating panel's stored size for layout.
+ * @param {unknown} value - candidate `"w,h"` text.
+ * @returns {{w: number, h: number}|null} the size, or null when unset.
+ */
+function parsePanelSize(value) {
+  var text = normalizePanelSize(value);
+  if (text === "") return null;
+  var parts = text.split(",");
+  return { w: Number(parts[0]), h: Number(parts[1]) };
+}
+
+/**
+ * One rectangle as four finite edges, in viewport coordinates.
+ *
+ * A DOMRect, a plain box and anything in between is accepted; the width and
+ * height are optional, because a DOMRect always carries `right`/`bottom` while a
+ * hand-built box usually carries `width`/`height` instead.
+ * @param {unknown} rect - the value to read.
+ * @returns {{left: number, top: number, right: number, bottom: number}|null} the
+ *   box, or null when the value holds no usable rectangle.
+ */
+function floatBoxOf(rect) {
+  if (rect === null || typeof rect !== "object") return null;
+  var left = Number(rect.left);
+  var top = Number(rect.top);
+  var right = rect.right === undefined ? left + Number(rect.width) : Number(rect.right);
+  var bottom = rect.bottom === undefined ? top + Number(rect.height) : Number(rect.bottom);
+  if (!isFinite(left) || !isFinite(top) || !isFinite(right) || !isFinite(bottom)) return null;
+  return { left: left, top: top, right: right, bottom: bottom };
+}
+
+/**
+ * The rectangle the dot snaps to, drags within and reads its own quadrant from.
+ *
+ * The dot belongs INSIDE the conversation, not on the chrome around it: with a
+ * sidebar on either side and a top bar, the window's four corners sit on bars the
+ * user never wanted a control on. The caller therefore hands in its candidates in
+ * priority order — the scroll container the conversation lives in first, the
+ * prose element itself second — and the first one that is a usable region wins.
+ *
+ * A candidate is usable when, after being CLIPPED to the viewport, it is at least
+ * `FLOAT_BOUNDS_MIN` on both axes: a container that hangs off the screen would
+ * otherwise snap the dot to a corner nobody can reach, and one smaller than the
+ * dot cannot hold it at all. Nothing usable (a settings page has no conversation
+ * at all) falls back to the whole window, which is what the panel did before.
+ *
+ * The WINNING CANDIDATE is reported alongside the bounds, not only the numbers:
+ * "which rectangle is the region" and "which element's size change means the
+ * region changed" are one question, and the caller that watches for a region
+ * change has to ask it the same way (see `regionElement` in the client half).
+ * @param {Array<unknown>} rects - candidate rectangles, best first.
+ * @param {{width: number, height: number}} viewport - the window size.
+ * @returns {{index: number, bounds: {left: number, top: number, right: number,
+ *   bottom: number, width: number, height: number}}} the index of the rectangle
+ *   the region was taken from (-1 when the whole window stands in) and the
+ *   bounds, in viewport coordinates.
+ */
+function floatBoundsPick(rects, viewport) {
+  var vw = viewport === null || viewport === undefined ? NaN : Number(viewport.width);
+  var vh = viewport === null || viewport === undefined ? NaN : Number(viewport.height);
+  if (!isFinite(vw) || vw <= 0) vw = FLOAT_VIEWPORT_W;
+  if (!isFinite(vh) || vh <= 0) vh = FLOAT_VIEWPORT_H;
+  var full = { left: 0, top: 0, right: vw, bottom: vh, width: vw, height: vh };
+  var list = Array.isArray(rects) ? rects : [];
+  for (var index = 0; index < list.length; index += 1) {
+    var box = floatBoxOf(list[index]);
+    if (box === null) continue;
+    var left = Math.max(0, Math.min(vw, box.left));
+    var top = Math.max(0, Math.min(vh, box.top));
+    var right = Math.max(0, Math.min(vw, box.right));
+    var bottom = Math.max(0, Math.min(vh, box.bottom));
+    var width = right - left;
+    var height = bottom - top;
+    if (width < FLOAT_BOUNDS_MIN || height < FLOAT_BOUNDS_MIN) continue;
+    return {
+      index: index,
+      bounds: { left: left, top: top, right: right, bottom: bottom, width: width, height: height },
+    };
+  }
+  return { index: -1, bounds: full };
+}
+
+/**
+ * The bounds alone, for every caller that only draws with them.
+ * @param {Array<unknown>} rects - candidate rectangles, best first.
+ * @param {{width: number, height: number}} viewport - the window size.
+ * @returns {{left: number, top: number, right: number, bottom: number,
+ *   width: number, height: number}} the bounds, in viewport coordinates.
+ */
+function floatBoundsFrom(rects, viewport) {
+  return floatBoundsPick(rects, viewport).bounds;
+}
+
+/**
+ * Whether a second reading of the winning rectangle is the same shape as the last.
+ *
+ * The fallback watcher asks this every tick and nothing else, so it is stated on
+ * FOUR numbers — the two edges — and never on anything derived from them. A caller
+ * that re-read the region, resolved styles or compared a `width`/`height` pair as
+ * well would be doing work the question does not need, twice a second, on a page
+ * that is usually not moving at all.
+ *
+ * A rectangle that could not be read (null, or absent) is never the same shape as
+ * anything: an unreadable region is a change, not a confirmation.
+ * @param {object|null} a - the rectangle read last time.
+ * @param {object|null} b - the rectangle read now.
+ * @returns {boolean} true when both readings name one and the same box.
+ */
+function sameWatchBounds(a, b) {
+  if (a === null || a === undefined || b === null || b === undefined) return false;
+  return a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+}
+
+/**
+ * Whether every box an observer is holding is still in the document.
+ *
+ * An observer holds a NODE, and a node the host replaced (a re-render swapping the
+ * conversation element, a session switch) is detached: it keeps its size forever
+ * and never reports again. So a target list may look unchanged and still be a list
+ * that has to be resolved anew — which is the whole reason the body is watched
+ * alongside it (see `watchRegion` in the client half).
+ * @param {object} doc - the document to ask (`document`, in the client half).
+ * @param {Array<object>} targets - the boxes currently observed.
+ * @returns {boolean} true when nothing in the list was taken out of the tree.
+ */
+function floatTargetsConnected(doc, targets) {
+  if (doc === null || doc === undefined || typeof doc.contains !== "function") return true;
+  if (Array.isArray(targets) === false) return true;
+  try {
+    for (var index = 0; index < targets.length; index += 1) {
+      if (doc.contains(targets[index]) === false) return false;
+    }
+  } catch (error) {
+    return true;
+  }
+  return true;
+}
+
+/**
+ * Which quadrant a point sits in, measured inside the bounds it lives in.
+ *
+ * The bounds matter: the expand direction is decided by the edges the dot is
+ * NEAREST, and NEAREST is a question about the conversation — the region's own
+ * middle, not the window's. Ties fall left/top.
+ * @param {unknown} bounds - the region, as `floatBoundsFrom` returns it.
+ * @param {number} x - CSS pixels from the left.
+ * @param {number} y - CSS pixels from the top.
+ * @returns {string} one of "tl", "tr", "bl", "br".
+ */
+function floatQuadrantIn(bounds, x, y) {
+  var box = floatBoxOf(bounds);
+  if (box === null) box = { left: 0, top: 0, right: FLOAT_VIEWPORT_W, bottom: FLOAT_VIEWPORT_H };
+  var left = x < (box.left + box.right) / 2;
+  var top = y < (box.top + box.bottom) / 2;
+  if (left && top) return "tl";
+  if (!left && top) return "tr";
+  if (left && !top) return "bl";
+  return "br";
+}
+
+/**
+ * Which viewport quadrant a point sits in (ties fall left/top).
+ * @param {number} x - CSS pixels from the left.
+ * @param {number} y - CSS pixels from the top.
+ * @param {number} vw - viewport width.
+ * @param {number} vh - viewport height.
+ * @returns {string} one of "tl", "tr", "bl", "br".
+ */
+function floatQuadrant(x, y, vw, vh) {
+  return floatQuadrantIn({ left: 0, top: 0, right: vw, bottom: vh }, x, y);
+}
+
+/**
+ * Where the panel grows from, given the dot's quadrant: always away from
+ * the nearest edges, so the card lands inside the viewport.
+ * @param {string} quadrant - one of "tl", "tr", "bl", "br".
+ * @returns {string} one of "right-down", "left-down", "right-up", "left-up".
+ */
+function floatExpandDirection(quadrant) {
+  if (quadrant === "tl") return "right-down";
+  if (quadrant === "tr") return "left-down";
+  if (quadrant === "bl") return "right-up";
+  return "left-up";
+}
+
+/**
+ * The expand animation's origin corner, on the dot's side.
+ * @param {string} quadrant - one of "tl", "tr", "bl", "br".
+ * @returns {string} a CSS `transform-origin` value.
+ */
+function floatTransformOrigin(quadrant) {
+  if (quadrant === "tl") return "0 0";
+  if (quadrant === "tr") return "100% 0";
+  if (quadrant === "bl") return "0 100%";
+  return "100% 100%";
+}
+
+/**
+ * Which corner of the card lands on the dot, and where the expansion starts.
+ *
+ * The card's nearest corner COINCIDES with the dot's own corner: the open card
+ * is clipped, at the first frame, down to exactly the dot's rectangle, so the
+ * panel reads as the dot unfolded rather than as a second object. The shared
+ * corner is also the expand animation's origin, so the card grows toward the
+ * opposite corner and shrinks back into the dot on the way out.
+ * @param {string} quadrant - one of "tl", "tr", "bl", "br".
+ * @returns {{h: string, v: string, origin: string}} the anchored edges (CSS
+ *   sides, always "0") and the `transform-origin` on that shared corner.
+ */
+function floatCardAnchor(quadrant) {
+  var left = quadrant === "tl" || quadrant === "bl";
+  var top = quadrant === "tl" || quadrant === "tr";
+  return {
+    h: left ? "left" : "right",
+    v: top ? "top" : "bottom",
+    origin: floatTransformOrigin(quadrant),
+  };
+}
+
+/**
+ * The clip-path the card's expand starts from — and its collapse ends on.
+ *
+ * The card is anchored on the dot's own corner, so the dot's rectangle inside
+ * the card is `dot` by `dot` pixels flush with that corner. Clipping the card
+ * down to it gives the "small rounded rectangle" the panel unfolds out of; the
+ * animation then carries the same four lengths to zero, which is what makes the
+ * panel LOOK like it grows instead of merely fading in. The radius is the dot's
+ * own (half its diameter), so the first frame reads as the dot's circle.
+ * @param {number} width - the card's border-box width, in CSS pixels.
+ * @param {number} height - the card's border-box height, in CSS pixels.
+ * @param {string} quadrant - one of "tl", "tr", "bl", "br".
+ * @param {number} [dot] - the dot's diameter (defaults to FLOAT_DOT).
+ * @returns {string} a CSS `inset()` clip-path.
+ */
+function floatClipStart(width, height, quadrant, dot) {
+  var size = dot === undefined ? FLOAT_DOT : dot;
+  var anchor = floatCardAnchor(quadrant);
+  var w = Math.max(0, Math.round(width));
+  var h = Math.max(0, Math.round(height));
+  var far = Math.max(0, w - size);
+  var low = Math.max(0, h - size);
+  var top = anchor.v === "top" ? 0 : low;
+  var right = anchor.h === "left" ? far : 0;
+  var bottom = anchor.v === "top" ? low : 0;
+  var left = anchor.h === "left" ? 0 : far;
+  return (
+    "inset(" + top + "px " + right + "px " + bottom + "px " + left +
+    "px round " + Math.round(size / 2) + "px)"
+  );
+}
+
+/**
+ * The clip-path the expanded card rests at: its own box, its own radius.
+ *
+ * The four lengths are zero, so nothing is cut away — but the value has to be a
+ * real shape rather than `none`, because `none` does not interpolate and the
+ * unfold would snap instead of growing. It is therefore only the shape the
+ * animation lands ON: the card drops the clip for good once it has arrived
+ * (`isRestClip` is how it knows), because clipping the card's own border box a
+ * second time — `border-radius` already did it once — multiplies the
+ * anti-aliasing along the rounded corners and cuts the card's own shadow away.
+ * @returns {string} a CSS `inset()` clip-path.
+ */
+function floatClipRest() {
+  var round = FLOAT_CARD_RADIUS + "px";
+  return "inset(0px 0px 0px 0px round " + round + ")";
+}
+
+/**
+ * Whether a computed `clip-path` has nothing left to cut away.
+ *
+ * `none` counts, and so does the resting `inset()` the card animates to: its
+ * four lengths are zero, which is the element's own border box. Anything that
+ * still hides part of the element — a clip in flight, a clip to the dot's
+ * rectangle — does not.
+ * @param {unknown} value - a computed `clip-path`.
+ * @returns {boolean} true when the clip hides nothing.
+ */
+function isRestClip(value) {
+  if (typeof value !== "string") return false;
+  var text = value.trim();
+  if (text === "" || text === "none" || text === "auto") return true;
+  var shape = /^inset\(([^)]*)\)$/.exec(text);
+  if (shape === null) return false;
+  var halves = shape[1].split("round");
+  var found = halves[0].match(/-?\d+(?:\.\d+)?/g);
+  if (found === null) return false;
+  var values = found.map(Number);
+  if (values.length > 4) return false;
+  // CSS repeats the shorter lists: 1 -> all four, 2 -> vertical/horizontal,
+  // 3 -> top/horizontal/bottom.
+  var four;
+  if (values.length === 1) four = [values[0], values[0], values[0], values[0]];
+  else if (values.length === 2) four = [values[0], values[1], values[0], values[1]];
+  else if (values.length === 3) four = [values[0], values[1], values[2], values[1]];
+  else four = values;
+  for (var index = 0; index < four.length; index += 1) {
+    if (Math.abs(four[index]) > 0.5) return false;
+  }
+  if (halves.length < 2) return true;
+  var round = halves[1].match(/-?\d+(?:\.\d+)?/g);
+  if (round === null) return false;
+  return Math.abs(Number(round[0]) - FLOAT_CARD_RADIUS) <= 0.5;
+}
+
+/**
+ * The four snapped corners of a region, as the one box they are laid out in.
+ *
+ * The margin is inward from the region's own edges and the dot's diameter is
+ * held clear of the far ones, so a corner of this box is where a dot of that
+ * size REST on that corner of the region. Everything about corners — which one
+ * is nearest, and where a named one is — is read from these four numbers, so the
+ * two questions can never disagree.
+ * @param {unknown} bounds - the region, as `floatBoundsFrom` returns it.
+ * @param {number} [dot] - the dot's diameter (defaults to FLOAT_DOT).
+ * @param {number} [margin] - the edge margin (defaults to FLOAT_MARGIN).
+ * @returns {{left: number, top: number, right: number, bottom: number}} the
+ *   four edges a snapped dot's top-left may take.
+ */
+function floatCornersOf(bounds, dot, margin) {
+  var size = dot === undefined ? FLOAT_DOT : dot;
+  var gap = margin === undefined ? FLOAT_MARGIN : margin;
+  var box = floatBoxOf(bounds);
+  if (box === null) box = { left: 0, top: 0, right: FLOAT_VIEWPORT_W, bottom: FLOAT_VIEWPORT_H };
+  var left = box.left + Math.max(0, gap);
+  var top = box.top + Math.max(0, gap);
+  return {
+    left: left,
+    top: top,
+    right: Math.max(left, box.right - gap - size),
+    bottom: Math.max(top, box.bottom - gap - size),
+  };
+}
+
+/**
+ * Which of a region's four corners a point is nearest.
+ *
+ * Measured between the SNAPPED corners, which is the box `floatCornerPoint`
+ * places a named corner in: "the nearest corner" and "that corner's position"
+ * are then one question with one answer. Ties fall left/top.
+ *
+ * This is the ONLY way a corner is ever chosen: everywhere else the chosen one
+ * is read back from the document (see `PANEL_CORNER_FIELD`), because a region
+ * that changed shape must move the dot to its own corner rather than let the
+ * old region's coordinates pick a different one.
+ * @param {unknown} bounds - the region, as `floatBoundsFrom` returns it.
+ * @param {number} x - CSS pixels from the left.
+ * @param {number} y - CSS pixels from the top.
+ * @param {number} [dot] - the dot's diameter (defaults to FLOAT_DOT).
+ * @param {number} [margin] - the edge margin (defaults to FLOAT_MARGIN).
+ * @returns {string} one of "tl", "tr", "bl", "br".
+ */
+function floatNearestCorner(bounds, x, y, dot, margin) {
+  var edges = floatCornersOf(bounds, dot, margin);
+  var left = x < (edges.left + edges.right) / 2;
+  var top = y < (edges.top + edges.bottom) / 2;
+  if (left && top) return "tl";
+  if (!left && top) return "tr";
+  if (left && !top) return "bl";
+  return "br";
+}
+
+/**
+ * The coordinates of one NAMED corner of a region, margin and all.
+ *
+ * This is where the dot's identity becomes a position, and the one place a
+ * region change is answered from: whatever happened to the region, a dot that
+ * lives in `br` is put back on the new `br`. A name that is not one of the four
+ * falls back to `br`, the corner the panel is parked in before anything at all
+ * is stored.
+ * @param {unknown} bounds - the region, as `floatBoundsFrom` returns it.
+ * @param {string} corner - one of "tl", "tr", "bl", "br".
+ * @param {number} [dot] - the dot's diameter (defaults to FLOAT_DOT).
+ * @param {number} [margin] - the edge margin (defaults to FLOAT_MARGIN).
+ * @returns {{x: number, y: number}} the snapped top-left of the dot.
+ */
+function floatCornerPoint(bounds, corner, dot, margin) {
+  var edges = floatCornersOf(bounds, dot, margin);
+  var left = corner === "tl" || corner === "bl";
+  var top = corner === "tl" || corner === "tr";
+  return {
+    x: Math.round(left ? edges.left : edges.right),
+    y: Math.round(top ? edges.top : edges.bottom),
+  };
+}
+
+/**
+ * Snap a point to the nearest corner of a region, keeping the margin clear.
+ *
+ * The candidate corners are the BOUNDS' own, so a dot left on the chrome while
+ * a sidebar grew is pulled onto the conversation's nearest corner — the same
+ * corner the next expand grows away from.
+ *
+ * Asked when the USER picks a corner (a drag released, a document that names
+ * none): everywhere else the corner is remembered rather than re-derived, or a
+ * region change would silently re-pick it (`floatNearestCorner`).
+ * @param {unknown} bounds - the region, as `floatBoundsFrom` returns it.
+ * @param {number} x - CSS pixels from the left.
+ * @param {number} y - CSS pixels from the top.
+ * @param {number} [dot] - the dot's diameter (defaults to FLOAT_DOT).
+ * @param {number} [margin] - the edge margin (defaults to FLOAT_MARGIN).
+ * @returns {{x: number, y: number}} the snapped top-left of the dot.
+ */
+function floatSnapTo(bounds, x, y, dot, margin) {
+  return floatCornerPoint(bounds, floatNearestCorner(bounds, x, y, dot, margin), dot, margin);
+}
+
+/**
+ * Snap a point to the nearest viewport corner, keeping the margin clear.
+ * @param {number} x - CSS pixels from the left.
+ * @param {number} y - CSS pixels from the top.
+ * @param {number} vw - viewport width.
+ * @param {number} vh - viewport height.
+ * @param {number} [dot] - the dot's diameter (defaults to FLOAT_DOT).
+ * @param {number} [margin] - the edge margin (defaults to FLOAT_MARGIN).
+ * @returns {{x: number, y: number}} the snapped top-left of the dot.
+ */
+function floatSnapCorner(x, y, vw, vh, dot, margin) {
+  return floatSnapTo({ left: 0, top: 0, right: vw, bottom: vh }, x, y, dot, margin);
+}
+
+/**
+ * Whether a pointer travel counts as a drag (past the click threshold).
+ * @param {number} dx - horizontal travel in CSS pixels.
+ * @param {number} dy - vertical travel in CSS pixels.
+ * @param {number} [threshold] - the limit (defaults to FLOAT_DRAG_THRESHOLD).
+ * @returns {boolean} true when the travel is a drag, not a click.
+ */
+function floatDragExceeded(dx, dy, threshold) {
+  var limit = threshold === undefined ? FLOAT_DRAG_THRESHOLD : threshold;
+  return Math.sqrt(dx * dx + dy * dy) > limit;
+}
+
 /* ------------------------------------------------------------------ *
  * configuration normalization
  * ------------------------------------------------------------------ */
@@ -488,6 +1562,17 @@ function normalizeField(field, value, relative) {
     case UI_FOLLOWS_FIELD:
       // Absent means the default: the interface follows the conversation.
       return value === undefined || value === null || value === "" ? true : toBool(value);
+    case PANEL_ENABLED_FIELD:
+      // Absent means the default: the floating dot is shown.
+      return value === undefined || value === null || value === "" ? true : toBool(value);
+    case PANEL_POS_FIELD:
+      return normalizePanelPos(value);
+    case PANEL_CORNER_FIELD:
+      return normalizePanelCorner(value);
+    case PANEL_SIZE_FIELD:
+      return normalizePanelSize(value);
+    case SMOOTHING_FIELD:
+      return clampSmoothing(value);
     default:
       return undefined;
   }
@@ -608,6 +1693,36 @@ function clampLigatures(value) {
 }
 
 /**
+ * Clamp one text-rendering preference to the three known values.
+ * @param {unknown} value - candidate mode.
+ * @returns {string} "auto", "sharp" or "smooth".
+ */
+function clampSmoothing(value) {
+  return typeof value === "string" && SMOOTHING_VALUES.indexOf(value) >= 0 ? value : SMOOTHING_AUTO;
+}
+
+/**
+ * The stroke-rendering rule one preference asks for, or "".
+ *
+ * `sharp` keeps the system's crisp subpixel rendering explicit and `smooth`
+ * asks for the soft grayscale kind: the same face reads firmer under one and
+ * softer under the other. `auto` — and anything unusable — installs no rule at
+ * all, so installing this plugin still changes nothing by default.
+ * @param {unknown} value - the stored preference.
+ * @returns {string} one rule, or "".
+ */
+function smoothingRule(value) {
+  var mode = clampSmoothing(value);
+  if (mode === SMOOTHING_SHARP) {
+    return "body{-webkit-font-smoothing:subpixel-antialiased !important;-moz-osx-font-smoothing:auto !important}";
+  }
+  if (mode === SMOOTHING_SMOOTH) {
+    return "body{-webkit-font-smoothing:antialiased !important;-moz-osx-font-smoothing:grayscale !important}";
+  }
+  return "";
+}
+
+/**
  * Validate and normalize one sparse axis-value map (dark overrides, presets).
  * Only known axis fields survive, each clamped.
  * @param {unknown} values - candidate map.
@@ -707,6 +1822,67 @@ function migratePresetWeights(presets) {
 /** The two shapes one locally painted move takes. */
 var PENDING_SET = "set";
 var PENDING_UNSET = "unset";
+
+/**
+ * The preset snapshot op a single axis write implies, as one op — or null.
+ *
+ * The auto-save contract (an edit with a preset selected IS that preset from
+ * now on) belongs to every writer, not just the card: the floating panel
+ * confirms through this instead of reimplementing it. A write
+ * that would only move `savedAt` builds nothing, for the same reason the
+ * card's own path skips it — a whole-document rewrite for a timestamp is a
+ * write nobody asked for.
+ * @param {object[]} presetList - the stored preset entries.
+ * @param {string} activeName - the selected preset's name.
+ * @param {Record<string, unknown>} changes - field to value (`undefined`
+ *   unsets); only value-axis fields survive.
+ * @returns {{op: string, path: string[], value: string}|null} the op, if due.
+ */
+function mirrorPresetSnapshot(presetList, activeName, changes) {
+  if (!Array.isArray(presetList) || typeof activeName !== "string" || activeName === "") return null;
+  var entry = null;
+  for (var index = 0; index < presetList.length; index += 1) {
+    if (presetList[index] !== null && typeof presetList[index] === "object" && presetList[index].name === activeName) {
+      entry = presetList[index];
+      break;
+    }
+  }
+  if (entry === null) return null;
+  var base = entry.values !== null && typeof entry.values === "object" && !Array.isArray(entry.values)
+    ? entry.values
+    : {};
+  var values = {};
+  for (var key in base) {
+    if (Object.prototype.hasOwnProperty.call(base, key)) values[key] = base[key];
+  }
+  var changed = false;
+  for (var field in changes) {
+    if (!Object.prototype.hasOwnProperty.call(changes, field)) continue;
+    if (VALUE_FIELDS.indexOf(field) < 0) continue;
+    var next = changes[field];
+    if (next === undefined) {
+      if (Object.prototype.hasOwnProperty.call(values, field)) {
+        delete values[field];
+        changed = true;
+      }
+      continue;
+    }
+    if (values[field] !== next) {
+      values[field] = next;
+      changed = true;
+    }
+  }
+  if (!changed) return null;
+  var list = [];
+  for (var at = 0; at < presetList.length; at += 1) {
+    if (presetList[at] !== null && typeof presetList[at] === "object" && presetList[at].name === activeName) {
+      list.push({ name: activeName, values: values, savedAt: Date.now() });
+    } else {
+      list.push(presetList[at]);
+    }
+  }
+  return { op: PENDING_SET, path: [PRESETS_FIELD], value: JSON.stringify(list) };
+}
 
 /**
  * Merge the values the card painted locally over the document's own values.
@@ -2620,12 +3796,21 @@ function scaleCodeTokens(baseTokens, scale, lineOffset) {
 function buildFontCss(config, baseTokens, hints) {
   var tokens = baseTokens === undefined || baseTokens === null ? FALLBACK_TOKENS : baseTokens;
   var sets = resolveAxes(config);
-  if (isDormant(sets.light) && isDormant(sets.dark)) return "";
+  // The rendering preference is NOT an axis: it must paint even when every
+  // axis is dormant — "the strokes are drawn the other way" is exactly its own
+  // use case with everything else untouched.
+  var smoothing = smoothingRule(config !== null && typeof config === "object" ? config[SMOOTHING_FIELD] : "");
+  if (isDormant(sets.light) && isDormant(sets.dark)) return smoothing;
   var light = buildAxisCss(sets.light, tokens, false, hints);
-  if (sameValueSet(sets.light, sets.dark)) return light;
+  if (sameValueSet(sets.light, sets.dark)) {
+    return smoothing === "" ? light : light === "" ? smoothing : light + "\n" + smoothing;
+  }
   var dark = buildAxisCss(sets.dark, tokens, true, hints);
-  if (dark === "") return light;
-  return light + "\n" + dark;
+  var parts = [];
+  if (light !== "") parts.push(light);
+  if (dark !== "") parts.push(dark);
+  if (smoothing !== "") parts.push(smoothing);
+  return parts.join("\n");
 }
 
 /**
@@ -2994,6 +4179,72 @@ var shared = {
   PRESETS_FIELD: PRESETS_FIELD,
   ACTIVE_PRESET_FIELD: ACTIVE_PRESET_FIELD,
   UI_FOLLOWS_FIELD: UI_FOLLOWS_FIELD,
+  PANEL_ENABLED_FIELD: PANEL_ENABLED_FIELD,
+  PANEL_POS_FIELD: PANEL_POS_FIELD,
+  PANEL_CORNER_FIELD: PANEL_CORNER_FIELD,
+  PANEL_SIZE_FIELD: PANEL_SIZE_FIELD,
+  PANEL_SIZE_DEFAULT_W: PANEL_SIZE_DEFAULT_W,
+  PANEL_SIZE_DEFAULT_H: PANEL_SIZE_DEFAULT_H,
+  PANEL_SIZE_MIN_W: PANEL_SIZE_MIN_W,
+  PANEL_SIZE_MAX_W: PANEL_SIZE_MAX_W,
+  PANEL_SIZE_MIN_H: PANEL_SIZE_MIN_H,
+  PANEL_SIZE_MAX_H: PANEL_SIZE_MAX_H,
+  FLOAT_DOT: FLOAT_DOT,
+  FLOAT_MARGIN: FLOAT_MARGIN,
+  FLOAT_DRAG_THRESHOLD: FLOAT_DRAG_THRESHOLD,
+  FLOAT_VIEWPORT_W: FLOAT_VIEWPORT_W,
+  FLOAT_VIEWPORT_H: FLOAT_VIEWPORT_H,
+  FLOAT_BOUNDS_MIN: FLOAT_BOUNDS_MIN,
+  FLOAT_CLOSE_GAP: FLOAT_CLOSE_GAP,
+  FLOAT_CLOSE: FLOAT_CLOSE,
+  FLOAT_CLOSE_INSET: FLOAT_CLOSE_INSET,
+  FLOAT_SETTINGS_GAP: FLOAT_SETTINGS_GAP,
+  FLOAT_CARD_PAD: FLOAT_CARD_PAD,
+  FLOAT_CARD_RADIUS: FLOAT_CARD_RADIUS,
+  floatBoxOf: floatBoxOf,
+  floatBoundsPick: floatBoundsPick,
+  floatBoundsFrom: floatBoundsFrom,
+  sameWatchBounds: sameWatchBounds,
+  floatTargetsConnected: floatTargetsConnected,
+  floatQuadrantIn: floatQuadrantIn,
+  floatQuadrant: floatQuadrant,
+  floatExpandDirection: floatExpandDirection,
+  floatTransformOrigin: floatTransformOrigin,
+  floatCardAnchor: floatCardAnchor,
+  floatClipStart: floatClipStart,
+  floatClipRest: floatClipRest,
+  isRestClip: isRestClip,
+  floatSnapTo: floatSnapTo,
+  floatSnapCorner: floatSnapCorner,
+  floatNearestCorner: floatNearestCorner,
+  floatCornerPoint: floatCornerPoint,
+  floatDragExceeded: floatDragExceeded,
+  normalizePanelSize: normalizePanelSize,
+  parsePanelSize: parsePanelSize,
+  PANEL_POS_MAX: PANEL_POS_MAX,
+  normalizePanelPos: normalizePanelPos,
+  parsePanelPos: parsePanelPos,
+  PANEL_CORNERS: PANEL_CORNERS,
+  normalizePanelCorner: normalizePanelCorner,
+  parsePanelCorner: parsePanelCorner,
+  SETTINGS_NAV_ITEM_ATTR: SETTINGS_NAV_ITEM_ATTR,
+  SETTINGS_NAV_ITEM_VALUE: SETTINGS_NAV_ITEM_VALUE,
+  SETTINGS_NAV_CURRENT_ATTR: SETTINGS_NAV_CURRENT_ATTR,
+  SETTINGS_NAV_TEXTS: SETTINGS_NAV_TEXTS,
+  SETTINGS_LAUNCHER_TEXTS: SETTINGS_LAUNCHER_TEXTS,
+  isSettingsNavItem: isSettingsNavItem,
+  isSettingsLauncher: isSettingsLauncher,
+  findSettingsEntry: findSettingsEntry,
+  PLUGIN_ITEM_ATTR: PLUGIN_ITEM_ATTR,
+  PLUGIN_ITEM_VALUE: PLUGIN_ITEM_VALUE,
+  PLUGIN_BUNDLE_NAME: PLUGIN_BUNDLE_NAME,
+  PLUGIN_PANEL_ID: PLUGIN_PANEL_ID,
+  pluginEntryCard: pluginEntryCard,
+  pluginClickTarget: pluginClickTarget,
+  // The client's own click step needs this: the bundle keeps this module's scope
+  // separate from the client's, so a bare name here is a ReferenceError there.
+  dispatchSynthetic: dispatchSynthetic,
+  mirrorPresetSnapshot: mirrorPresetSnapshot,
   VALUE_FIELDS: VALUE_FIELDS,
   RETIRED_FIELDS: RETIRED_FIELDS,
   DURABLE_FIELDS: DURABLE_FIELDS,
@@ -3007,6 +4258,12 @@ var shared = {
   CODE_LINE_HEIGHT_MIN: CODE_LINE_HEIGHT_MIN,
   CODE_LINE_HEIGHT_MAX: CODE_LINE_HEIGHT_MAX,
   LIGATURES_DEFAULT: LIGATURES_DEFAULT,
+  SMOOTHING_FIELD: SMOOTHING_FIELD,
+  SMOOTHING_AUTO: SMOOTHING_AUTO,
+  SMOOTHING_SHARP: SMOOTHING_SHARP,
+  SMOOTHING_SMOOTH: SMOOTHING_SMOOTH,
+  SMOOTHING_VALUES: SMOOTHING_VALUES,
+  clampSmoothing: clampSmoothing,
   LIGATURES_ON: LIGATURES_ON,
   LIGATURES_OFF: LIGATURES_OFF,
   STYLE_TAG: STYLE_TAG,

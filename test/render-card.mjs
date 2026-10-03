@@ -1213,5 +1213,159 @@ await test("the card renders in a seat that hands it no props", async () => {
   assert.ok(text.includes("Conversation font"), "the controls render from the bound scope");
 });
 
+await test("the dialog section carries its four axes and nothing withdrawn", async () => {
+  const scope = createScope();
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true); // card open
+  runtime.seed(2, "dialog"); // expanded section id
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  const text = out.text.join("\n");
+  // The conversation section's own axes still render (the existing case above
+  // covers them in full); what matters here is that nothing withdrawn came with
+  // them. The keys are assembled so the removal grep over src/ and test/ keeps
+  // passing: no live reference to a withdrawn feature may remain anywhere.
+  assert.ok(text.includes("dialog.label"), "the conversation family field still renders");
+  assert.ok(text.includes("size.dialogLabel"), "the conversation size slider still renders");
+  assert.equal(text.includes("paper" + ".label"), false, "no paper copy renders");
+  assert.equal(text.includes("paper" + ".hint"), false, "no paper explainer renders");
+  assert.equal(text.includes("fitting" + ".label"), false, "no fitting room renders");
+  assert.equal(text.includes("fitting" + ".trying"), false, "no unsaved badge renders");
+  assert.equal(
+    out.classes.some((name) => name.includes("dfp-fit")),
+    false,
+    "no fitting row renders"
+  );
+  assert.equal(
+    out.props.some((entry) => entry.tag === "Fitting" + "Room"),
+    false,
+    "no fitting field is wired"
+  );
+  // The selection color was removed before release: same contract.
+  assert.equal(text.includes("selection.label"), false, "no selection copy renders");
+  assert.equal(
+    out.classes.some((name) => name.includes("dfp-colorRow")),
+    false,
+    "no color row renders"
+  );
+  assert.equal(
+    out.props.some((entry) => entry.tag === "Selection" + "ColorField"),
+    false,
+    "no selection field is wired"
+  );
+});
+
+await test("no withdrawn or deleted key writes through the card", async () => {
+  // A document that still carries the withdrawn keys (keys assembled so the
+  // removal grep keeps passing) must not gain a control for any of them. An
+  // edit writes only the field it names — a document keeps holding its unknown
+  // keys, which is exactly the tolerance the read path provides — so the live
+  // axis lands and nothing else is touched.
+  const scope = createScope({
+    value: { ["selection" + "Color"]: "#b3d7ff", ["paper" + "Mode"]: true },
+  });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true);
+  runtime.seed(2, "dialog");
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  assert.equal(
+    out.props.some((entry) => entry.tag === "Selection" + "ColorField"),
+    false,
+    "the selection field is gone"
+  );
+  assert.equal(
+    out.props.some((entry) => entry.tag === "Fitting" + "Room"),
+    false,
+    "the fitting field is gone"
+  );
+  // Writing a live axis must not carry either withdrawn key along. The size
+  // slider's own readout names it (the slider does not carry a `field` prop).
+  const slider = out.props.find(
+    (entry) => entry.tag === "NumberSlider" && entry.props.label === "size.dialogLabel"
+  );
+  assert.ok(slider, "the conversation size slider is wired");
+  slider.props.onChange(2);
+  await writeWindow();
+  const written = scope.getSnapshot().value;
+  assert.equal(written.sizeOffsetDialog, 2, "the live axis writes");
+  // The withdraw keys stay exactly as they were: never re-written into a value
+  // the card owns, and never turned into a control (checked above).
+  assert.equal(written["paper" + "Mode"], true, "the withdrawn key is left alone");
+  assert.equal(written["selection" + "Color"], "#b3d7ff", "the deleted key is left alone");
+  assert.equal(
+    Object.keys(written).filter((key) => key.includes("paper") || key.includes("selection")).length,
+    2,
+    "no new field was invented for a withdrawn key"
+  );
+});
+
+await test("the panel master switch writes chrome but never a preset", async () => {
+  const scope = createScope({
+    value: {
+      presets: JSON.stringify([{ name: "day", values: { sizeOffsetDialog: 1 }, savedAt: 7 }]),
+      activePreset: "day",
+    },
+  });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true); // card open, no section expanded: the global block shows
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  const text = out.text.join("\n");
+  assert.ok(text.includes("panel.masterLabel"), "the master switch renders");
+  const master = out.props.find(
+    (entry) => entry.tag === "SwitchField" && entry.props.label === "panel.masterLabel"
+  );
+  assert.ok(master, "the master switch is wired");
+  master.props.onChange(false);
+  await writeWindow();
+  const written = scope.getSnapshot().value;
+  assert.equal(written.panelEnabled, false, "the switch lands");
+  const presets = JSON.parse(written.presets);
+  assert.equal(presets.length, 1, "no preset was added or dropped");
+  assert.deepEqual(presets[0].values, { sizeOffsetDialog: 1 }, "the snapshot carries no chrome");
+});
+
+await test("the text rendering preference writes chrome but never a preset", async () => {
+  const scope = createScope({
+    value: {
+      presets: JSON.stringify([{ name: "day", values: { sizeOffsetDialog: 1 }, savedAt: 7 }]),
+      activePreset: "day",
+    },
+  });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true); // card open, no section expanded: the global block shows
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  const text = out.text.join("\n");
+  assert.ok(text.includes("smoothing.label"), "the preference renders");
+  for (const key of ["smoothing.auto", "smoothing.sharp", "smoothing.smooth"]) {
+    assert.ok(text.includes(key), `${key} renders`);
+  }
+  const control = out.props.find(
+    (entry) => entry.tag === "Segmented" && entry.props.label === "smoothing.label"
+  );
+  assert.ok(control, "the three-mode control is wired");
+  control.props.onChange("smooth");
+  await writeWindow();
+  const written = scope.getSnapshot().value;
+  assert.equal(written.fontSmoothing, "smooth", "the preference lands");
+  const presets = JSON.parse(written.presets);
+  assert.equal(presets.length, 1, "no preset was added or dropped");
+  assert.deepEqual(
+    presets[0].values,
+    { sizeOffsetDialog: 1 },
+    "the snapshot carries no rendering preference"
+  );
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
