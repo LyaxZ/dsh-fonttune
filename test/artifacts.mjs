@@ -158,8 +158,6 @@ for (const symbol of [
   "FLOAT_CLOSE_INSET",
   "FLOAT_SETTINGS_GAP",
   "PLUGIN_BUNDLE_NAME",
-  "PLUGIN_PANEL_ID",
-  "pluginEntryCard",
   "pluginClickTarget",
 ]) {
   check(
@@ -223,9 +221,42 @@ check(
   "the host route must come first in openSettingsScreen"
 );
 check(
-  "the settings jump is wired to the entry card's title button",
-  expected["lib/client.js"].includes("shared.pluginClickTarget(shared.pluginEntryCard(document))"),
-  "run `node build.mjs` after editing src/client.js"
+  "the settings jump opens this package's own page through the host's navigation",
+  expected["lib/client.js"].includes("nav.openBundle(shared.PLUGIN_BUNDLE_NAME)") &&
+    !expected["lib/client.js"].includes('id: "fonttune",'),
+  "one call to the cross-plugin navigation service, and nothing offered to the official list"
+);
+// A weight write adopts the OFFSET scale before it lands: a fresh document
+// would otherwise read the written offset back as one of the old absolute
+// weights and convert it away — the "+2 falls straight back" report.
+check(
+  "a weight write adopts the offset scale before it lands",
+  expected["lib/client.js"].includes("var adopting = touchesWeight && raw[WEIGHT_OFFSETS_FIELD] !== true;") &&
+    expected["lib/client.js"].includes("paintLocalMove(WEIGHT_OFFSETS_FIELD, true);"),
+  "values first, the marker last, exactly like the card's own first weight write"
+);
+// The panel's readout uses its resting formatter while the slider moves: a raw
+// number there is what made the unit blink away mid-drag.
+check(
+  "the panel's readout keeps its unit while the slider moves",
+  expected["lib/client.js"].includes("shown.textContent = format(Number(input.value));"),
+  "the same formatter at rest and in motion"
+);
+// A refused batch is retried ONCE without the preset snapshot: the axis value
+// is the product, and a host that declined the whole batch is best asked again
+// with only the value in it.
+check(
+  "a refused batch is retried without the preset snapshot",
+  expected["lib/client.js"].includes("if (!retried && mirrorOp !== null)") &&
+    expected["lib/client.js"].includes("send(lean);"),
+  "one retry, value only — a second refusal is a refusal of the value itself"
+);
+// No selected preset means no preset write at all, exactly like the card: the
+// panel must not invent an active preset out of the first built-in.
+check(
+  "the panel never invents an active preset",
+  !expected["lib/client.js"].includes("if (!known) activeName = list[0].name;"),
+  "auto-save follows the selection, not the order of the defaults"
 );
 check(
   "the shared bundle refuses a bare list item as a navigation entry",

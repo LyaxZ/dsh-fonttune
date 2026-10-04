@@ -2,7 +2,7 @@
 
 > [中文](README.md) | **English**
 
-**Font plugin for DeepSeek Harness (DSH)**: the **conversation** (markdown prose) gets full typographic control — font, size, line height, weight; the **interface** (settings sheet, sidebars, workspace, buttons) takes a font and a weight and **follows the conversation by default**; **code** stays its own axis with ligature and feature switches; and whole setups can be saved as **presets**. Everything lives in the native card under **Settings → Plugins → Plugin configuration** (collapsed sections with summaries) and applies immediately.
+**Font plugin for DeepSeek Harness (DSH)**: the **conversation** (markdown prose) gets full typographic control — font, size, line height, weight; the **interface** (settings sheet, sidebars, workspace, buttons) takes a font and a weight and **follows the conversation by default**; **code** stays its own axis with ligature and feature switches; and whole setups can be saved as **presets**. Everything lives in this plugin's native card (collapsed sections with summaries) and applies immediately: on the 0.2 line it is on the Plugins page under **Installed** (open this plugin's card), on the rc line under **Settings → Plugins → Plugin configuration**.
 
 ## Features
 
@@ -28,7 +28,7 @@
 
 | Plugin version | Supported DSH versions |
 | --- | --- |
-| **0.4.x** (latest, 0.4.0) | 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2, 0.2.0-rc.1, 0.2.0-rc.2 |
+| **0.4.x** (latest, 0.4.1) | 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2, 0.2.0-rc.1, 0.2.0-rc.2 |
 | 0.3.x (0.3.6) | 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2, 0.2.0-rc.1, 0.2.0-rc.2 |
 | 0.2.x (0.2.8) | 0.1.5-rc.3, 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2 |
 

@@ -12,7 +12,7 @@
  * @module dsh-fonttune/test
  */
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1590,33 +1590,20 @@ await test("registers the card in every seat a supported host may declare", asyn
   const { ctx, registered, seats } = cardContext(scope);
   await loadClientBundle(ctx);
   // The rc line shows a keyed cell under Settings -> Plugins -> Plugin
-  // configuration; the alpha line contributes an entry to the Plugins page's
-  // official list (that is how every plugin page is added there) and, for a
-  // profile that installed this plugin as a bundle, a per-package cell. A host
-  // declares whichever it knows, and a registration into a slot it never
-  // declares is inert, so all three are offered.
-  assert.deepEqual(seats, ["settings.plugin.item", "plugins.bundle.config", "plugins.item"]);
-  assert.equal(registered.length, 3);
+  // configuration; a profile that installed this plugin as a bundle gets the
+  // per-package cell on the Plugins page's INSTALLED side. A host declares
+  // whichever it knows, and a registration into a slot it never declares is
+  // inert, so both are offered. The `plugins.item` entry is deliberately NOT:
+  // it renders in the OFFICIAL list, and this is not an official plugin.
+  assert.deepEqual(seats, ["settings.plugin.item", "plugins.bundle.config"]);
+  assert.equal(registered.length, 2);
   const bySeat = {};
   for (const entry of registered) bySeat[entry.options.name] = entry;
   assert.equal(bySeat["settings.plugin.item"].options.key, "dsh-fonttune");
   assert.equal(typeof bySeat["settings.plugin.item"].component, "function");
   assert.equal(bySeat["plugins.bundle.config"].options.key, "dsh-fonttune");
   assert.equal(bySeat["plugins.bundle.config"].options.locale, "dsh-fonttune");
-  // The Plugins-page entry is identified by `id` on that line, carries the
-  // card's title as its label, and answers the summary view itself.
-  assert.equal(bySeat["plugins.item"].options.id, "fonttune");
-  assert.equal(typeof bySeat["plugins.item"].options.label, "function");
-  assert.equal(bySeat["plugins.item"].options.label(), "Font tune");
-  assert.equal(typeof bySeat["plugins.item"].component, "function");
-  assert.notEqual(
-    bySeat["plugins.item"].component,
-    bySeat["settings.plugin.item"].component,
-    "the page wrapper is its own component"
-  );
-  const summary = bySeat["plugins.item"].component({ view: "summary", t: (key) => key });
-  assert.equal(summary, "card.description");
-  assert.equal(typeof bySeat["plugins.item"].component({ view: "page", t: (key) => key }), "object");
+  assert.equal(bySeat["plugins.item"], undefined, "nothing is offered to the official list");
 });
 
 await test("the bound services are ones every supported host provides", async () => {
@@ -1668,7 +1655,7 @@ await test("the alpha dialect binds its scope through configForms by entry id", 
   resetDom();
   await loadClientBundle(ctx);
   assert.deepEqual(asked, ["fonttune"], "the served schema named the entry");
-  assert.equal(registered.length, 3, "the card is offered in every seat");
+  assert.equal(registered.length, 2, "the card is offered in every seat a host may declare");
   const face = registered[0].options.inject();
   assert.equal(face.scope, scope, "the alpha form is the scope the card writes through");
   assert.equal(typeof face.t, "function");
@@ -3482,20 +3469,8 @@ function stubNode(tag, options = {}) {
 await test("the navigation names match the shipped package", async () => {
   const manifest = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
   assert.equal(shared.PLUGIN_BUNDLE_NAME, manifest.name, "the bundle route must open THIS package");
-  assert.equal(shared.PLUGIN_PANEL_ID, "plugins", "the panel the layout service selects");
   assert.equal(shared.PLUGIN_ITEM_ATTR, "data-plugin-item");
-  assert.equal(shared.PLUGIN_ITEM_VALUE, "fonttune", "the entry id this plugin registers");
-});
-
-await test("the entry card is found by the host's own id, never by prose", () => {
-  const card = stubNode("LI", { attrs: { "data-plugin-item": "fonttune" } });
-  const doc = { querySelector: (selector) => (selector === '[data-plugin-item="fonttune"]' ? card : null) };
-  assert.equal(shared.pluginEntryCard(doc), card);
-  assert.equal(shared.pluginEntryCard(null), null);
-  assert.equal(shared.pluginEntryCard({}), null);
-  // The card inside OUR own floating panel is never the host's entry.
-  const ours = stubNode("LI", { attrs: { "data-plugin-item": "fonttune" }, insideOwnPanel: true });
-  assert.equal(shared.pluginEntryCard({ querySelector: () => ours }), null);
+  assert.equal(shared.PLUGIN_ITEM_VALUE, "fonttune", "the entry id the legacy chain looks for");
 });
 
 await test("the click lands on the entry card's title button", () => {
@@ -3603,6 +3578,60 @@ await test("the rendering preference paints even with every axis dormant", () =>
   const mixed = shared.buildFontCss({ sans: '"Inter"', fontSmoothing: "smooth" });
   assert.ok(mixed.includes("-webkit-font-smoothing:antialiased"), "the rule rides along with the axes");
   assert.ok(mixed.indexOf("-webkit-font-smoothing") > mixed.indexOf("font-family"), "and lands after them");
+});
+
+/* ------------------------------------------------------------------ */
+
+section("the package's display text lives in its locale files");
+
+/**
+ * The host's own language-id rule for locale filenames (`locale/en.json` and
+ * friends), mirrored so a typo here fails offline instead of silently falling
+ * back to the raw package name on the plugins page.
+ */
+const LOCALE_ID = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/u;
+
+await test("every locale filename is a language id, and English anchors the directory", async () => {
+  const dir = join(ROOT, "locale");
+  const names = await readdir(dir);
+  assert.ok(names.includes("en.json"), "the host resolves the English file first; without it no locale file is read");
+  const ids = [];
+  for (const name of names) {
+    assert.ok(name.endsWith(".json"), `${name} must be a JSON file`);
+    const language = name.slice(0, -5);
+    assert.ok(LOCALE_ID.test(language), `${name} must use a language id as its filename`);
+    ids.push(language.toLowerCase());
+  }
+  assert.equal(new Set(ids).size, ids.length, "locale ids must be unique case-insensitively");
+});
+
+await test("every locale file declares a title and a description", async () => {
+  const dir = join(ROOT, "locale");
+  for (const name of await readdir(dir)) {
+    const parsed = JSON.parse(await readFile(join(dir, name), "utf8"));
+    assert.ok(parsed.meta && typeof parsed.meta === "object" && !Array.isArray(parsed.meta), `${name}: meta must be an object`);
+    for (const field of ["title", "description"]) {
+      assert.equal(typeof parsed.meta[field], "string", `${name}: meta.${field} must be a string`);
+      assert.ok(parsed.meta[field].trim() !== "", `${name}: meta.${field} must not be empty`);
+    }
+  }
+});
+
+await test("the card titles name the plugin first and the package second", async () => {
+  const dir = join(ROOT, "locale");
+  const zh = JSON.parse(await readFile(join(dir, "zh.json"), "utf8"));
+  const en = JSON.parse(await readFile(join(dir, "en.json"), "utf8"));
+  const manifest = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
+  assert.equal(zh.meta.title, "字体增强（" + manifest.name + "）", "Chinese first, the package name in parentheses");
+  assert.equal(en.meta.title, "Font tune (" + manifest.name + ")", "the same shape in English");
+  assert.ok(/[\u4e00-\u9fff]/.test(zh.meta.description), "the Chinese description must actually be Chinese");
+  assert.ok(!/[\u4e00-\u9fff]/.test(en.meta.description), "the English description must actually be English");
+});
+
+await test("the manifest resolves and ships the locale directory", async () => {
+  const manifest = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
+  assert.ok(manifest.exports["./locale/*"], "an unexported subpath is invisible to the host's resource resolver");
+  assert.ok(manifest.files.includes("locale"), "a whitelist without it ships no locale file");
 });
 
 /* ------------------------------------------------------------------ */
