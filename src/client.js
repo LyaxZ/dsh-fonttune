@@ -1187,18 +1187,103 @@ function writeSingleShot(scope, presetList, activeName, changes, options) {
     paintLocalMove(field, changes[field]);
   }
   if (fields.length === 0) return;
+  // The weight fields live on an OFFSET scale; a document written before that
+  // scale stores absolute weights. The card adopts the scale on its first
+  // weight write (converted values first, the marker last) and every writer has
+  // to do the same: without the marker a written offset reads back as one of
+  // those absolute weights and is converted away — the "+2 falls straight
+  // back" a fresh document showed. The marker is painted locally too, so the
+  // rows and the page agree with the write from the first frame.
+  var raw = {};
+  try {
+    var snap = scope && typeof scope.getSnapshot === "function" ? scope.getSnapshot() : null;
+    raw = snap !== null && snap !== undefined && snap.value !== null && typeof snap.value === "object" ? snap.value : {};
+  } catch (error) {
+    raw = {};
+  }
+  var touchesWeight = false;
+  for (var weightIndex = 0; weightIndex < shared.WEIGHT_FIELDS.length; weightIndex += 1) {
+    if (fields.indexOf(shared.WEIGHT_FIELDS[weightIndex]) >= 0) {
+      touchesWeight = true;
+      break;
+    }
+  }
+  var adopting = touchesWeight && raw[WEIGHT_OFFSETS_FIELD] !== true;
+  // The preset snapshot is decided UP FRONT: it tells the adoption below
+  // whether it still has to convert the snapshots itself, and it is the one op
+  // a batch can be refused over.
+  var mirrorOp = null;
+  if (settings.mirror !== false) {
+    var snapshot = shared.mirrorPresetSnapshot(presetList, activeName, changes);
+    if (snapshot !== null) mirrorOp = { op: snapshot.op, path: snapshot.path, value: snapshot.value };
+  }
   var ops = [];
+  if (adopting) {
+    for (var adoptIndex = 0; adoptIndex < shared.WEIGHT_FIELDS.length; adoptIndex += 1) {
+      var adoptName = shared.WEIGHT_FIELDS[adoptIndex];
+      if (fields.indexOf(adoptName) >= 0) continue;
+      var storedWeight = Number(raw[adoptName]);
+      if (!isFinite(storedWeight) || storedWeight < shared.WEIGHT_MIN || storedWeight > shared.WEIGHT_MAX) continue;
+      var convertedWeight = storedWeight - shared.WEIGHT_BASE;
+      paintLocalMove(adoptName, convertedWeight);
+      ops.push({ op: shared.PENDING_SET, path: [adoptName], value: convertedWeight });
+    }
+    paintLocalMove(WEIGHT_OFFSETS_FIELD, true);
+    // The snapshots are converted from their STORED form, like the card does:
+    // the normalized list is already converted and would report no change. A
+    // mirrored write carries that converted list anyway; with no mirror to do
+    // it, this is the only chance to keep the snapshots on the new scale.
+    if (mirrorOp === null) {
+      var rawPresets = raw[PRESETS_FIELD];
+      if (typeof rawPresets === "string" && rawPresets.trim() !== "") {
+        var parsedPresets = null;
+        try {
+          parsedPresets = JSON.parse(rawPresets);
+        } catch (parseError) {
+          parsedPresets = null;
+        }
+        var migratedPresets = shared.migratePresetWeights(parsedPresets);
+        if (migratedPresets.changed) {
+          ops.push({ op: shared.PENDING_SET, path: [PRESETS_FIELD], value: JSON.stringify(migratedPresets.presets) });
+        }
+      }
+    }
+  }
   for (var index = 0; index < fields.length; index += 1) {
     var name = fields[index];
     if (changes[name] === undefined) ops.push({ op: shared.PENDING_UNSET, path: [name] });
     else ops.push({ op: shared.PENDING_SET, path: [name], value: changes[name] });
   }
-  if (settings.mirror !== false) {
-    var snapshot = shared.mirrorPresetSnapshot(presetList, activeName, changes);
-    if (snapshot !== null) ops.push({ op: snapshot.op, path: snapshot.path, value: snapshot.value });
+  if (mirrorOp !== null) ops.push(mirrorOp);
+  if (adopting) {
+    // Marker last: a marked document is never left holding an unconverted
+    // absolute weight, and a stylesheet rebuild between the ops still renders
+    // exactly as before.
+    ops.push({ op: shared.PENDING_SET, path: [WEIGHT_OFFSETS_FIELD], value: true });
   }
+  var retried = false;
   var fail = function (message) {
+    // The axis write is the product; the preset snapshot is a nicety. A batch
+    // the host refuses wholesale gets exactly ONE more try without the
+    // snapshot: landing the value beats keeping the mirror. A second refusal
+    // has nothing but the value in it, so it is the value the host declined.
+    if (!retried && mirrorOp !== null) {
+      retried = true;
+      var lean = ops.filter(function (op) {
+        return op !== mirrorOp;
+      });
+      probeLog("write-retry-without-mirror", { fields: fields.slice() });
+      send(lean);
+      return;
+    }
+    probeLog("write-failed", { message: message, fields: fields.slice(), adopting: adopting === true });
     for (var at = 0; at < fields.length; at += 1) clearLocalMove(fields[at]);
+    if (adopting) {
+      for (var unadopt = 0; unadopt < shared.WEIGHT_FIELDS.length; unadopt += 1) {
+        clearLocalMove(shared.WEIGHT_FIELDS[unadopt]);
+      }
+      clearLocalMove(WEIGHT_OFFSETS_FIELD);
+    }
     if (typeof settings.onError === "function") settings.onError(message);
   };
   var verdict = function (applied, error) {
@@ -1217,13 +1302,57 @@ function writeSingleShot(scope, presetList, activeName, changes, options) {
       return op.path[0] + "=" + String(op.value).slice(0, 24);
     }),
   });
-  try {
-    if (scope && typeof scope.mutate === "function" && (typeof scope.canMutate !== "function" || scope.canMutate())) {
-      var batch = scope.mutate(ops);
-      if (batch && typeof batch.then === "function") {
-        batch.then(
+  /**
+   * Hand one batch to the host: the batch call where there is one, and one
+   * field per call where there is not.
+   *
+   * @param {object[]} batch - the ops to land, in order.
+   * @returns {void}
+   */
+  var send = function (batch) {
+    try {
+      if (scope && typeof scope.mutate === "function" && (typeof scope.canMutate !== "function" || scope.canMutate())) {
+        var call = scope.mutate(batch);
+        if (call && typeof call.then === "function") {
+          call.then(
+            function (accepted) {
+              verdict(accepted !== false, accepted);
+            },
+            function (error) {
+              verdict(false, error);
+            }
+          );
+          return;
+        }
+        verdict(call !== false, call);
+        return;
+      }
+    } catch (error) {
+      fail(error && error.message ? String(error.message).slice(0, 160) : String(error).slice(0, 160));
+      return;
+    }
+    // A host without the batch call takes one field per call; the last verdict
+    // is the write's.
+    var at = 0;
+    var step = function () {
+      if (at >= batch.length) return;
+      var op = batch[at];
+      at += 1;
+      var single = null;
+      try {
+        single =
+          op.op === shared.PENDING_UNSET
+            ? scope.unset(op.path[0])
+            : scope.set(op.path[0], op.value);
+      } catch (error) {
+        fail(error && error.message ? String(error.message).slice(0, 160) : String(error).slice(0, 160));
+        return;
+      }
+      if (single && typeof single.then === "function") {
+        single.then(
           function (accepted) {
-            verdict(accepted !== false, accepted);
+            if (accepted === false) verdict(false, accepted);
+            else step();
           },
           function (error) {
             verdict(false, error);
@@ -1231,45 +1360,11 @@ function writeSingleShot(scope, presetList, activeName, changes, options) {
         );
         return;
       }
-      verdict(batch !== false, batch);
-      return;
-    }
-  } catch (error) {
-    fail(error && error.message ? String(error.message).slice(0, 160) : String(error).slice(0, 160));
-    return;
-  }
-  // A host without the batch call takes one field per call; the last verdict
-  // is the write's.
-  var at = 0;
-  var step = function () {
-    if (at >= ops.length) return;
-    var op = ops[at];
-    at += 1;
-    var single = null;
-    try {
-      single =
-        op.op === shared.PENDING_UNSET
-          ? scope.unset(op.path[0])
-          : scope.set(op.path[0], op.value);
-    } catch (error) {
-      fail(error && error.message ? String(error.message).slice(0, 160) : String(error).slice(0, 160));
-      return;
-    }
-    if (single && typeof single.then === "function") {
-      single.then(
-        function (accepted) {
-          if (accepted === false) verdict(false, accepted);
-          else step();
-        },
-        function (error) {
-          verdict(false, error);
-        }
-      );
-      return;
-    }
+      step();
+    };
     step();
   };
-  step();
+  send(ops);
 }
 
 /**
@@ -2847,32 +2942,6 @@ function SwitchField(props) {
  * ------------------------------------------------------------------ */
 
 /**
- * The card as DSH 0.1.7-alpha.x's Plugins page renders it.
- *
- * That page contributes one entry per plugin (`plugins.item`) and asks that one
- * component for two different views: a one-line `summary` for the card in the
- * list, and the `page` body once the entry is opened. The summary is answered
- * with the card's own description, and every other view is the card itself, so
- * the same UI serves the rc line's configuration cell and the alpha's plugin
- * page without a second implementation.
- * @param {object} props - the view asked for plus the injected face.
- * @returns {object|string} the card, or the one-line summary.
- */
-function FontCardPage(props) {
-  var t = typeof props.t === "function" ? props.t : cardT || fallbackTranslate;
-  if (props.view === "summary") return t("card.description");
-  // Every other view is the card as the content of a section the reader has
-  // already opened, so it starts open: the row/entry they clicked IS the
-  // expansion gesture, and asking for a second click on the card's own header
-  // was the one thing left to remove on the official plugin page.
-  return h(FontCard, {
-    scope: props.scope || cardScope || MEMORY_SCOPE,
-    t: t,
-    defaultOpen: props.view !== "row",
-  });
-}
-
-/**
  * Render the plugin's card: the settings section dispatches this component
  * under the namespace key, and the host has to serve that namespace for it to
  * appear at all.
@@ -2894,13 +2963,11 @@ function FontCard(props) {
   // values `apply` bound are the fallback.
   var t = typeof props.t === "function" ? props.t : cardT || fallbackTranslate;
   var scope = props.scope || cardScope || MEMORY_SCOPE;
-  // The official plugin page (0.1.7: `view: "page"`) and the rc line's
-  // configuration cell (which passes no props at all) both render this card as
-  // the whole body of a section the reader has ALREADY opened — the host's own
-  // row is the expansion gesture there, so starting collapsed asked for a
-  // second click. The card therefore starts open unless the seat says
-  // otherwise (`defaultOpen: false`), and `FontCardPage` answers a one-line
-  // summary request with its description instead of the card.
+  // The per-package page on the Plugins list's INSTALLED side and the rc line's
+  // configuration cell both render this card as the whole body of a section the
+  // reader has ALREADY opened — the host's own row is the expansion gesture
+  // there, so starting collapsed asked for a second click. The card therefore
+  // starts open unless the seat says otherwise (`defaultOpen: false`).
   var [open, setOpen] = useState(props.defaultOpen !== false);
   var [view, setView] = useState(readViewMode);
   var [expanded, setExpanded] = useState(null);
@@ -5059,115 +5126,38 @@ function mountFloatPanel(scope, t, hostCtx) {
     }
   };
 
-  var ENTRY_CLICK_TRIES = 12;
-  var ENTRY_CLICK_DELAY_MS = 150;
-
-  /**
-   * Click THIS plugin's entry on the Plugins page once the page has mounted it.
-   *
-   * The click lands on the entry card's title button, which is the host's own
-   * open gesture; the card itself is a list item with no handler.
-   * @param {string} tag - a short tag for the diagnostic line.
-   * @param {Function} done - settled with whether the click landed.
-   */
-  var clickPluginEntry = function (tag, done) {
-    var tries = 0;
-    var step = function () {
-      tries += 1;
-      var target = shared.pluginClickTarget(shared.pluginEntryCard(document));
-      if (target !== null) {
-        var landed = shared.dispatchSynthetic(target, "click");
-        probeLog("settings-open", { reason: tag, kind: "panel-entry", taken: landed === true });
-        done(landed === true);
-        return;
-      }
-      if (tries >= ENTRY_CLICK_TRIES) {
-        probeLog("settings-open", { reason: tag, kind: "panel-entry", taken: false });
-        done(false);
-        return;
-      }
-      globalThis.setTimeout(step, ENTRY_CLICK_DELAY_MS);
-    };
-    step();
-  };
-
   /**
    * Reach this plugin's own configuration page through the HOST's navigation.
    *
-   * The Plugins page is a main panel the layout service selects by id, and the
-   * plugin manager publishes `pluginNavigation` for cross-plugin jumps straight
-   * to a package's own page — the same service a shipped DSH feature calls for
-   * exactly this gesture. Both are looked up WITHOUT being declared (see
+   * The plugin manager publishes `pluginNavigation` for cross-plugin jumps
+   * straight to a package's own page — the per-package page on the INSTALLED
+   * side of the Plugins list, which carries this plugin's whole card. It is the
+   * same service a shipped DSH feature calls for exactly this gesture, and it
+   * comes before any DOM lookup: it cannot mistake text in a conversation for a
+   * navigation entry. The lookup does not DEPEND on the service (see
    * `getService`): a required dependency would park this whole package on a
-   * host line that ships neither.
-   *
-   * Order: open the Plugins panel and click this plugin's entry (its own page,
-   * titled with its name); failing the click, the navigation service's package
-   * page; failing both services, the caller keeps the legacy DOM chain.
+   * host line that ships none. Failing it, the caller keeps the legacy DOM
+   * chain.
    * @param {string} tag - a short tag for the diagnostic line.
-   * @returns {boolean} whether a host route was taken (the entry click settles later).
+   * @returns {boolean} whether a host route was taken.
    */
   var openPluginPage = function (tag) {
     var nav = serviceOf("pluginNavigation");
-    var layout = serviceOf("layout");
     if (globalThis.__DFP_PROBE__ === true) {
-      var raw = function (name) {
-        var out = {};
-        try {
-          var viaGet = serviceOf(name);
-          out.get = viaGet === null || viaGet === undefined ? String(viaGet) : typeof viaGet;
-        } catch (error) {
-          out.get = "THREW " + String(error && error.message ? error.message : error).slice(0, 80);
-        }
-        try {
-          var direct = hostCtx === null || hostCtx === undefined ? undefined : hostCtx[name];
-          out.direct = direct === null || direct === undefined ? String(direct) : typeof direct;
-        } catch (error) {
-          out.direct = "THREW " + String(error && error.message ? error.message : error).slice(0, 80);
-        }
-        return out;
-      };
       probeLog("settings-routes", {
-        nav: raw("pluginNavigation"),
-        layout: raw("layout"),
-        slots: raw("slots"),
-        canNav: nav !== null && nav !== undefined && typeof nav.openBundle === "function",
-        canLayout: layout !== null && layout !== undefined && typeof layout.selectPanel === "function",
+        nav: nav === null || nav === undefined ? String(nav) : typeof nav,
+        canBundle: nav !== null && nav !== undefined && typeof nav.openBundle === "function",
       });
     }
-    var canBundle = nav !== null && nav !== undefined && typeof nav.openBundle === "function";
-    var canPanel = layout !== null && layout !== undefined && typeof layout.selectPanel === "function";
-    if (canPanel) {
-      try {
-        layout.selectPanel(shared.PLUGIN_PANEL_ID);
-      } catch (error) {
-        canPanel = false;
-      }
-    }
-    if (canPanel) {
-      clickPluginEntry(tag, function (clicked) {
-        if (clicked || !canBundle) return;
-        try {
-          nav.openBundle(shared.PLUGIN_BUNDLE_NAME);
-          probeLog("settings-open", { reason: tag, kind: "plugin-navigation", taken: true });
-        } catch (error) {
-          warnSettingsMissing(tag, "the plugin navigation service refused the package");
-        }
-      });
-      probeLog("settings-open", { reason: tag, kind: "panel-select", taken: true });
+    if (nav === null || nav === undefined || typeof nav.openBundle !== "function") return false;
+    try {
+      nav.openBundle(shared.PLUGIN_BUNDLE_NAME);
+      probeLog("settings-open", { reason: tag, kind: "plugin-navigation", taken: true });
       return true;
+    } catch (error) {
+      warnSettingsMissing(tag, "the plugin navigation service refused the package");
+      return false;
     }
-    if (canBundle) {
-      try {
-        nav.openBundle(shared.PLUGIN_BUNDLE_NAME);
-        probeLog("settings-open", { reason: tag, kind: "plugin-navigation", taken: true });
-        return true;
-      } catch (error) {
-        warnSettingsMissing(tag, "the plugin navigation service refused the package");
-        return false;
-      }
-    }
-    return false;
   };
 
   /**
@@ -5447,12 +5437,12 @@ function mountFloatPanel(scope, t, hostCtx) {
       : DEFAULT_PRESET_NAMES.map(function (name) {
           return { name: name, values: {}, savedAt: 0 };
         });
+    // No selection means NO auto-save, exactly like the card: a preset is only
+    // written into when the reader picked one. Falling back to the first
+    // built-in here made every panel tweak write the WHOLE preset list as well
+    // — a second op in the same batch that a document with no presets has no
+    // business receiving, and one more thing a host can refuse the batch over.
     var activeName = config[ACTIVE_PRESET_FIELD];
-    var known = false;
-    for (var index = 0; index < list.length; index += 1) {
-      if (list[index].name === activeName) known = true;
-    }
-    if (!known) activeName = list[0].name;
     return { config: config, presetList: list, activeName: activeName, writable: snap.writable === true };
   };
 
@@ -6202,11 +6192,11 @@ function mountFloatPanel(scope, t, hostCtx) {
     render();
   };
 
-  var sliderRow = function (body, labelText, valueText, min, max, step, value, onRelease) {
+  var sliderRow = function (body, labelText, format, min, max, step, value, onRelease) {
     var row = el("div", "dfp-floatRow");
     var label = el("div", "dfp-floatLabel");
     label.appendChild(el("span", null, labelText));
-    var shown = el("span", "dfp-floatValue", valueText);
+    var shown = el("span", "dfp-floatValue", format(value));
     label.appendChild(shown);
     row.appendChild(label);
     var input = el("input", "dfp-floatSlider");
@@ -6217,7 +6207,9 @@ function mountFloatPanel(scope, t, hostCtx) {
     input.value = String(value);
     input.setAttribute("aria-label", labelText);
     input.addEventListener("input", function () {
-      shown.textContent = input.value;
+      // The resting formatter, every time: a raw number here is what made the
+      // unit blink away the moment the slider moved.
+      shown.textContent = format(Number(input.value));
     });
     input.addEventListener("change", function () {
       onRelease(Number(input.value));
@@ -6660,7 +6652,9 @@ function mountFloatPanel(scope, t, hostCtx) {
     sliderRow(
       card,
       t("size.dialogLabel"),
-      (size > 0 ? "+" + size : String(size)) + " " + t("size.unit"),
+      function (next) {
+        return (next > 0 ? "+" + next : String(next)) + " " + t("size.unit");
+      },
       SIZE_MIN,
       SIZE_MAX,
       1,
@@ -6674,7 +6668,9 @@ function mountFloatPanel(scope, t, hostCtx) {
     sliderRow(
       card,
       t("line.dialogLabel"),
-      line + " " + t("line.unit"),
+      function (next) {
+        return String(next) + " " + t("line.unit");
+      },
       LINE_HEIGHT_MIN,
       LINE_HEIGHT_MAX,
       5,
@@ -7447,17 +7443,18 @@ export function apply(ctx) {
    * Offer the card in one slot seat.
    *
    * Which seat a host declares is a line difference, not a preference, and the
-   * three are not alternatives to pick from — each is simply inert where a host
+   * two are not alternatives to pick from — each is simply inert where a host
    * never declares it:
    *
    *  * `settings.plugin.item` — up to 0.1.5-rc.x, a keyed cell under
    *    Settings → Plugins → Plugin configuration (keyed by the namespace);
-   *  * `plugins.item` — 0.1.7-alpha.x's own entry in the Plugins page's
-   *    official list, which is how EVERY plugin page is contributed there (the
-   *    built-in settings pages do the same), and the seat that needs no
-   *    installed package behind it;
-   *  * `plugins.bundle.config` — the alpha's per-package page, keyed by the npm
+   *  * `plugins.bundle.config` — the per-package page, keyed by the npm
    *    package name, for a profile that installed this plugin as a bundle.
+   *
+   * The `plugins.item` entry is deliberately NOT offered: it renders in the
+   * Plugins page's OFFICIAL list, and this is not an official plugin. Its page
+   * belongs on the installed side, where the per-package seat above already
+   * carries the whole card.
    *
    * @param {string} seat - the slot name.
    * @param {object} options - the registration options that seat looks up.
@@ -7484,17 +7481,6 @@ export function apply(ctx) {
   if (scope !== MEMORY_SCOPE) {
     offerCard("settings.plugin.item", { key: NAMESPACE });
     offerCard("plugins.bundle.config", { key: "dsh-fonttune" });
-    offerCard(
-      "plugins.item",
-      {
-        id: "fonttune",
-        order: 40,
-        label: function () {
-          return t("card.title");
-        },
-      },
-      FontCardPage
-    );
   }
 }
 
