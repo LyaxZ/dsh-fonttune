@@ -2,6 +2,17 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.4.1] - 2026-10-04
+
+### Fixed
+- **Panel weight values falling back after an adjustment**: on a freshly installed machine, reaching the target weight notch snapped straight back and a second try lost it too; the first adjustment now sticks.
+- **Panel size and line-height values falling back after an adjustment**: the page followed for a moment and then returned to its old value, which made the line height look ineffective; an adjustment now applies at once and stays.
+- **The unit next to a panel value vanishing while the slider moved**: it blinked away mid-drag and came back on release; it now stays put.
+
+### Changed
+- **The plugin no longer appears in the Plugins page's official list**: it is not an official plugin, so that entry is gone; the whole settings card lives on the installed side now, and the panel's settings button opens that page directly.
+- **The plugin's name and blurb on the Plugins page are Chinese**: the name reads 「字体增强（dsh-fonttune）」 and the blurb matches the settings card's wording.
+
 ## [0.4.0] - 2026-10-01
 
 ### Added
