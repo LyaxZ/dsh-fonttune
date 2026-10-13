@@ -2330,6 +2330,27 @@ function rebuildShorthand(parts) {
  * ------------------------------------------------------------------ */
 
 /**
+ * Whether a CSS selector declares something for the WHOLE page.
+ *
+ * The typography tokens live on `:root`, `html` or `body`. A selector scoped to a class
+ * or an attribute declares a LOCAL value: another plugin's module stylesheet may reuse a
+ * token name for its own compact panel (measured: `dsh-better-sidebar` sets
+ * `--dsw-font-markdown-h1` to `600 13px/18px` on `.…_taskMarkdown`), and reading that as
+ * the base hands the conversation a size that panel picked for itself.
+ * @param {string} selector - a rule's selector text.
+ * @returns {boolean} true when every selector in the list is a root scope.
+ */
+function isRootScopeSelector(selector) {
+  if (typeof selector !== "string" || selector.trim() === "") return false;
+  var parts = selector.split(",");
+  for (var index = 0; index < parts.length; index += 1) {
+    var part = parts[index].trim().toLowerCase();
+    if (part !== ":root" && part !== "html" && part !== "body" && part !== "*") return false;
+  }
+  return true;
+}
+
+/**
  * Match DSH's typography PART tokens: the design system's sizes plus the
  * content size the theme plugin writes on `body` (whose secondary variant
  * carries a suffix of its own). Line heights scale with sizes so a token's
@@ -3169,6 +3190,180 @@ function weightStepRange(profile, value) {
   return { min: min, max: max, unit: unit, value: count };
 }
 
+/* ------------------------------------------------------------------ *
+ * continuous weight (FT-060)
+ * ------------------------------------------------------------------ */
+
+/** Prefix of the alias family a continuous family is drawn through. */
+var VARIABLE_ALIAS_PREFIX = "dfp-vf-";
+
+/**
+ * The weights the continuity probe lays out. Dense on purpose: a variable font
+ * that moves in small steps shows a width change at every one of them, while a
+ * family that snaps to named instances repeats its width across each stretch.
+ */
+var CONTINUITY_WEIGHTS = [400, 420, 440, 460, 480, 500, 550, 600, 650, 700, 750, 800, 900];
+
+/**
+ * The share of adjacent probe pairs that must differ before a family's laid-out
+ * WIDTH counts as continuous. Measured: a variable family drawn through its alias
+ * changes width at every sampled weight (share 1.0), while a family snapping to
+ * named instances repeats its width across each stretch (share 0.25–0.42).
+ */
+var CONTINUOUS_MIN_SHARE = 0.9;
+
+/**
+ * The notches offered for a continuous family, finest first.
+ *
+ * The shape is still measured (the alias is drawn on the same weight grid as any
+ * other family), but the candidates are fine: a continuous axis can answer at every
+ * one of them, which is the whole point of the mode. `weightProfileFrom` walks this
+ * list from the END, so the finest candidate that still yields enough visible
+ * positions wins.
+ */
+var CONTINUOUS_CANDIDATES = [10, 20, 25];
+
+/**
+ * The nominal continuous slider, used when the measured shape cannot be taken
+ * (no canvas, a refused probe). One notch is 20 weight units; the range is the
+ * widest offset the ceiling allows either way.
+ */
+var CONTINUOUS_STEP = 20;
+var CONTINUOUS_RANGE = 200;
+
+/**
+ * How many different values a list of measurements holds.
+ * @param {number[]} values - the measurements.
+ * @returns {number} the count of distinct values.
+ */
+function distinctCount(values) {
+  if (!Array.isArray(values)) return 0;
+  var seen = [];
+  for (var index = 0; index < values.length; index += 1) {
+    if (seen.indexOf(values[index]) < 0) seen.push(values[index]);
+  }
+  return seen.length;
+}
+
+/**
+ * Does the same family answer more finely through its alias than through itself?
+ *
+ * This is the discriminator the continuity probe trusts, and it needs no threshold:
+ * a family that snaps to named instances renders IDENTICALLY either way, so both
+ * responses hold the same number of distinct values; a variable family drawn through
+ * the alias moves at weights where the system path already stopped. Comparing the
+ * family against ITSELF also keeps the answer honest for a narrow axis, where a
+ * share-of-neighbours rule would read saturation as "static".
+ * @param {number[]} throughAlias - measurements taken through the alias face.
+ * @param {number[]} plain - the same measurements taken through the family itself.
+ * @returns {boolean} true when the alias resolves finer detail.
+ */
+function respondsFinerThan(throughAlias, plain) {
+  if (!Array.isArray(throughAlias) || !Array.isArray(plain)) return false;
+  var fine = distinctCount(throughAlias);
+  return fine >= 3 && fine > distinctCount(plain);
+}
+
+
+/**
+ * The alias family name for one family. A hash, not the family itself, so the
+ * name is a plain identifier whatever the family is called.
+ * @param {string} family - a family name.
+ * @returns {string} the alias, stable across sessions.
+ */
+function variableAliasFor(family) {
+  var text = sanitizeFamily(family);
+  var hash = 0;
+  for (var index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return VARIABLE_ALIAS_PREFIX + hash.toString(36);
+}
+
+/**
+ * The `@font-face` rule that draws one family through its own variable axis.
+ *
+ * `local()` points the face at the installed family, and the weight RANGE is the
+ * part that matters: it tells the engine the family is continuous, so `font-weight`
+ * picks a point on the axis instead of the nearest named instance. (Without the
+ * range the same family snaps; `font-variation-settings` does not help a system
+ * family at all — measured, see FT-060.)
+ * @param {string} family - the installed family name.
+ * @param {string} alias - the alias from `variableAliasFor`.
+ * @returns {string} one CSS rule.
+ */
+function variableFaceRule(family, alias) {
+  var text = sanitizeFamily(family).replace(/"/g, "");
+  return '@font-face{font-family:"' + alias + '";src:local("' + text + '");font-weight:100 900;}';
+}
+
+/**
+ * Every `@font-face` rule for a map of family → alias.
+ * @param {Record<string, string>} variable - the families that measured continuous.
+ * @returns {string} the rules, one per line; "" when there are none.
+ */
+function buildVariableFaces(variable) {
+  var rules = [];
+  if (variable === null || typeof variable !== "object") return "";
+  for (var family in variable) {
+    if (Object.prototype.hasOwnProperty.call(variable, family)) {
+      rules.push(variableFaceRule(family, variable[family]));
+    }
+  }
+  return rules.join("\n");
+}
+
+/**
+ * Put the alias IN FRONT of every continuous family a stack names.
+ *
+ * The family stays in the list after its alias, so a glyph the alias lacks still
+ * falls through to the same face the reader chose, and a stack that names no
+ * continuous family is returned unchanged.
+ * @param {string} stack - a formatted font-family value.
+ * @param {Record<string, string>} variable - family → alias map.
+ * @returns {string} the stack, with aliases prepended where they apply.
+ */
+function withVariableFaces(stack, variable) {
+  if (typeof stack !== "string" || stack === "" || variable === null || typeof variable !== "object") {
+    return stack;
+  }
+  // The stack may already carry its alias — a family read back from the page's own
+  // computed style does, once the mode is on. Prepending it again would stack up a
+  // duplicate on every rebuild.
+  var names = parseStack(stack);
+  var lead = names.length > 0 ? names[0] : "";
+  var prefix = [];
+  for (var family in variable) {
+    if (!Object.prototype.hasOwnProperty.call(variable, family)) continue;
+    if (stack.indexOf(quoteFamily(family)) < 0) continue;
+    if (lead === variable[family]) continue;
+    prefix.push('"' + variable[family] + '"');
+  }
+  return prefix.length === 0 ? stack : prefix.join(", ") + ", " + stack;
+}
+
+/**
+ * Did a family respond continuously to weight in the probe?
+ * @param {number[]} widths - laid-out widths, in `CONTINUITY_WEIGHTS` order.
+ * @returns {boolean} true when enough neighbours differ.
+ */
+function isContinuousResponse(widths) {
+  if (!Array.isArray(widths) || widths.length < 3) return false;
+  var changes = 0;
+  for (var index = 1; index < widths.length; index += 1) {
+    if (widths[index] !== widths[index - 1]) changes += 1;
+  }
+  return changes / (widths.length - 1) >= CONTINUOUS_MIN_SHARE;
+}
+
+/**
+ * The slider shape for a continuous family: the finest notch, centred on 0.
+ * @returns {{min: number, max: number, step: number}} the profile, in weight units.
+ */
+function continuousWeightProfile() {
+  return { min: -CONTINUOUS_RANGE, max: CONTINUOUS_RANGE, step: CONTINUOUS_STEP };
+}
+
 /**
  * What a slider's local (unconfirmed) value should do when a value arrives from
  * the settings document.
@@ -3256,10 +3451,12 @@ function isDormant(config) {
  * @param {boolean} isDark - prefix every rule with the dark-theme attribute.
  * @returns {string} declarations for one `<style>` element.
  */
-function buildAxisCss(axis, baseTokens, isDark, hints) {
-  var sans = formatStack(parseStack(axis[SANS_FIELD]));
-  var mono = formatStack(parseStack(axis[MONO_FIELD]));
-  var dialog = formatStack(parseStack(axis[STACK_DIALOG_FIELD]));
+function buildAxisCss(axis, baseTokens, isDark, hints, variable) {
+  // A continuous family leads its stack with its alias (see `withVariableFaces`);
+  // with no map, every stack stays exactly as written.
+  var sans = withVariableFaces(formatStack(parseStack(axis[SANS_FIELD])), variable);
+  var mono = withVariableFaces(formatStack(parseStack(axis[MONO_FIELD])), variable);
+  var dialog = withVariableFaces(formatStack(parseStack(axis[STACK_DIALOG_FIELD])), variable);
   // Normalised once: an expanded axis always carries a number, but a caller
   // handing in a raw object may leave the field out, and "absent" has to mean
   // "unset" rather than "write the string undefined". The conversation's value
@@ -3659,7 +3856,28 @@ function buildAxisCss(axis, baseTokens, isDark, hints) {
     if (noBold) declarations.push(bodyRule("font-synthesis-weight:none !important"));
   }
 
-  return declarations.join("\n");
+  return hardenDeltaRefs(declarations.join("\n"));
+}
+
+/**
+ * Give every reference to the content-size delta a fallback value.
+ *
+ * A heading's `font` shorthand is the markdown token, and DSH's own text for it reads
+ * `calc(21px + var(--dsh-content-font-delta))` — a reference with NO fallback. Nothing
+ * outside this plugin defines that property, so any rebuild that emits the reference
+ * without the definition leaves it resolving to nothing, which makes the WHOLE shorthand
+ * invalid at computed-value time: every font longhand falls back to `inherit`, and the
+ * heading is painted at body size. Measured on a live page: h1 23px → 16px the moment the
+ * property resolved to nothing, back to 23px when it returned.
+ *
+ * The fallback cannot change a page that defines the property (the definition wins), and
+ * where the definition is missing it keeps the design's own size instead of collapsing.
+ * @param {string} css - generated declarations.
+ * @returns {string} the same declarations, with the reference made safe.
+ */
+function hardenDeltaRefs(css) {
+  if (typeof css !== "string" || css === "") return css;
+  return css.split("var(--dsh-content-font-delta)").join("var(--dsh-content-font-delta, 0px)");
 }
 
 /**
@@ -3751,7 +3969,7 @@ function scaleCodeTokens(baseTokens, scale, lineOffset) {
  *   correct everywhere and costs an attribute scan per element per rule.
  * @returns {string} declarations for one `<style>` element ("" when dormant).
  */
-function buildFontCss(config, baseTokens, hints) {
+function buildFontCss(config, baseTokens, hints, variable) {
   var tokens = baseTokens === undefined || baseTokens === null ? FALLBACK_TOKENS : baseTokens;
   var sets = resolveAxes(config);
   // The rendering preference is NOT an axis: it must paint even when every
@@ -3759,16 +3977,16 @@ function buildFontCss(config, baseTokens, hints) {
   // use case with everything else untouched.
   var smoothing = smoothingRule(config !== null && typeof config === "object" ? config[SMOOTHING_FIELD] : "");
   if (isDormant(sets.light) && isDormant(sets.dark)) return smoothing;
-  var light = buildAxisCss(sets.light, tokens, false, hints);
+  var light = buildAxisCss(sets.light, tokens, false, hints, variable);
   if (sameValueSet(sets.light, sets.dark)) {
-    return smoothing === "" ? light : light === "" ? smoothing : light + "\n" + smoothing;
+    return hardenDeltaRefs(smoothing === "" ? light : light === "" ? smoothing : light + "\n" + smoothing);
   }
-  var dark = buildAxisCss(sets.dark, tokens, true, hints);
+  var dark = buildAxisCss(sets.dark, tokens, true, hints, variable);
   var parts = [];
   if (light !== "") parts.push(light);
   if (dark !== "") parts.push(dark);
   if (smoothing !== "") parts.push(smoothing);
-  return parts.join("\n");
+  return hardenDeltaRefs(parts.join("\n"));
 }
 
 /**
@@ -4290,6 +4508,19 @@ var shared = {
   WEIGHT_DELTA_FLOOR: WEIGHT_DELTA_FLOOR,
   WEIGHT_DELTA_CEIL: WEIGHT_DELTA_CEIL,
   WEIGHT_MIN_POSITIONS: WEIGHT_MIN_POSITIONS,
+  VARIABLE_ALIAS_PREFIX: VARIABLE_ALIAS_PREFIX,
+  CONTINUITY_WEIGHTS: CONTINUITY_WEIGHTS,
+  isRootScopeSelector: isRootScopeSelector,
+  hardenDeltaRefs: hardenDeltaRefs,
+  CONTINUOUS_CANDIDATES: CONTINUOUS_CANDIDATES,
+  distinctCount: distinctCount,
+  respondsFinerThan: respondsFinerThan,
+  variableAliasFor: variableAliasFor,
+  variableFaceRule: variableFaceRule,
+  buildVariableFaces: buildVariableFaces,
+  withVariableFaces: withVariableFaces,
+  isContinuousResponse: isContinuousResponse,
+  continuousWeightProfile: continuousWeightProfile,
   WEIGHT_LADDER_TOP: WEIGHT_LADDER_TOP,
   WEIGHT_LADDER_STRONG: WEIGHT_LADDER_STRONG,
   WEIGHT_DELTA_UP_LIMIT: WEIGHT_DELTA_UP_LIMIT,

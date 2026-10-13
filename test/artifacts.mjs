@@ -890,5 +890,89 @@ for (const gone of [
   );
 }
 
+// FT-060 wiring: a continuous family is probed in the idle warm-up, the probe
+// promotes it into the map the stylesheet reads, and the stylesheet declares the
+// aliases it leads its stacks with. Each of the three links must survive a rebuild.
+check(
+  "the weight warm-up probes each axis for continuity",
+  expected["lib/client.js"].includes("probeContinuity(stacks.dialog);") &&
+    expected["lib/client.js"].includes("probeContinuity(stacks.ui);") &&
+    expected["lib/client.js"].includes("probeContinuity(stacks.code);"),
+  "the probe runs in the same idle slices as the warm-up"
+);
+check(
+  "a promoted family is read by the stylesheet and the weight profile",
+  expected["lib/client.js"].includes("buildFontCss(config, tokens(), harvestScope(), variableFamilies)") &&
+    expected["lib/client.js"].includes("shared.buildVariableFaces(variableFamilies)") &&
+    expected["lib/client.js"].includes("shared.CONTINUOUS_CANDIDATES"),
+  "the map is the single source for both the faces and the notch shape"
+);
+// A promoted family is measured THROUGH its alias on the fine grid: measuring it
+// through the family itself would put every continuous axis back on the stepped
+// shape the alias exists to remove.
+check(
+  "a promoted family's shape is measured through its alias",
+  expected["lib/client.js"].includes("var target = promoted ? '\"' + alias + '\"' : resolved;") &&
+    expected["lib/client.js"].includes("candidates: shared.CONTINUOUS_CANDIDATES"),
+  "the fine notches are measured, not assumed"
+);
+// A monospace family never changes width with weight. The discriminator therefore
+// compares the alias response against the family's own: dropping the comparison
+// silently returns every code font to the stepped shape.
+check(
+  "the discriminator compares the alias response against the family itself",
+  expected["lib/client.js"].includes("shared.respondsFinerThan(inks, plainInks)") &&
+    expected["lib/client.js"].includes("function inkOfSignature(signature)") &&
+    expected["lib/client.js"].includes("sampleWeightSignature('\"' + family + '\"', weight)"),
+  "a family that snaps answers identically either way, so it cannot pass"
+);
+// ONE resolution, everywhere. The panel used to resolve its own stack (the configured
+// field alone), which misses the promotion once a stack comes back from the page
+// carrying the alias — the panel then kept the coarse notches while the card moved on.
+// The previews had the mirror-image gap: they drew through the plain family, so a fine
+// notch that moved the conversation did nothing in the box meant to show it.
+check(
+  "the panel measures the family through the same helper as the card",
+  expected["lib/client.js"].includes("var dialogStack = weightAxisStacks(config).dialog;") &&
+    !expected["lib/client.js"].includes("var dialogStack = formatStack(parseStack(config[STACK_DIALOG_FIELD]));"),
+  "one stack resolution for the card, the panel and the warm-up"
+);
+check(
+  "every preview draws through the same alias the real surfaces use",
+  expected["lib/client.js"].includes("previewUiStyle.fontFamily = shared.withVariableFaces(uiStack, variableFamilies)") &&
+    expected["lib/client.js"].includes("previewDialogStyle.fontFamily = shared.withVariableFaces(dialogStack, variableFamilies)") &&
+    expected["lib/client.js"].includes("shared.withVariableFaces(formatStack(parseStack(editing[MONO_FIELD])), variableFamilies)"),
+  "a preview that snaps while the conversation moves is worse than no preview"
+);
+check(
+  "a family name is read through any alias the stack leads with",
+  expected["lib/client.js"].includes("if (names[index].indexOf(shared.VARIABLE_ALIAS_PREFIX) !== 0) return names[index];"),
+  "the promotion map is keyed by the real family, never by our alias"
+);
+// A promotion lands after the panel has already rendered its weight row once, and the
+// row caches the shape it was built with: rebuilding the stylesheet alone left the
+// panel on the coarse notches (measured live: the row kept -1 … +2 while the card moved
+// to 25-unit steps). Every mounted panel re-renders on promotion.
+check(
+  "a promotion redraws whatever is showing a weight shape",
+  expected["lib/client.js"].includes("notifyPromoted();") &&
+    expected["lib/client.js"].includes("promotionListeners.push(render);") &&
+    expected["lib/client.js"].includes("var at = promotionListeners.indexOf(render);"),
+  "the panel listens while it is mounted and stops when it is destroyed"
+);
+// Base token values come from root-scoped declarations only. Another plugin's module
+// stylesheet may reuse a token name for its own compact panel, and the line-height axis
+// rebuilds the markdown shorthands from these very values — the measured failure was
+// every heading dropping to that panel's 13px.
+check(
+  "a base token value is read from a root-scoped declaration only",
+  expected["lib/client.js"].includes("var rootScoped = isRootScopedRule(rule);") &&
+    expected["lib/client.js"].includes("shared.isRootScopeSelector(rule.selectorText)") &&
+    expected["lib/client.js"].includes("else local[property] = declared;") &&
+    expected["lib/client.js"].includes("if (!Object.prototype.hasOwnProperty.call(out, name)) out[name] = local[name];") &&
+    expected["lib/shared.cjs"].includes("function isRootScopeSelector(selector)"),
+  "a class-scoped token is that panel's local choice, and only ever a fallback"
+);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

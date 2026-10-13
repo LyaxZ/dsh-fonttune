@@ -313,13 +313,13 @@ var DICTS = {
 
     "weight.uiLabel": "Interface font-weight offset",
     "weight.uiHint":
-      "Adds to the weight of the whole interface (sidebars, settings, buttons, headings): a positive value is bolder, a negative one lighter. The conversation keeps its own. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); every notch swaps in a different face for body text and headings alike, and another font offers a different number of steps. The step is measured for the current font, and its smallest step is the one that looks weakest.",
+      "Adds to the weight of the whole interface (sidebars, settings, buttons, headings): a positive value is bolder, a negative one lighter. The conversation keeps its own. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); every notch makes body text and headings a little bolder or lighter, and another font offers a different number of steps. The step is measured for the current font, and its smallest step is the one that looks weakest.",
     "weight.dialogLabel": "Conversation font-weight offset",
     "weight.dialogHint":
-      "Adds to the weight of each conversation element, so headings stay bolder than body text and bold text stays bold. Unset keeps DSH's own weights. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); every notch swaps in a different face for body text and headings alike, and another font offers a different number of steps. The step is measured for the current font, and its smallest step is the one that looks weakest.",
+      "Adds to the weight of each conversation element, so headings stay bolder than body text and bold text stays bold. Unset keeps DSH's own weights. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); every notch makes body text and headings a little bolder or lighter, and another font offers a different number of steps. The step is measured for the current font, and its smallest step is the one that looks weakest.",
     "weight.codeLabel": "Code font-weight offset",
     "weight.codeHint":
-      "Adds to the weight of each code surface (code blocks, inline code, terminal output); 0 or unset keeps DSH's own weight. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); every notch swaps in a different face for body text and headings alike, and another font offers a different number of steps. The step is measured for the current font, and its smallest step is the one that looks weakest.",
+      "Adds to the weight of each code surface (code blocks, inline code, terminal output); 0 or unset keeps DSH's own weight. The slider is divided into the weights the current font can actually render, so the readout counts STEPS (0 = leave DSH alone); every notch makes body text and headings a little bolder or lighter, and another font offers a different number of steps. The step is measured for the current font, and its smallest step is the one that looks weakest.",
 
     "line.dialogLabel": "Conversation line height",
     "line.dialogHint":
@@ -475,13 +475,13 @@ var DICTS = {
 
     "weight.uiLabel": "界面字重偏移",
     "weight.uiHint":
-      "在整个界面自身的字重上叠加（侧栏、设置、按钮、标题）：正数更粗、负数更细；对话 Markdown 不受影响。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：每挪一格，正文与标题都会换一张字形；换个字体，档数也会跟着变。档距按当前字体实测，其中幅度最小的一档看起来最弱。",
+      "在整个界面自身的字重上叠加（侧栏、设置、按钮、标题）：正数更粗、负数更细；对话 Markdown 不受影响。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：每挪一格，正文与标题都会变粗或变细；换个字体，档数也会跟着变。档距按当前字体实测，其中幅度最小的一档看起来最弱。",
     "weight.dialogLabel": "对话字重偏移",
     "weight.dialogHint":
-      "在每个元素自身的字重上叠加，所以标题依旧比正文粗、加粗文字依旧加粗；未设置时保持 DSH 原本的粗细。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：每挪一格，正文与标题都会换一张字形；换个字体，档数也会跟着变。档距按当前字体实测，其中幅度最小的一档看起来最弱。",
+      "在每个元素自身的字重上叠加，所以标题依旧比正文粗、加粗文字依旧加粗；未设置时保持 DSH 原本的粗细。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：每挪一格，正文与标题都会变粗或变细；换个字体，档数也会跟着变。档距按当前字体实测，其中幅度最小的一档看起来最弱。",
     "weight.codeLabel": "代码字重偏移",
     "weight.codeHint":
-      "在每个代码面自身的字重上叠加（代码块、行内代码、终端输出）；0 或未设置表示保持 DSH 原样。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：每挪一格，正文与标题都会换一张字形；换个字体，档数也会跟着变。档距按当前字体实测，其中幅度最小的一档看起来最弱。",
+      "在每个代码面自身的字重上叠加（代码块、行内代码、终端输出）；0 或未设置表示保持 DSH 原样。滑块按当前字体实际能渲染的粗细分档，读数是档数（0 = 保持 DSH 原样）：每挪一格，正文与标题都会变粗或变细；换个字体，档数也会跟着变。档距按当前字体实测，其中幅度最小的一档看起来最弱。",
 
     "line.dialogLabel": "对话行高",
     "line.dialogHint": "把对话行高整体缩放为 {ratio}；100% 表示保持 DSH 原样。",
@@ -897,6 +897,24 @@ function isOwnSheet(sheet) {
 }
 
 /**
+ * Whether a style rule declares its custom properties for the WHOLE page.
+ *
+ * The design tokens live on `:root`, `html` or `body`. A rule scoped to a class
+ * declares a LOCAL value — another plugin's module stylesheet may reuse one of the
+ * token names for its own compact panel, and reading that as the base hands the
+ * conversation a size that panel chose for itself.
+ * @param {CSSStyleRule} rule - any rule from a document stylesheet.
+ * @returns {boolean} true when every selector in the rule is a root scope.
+ */
+function isRootScopedRule(rule) {
+  try {
+    return shared.isRootScopeSelector(rule.selectorText);
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
  * Snapshot the typography tokens the size offsets scale.
  *
  * Three sources, in rising authority: the embedded fallback map (covers the
@@ -910,6 +928,13 @@ function isOwnSheet(sheet) {
  * `font` shorthand tokens (`--dsw-font-markdown-base` and friends) are
  * collected too: they are what the shipped stylesheets actually consume, and
  * the line-height axes rebuild their inline heights.
+ *
+ * Declarations come in two ranks, because a token name is not owned by the design
+ * system alone: `dsh-better-sidebar` redefines `--dsw-font-markdown-h1` as a compact
+ * `600 13px/18px` on its own panel class, and reading that as the base is how every
+ * conversation heading shrank once the line-height axis rebuilt those shorthands. A
+ * ROOT-scoped declaration is the page's value; a locally scoped one only fills a gap
+ * (a host line that declares its tokens nowhere else still gets them).
  *
  * @returns {Record<string, string>} token name to its untouched value.
  */
@@ -925,6 +950,11 @@ function readBaseTokens() {
 
   try {
     var sheets = document.styleSheets;
+    // A local (class-scoped) declaration is kept APART and only fills gaps: another
+    // plugin may reuse a token name for its own panel, so it must never override the
+    // page's own value — but a host line that declares its tokens nowhere else still
+    // needs them. Root-scoped declarations always win.
+    var local = {};
     for (var sheetIndex = 0; sheetIndex < sheets.length; sheetIndex += 1) {
       if (isOwnSheet(sheets[sheetIndex])) continue;
       var rules = null;
@@ -935,15 +965,23 @@ function readBaseTokens() {
       }
       if (!rules) continue;
       for (var ruleIndex = 0; ruleIndex < rules.length; ruleIndex += 1) {
-        var style = rules[ruleIndex].style;
+        var rule = rules[ruleIndex];
+        var style = rule.style;
         if (!style) continue;
+        var rootScoped = isRootScopedRule(rule);
         for (var propertyIndex = 0; propertyIndex < style.length; propertyIndex += 1) {
           var property = style[propertyIndex];
           if (property.slice(0, 2) !== "--" || !isScaledToken(property)) continue;
           var declared = style.getPropertyValue(property).trim();
-          if (declared !== "") out[property] = declared;
+          if (declared === "") continue;
+          if (rootScoped) out[property] = declared;
+          else local[property] = declared;
         }
       }
+    }
+    for (name in local) {
+      if (!Object.prototype.hasOwnProperty.call(local, name)) continue;
+      if (!Object.prototype.hasOwnProperty.call(out, name)) out[name] = local[name];
     }
   } catch (error) {
     // Keep what the earlier sources produced.
@@ -1018,7 +1056,11 @@ function createStylesheet(tokens) {
   var lastCss = null;
   return function apply(config) {
     if (typeof document === "undefined") return;
-    var css = buildFontCss(config, tokens(), harvestScope());
+    // Continuous families (FT-060) bring their own faces: the aliases are declared
+    // here, and `buildFontCss` leads the matching stacks with them.
+    var faces = shared.buildVariableFaces(variableFamilies);
+    var body = buildFontCss(config, tokens(), harvestScope(), variableFamilies);
+    var css = faces === "" ? body : faces + "\n" + body;
     if (css === lastCss && tag !== null && tag.isConnected) return;
     lastCss = css;
     if (tag === null || !tag.isConnected) {
@@ -1422,6 +1464,21 @@ var context = weightProbeCanvas.getContext("2d", { willReadFrequently: true });
 }
 
 /**
+ * The ink share of a weight signature, as a number.
+ *
+ * `sampleWeightSignature` answers "<ink>/<advance>": the advance is the laid-out
+ * width, which a monospace family holds constant, so ink is the signal that still
+ * moves for those. Unreadable signatures answer 0, which simply never counts as a
+ * change.
+ * @param {string} signature - a signature from `sampleWeightSignature`.
+ * @returns {number} the summed alpha, or 0.
+ */
+function inkOfSignature(signature) {
+  var ink = Number(String(signature).split("/")[0]);
+  return isFinite(ink) ? ink : 0;
+}
+
+/**
  * The slider shape to use for one family: its range and its notch.
  *
  * A family can only be made as light or as heavy as the faces it ships, so the
@@ -1437,18 +1494,40 @@ var context = weightProbeCanvas.getContext("2d", { willReadFrequently: true });
  */
 function weightProfileFor(stack, top) {
   var base = typeof top === "number" ? top : shared.WEIGHT_LADDER_TOP;
-  var key = String(stack) + "\u0000" + base;
+  var resolved = String(stack) === "" ? liveFamily() : String(stack);
+  // `hasOwnProperty` rather than a truthiness test: the alias map is keyed by family
+  // name, and a family called "constructor" must not read as promoted.
+  var promoted = Object.prototype.hasOwnProperty.call(variableFamilies, primaryFamilyOf(resolved));
+  var alias = promoted ? variableFamilies[primaryFamilyOf(resolved)] : "";
+  // The promotion state is part of the key. The warm-up measures a family BEFORE the
+  // probe has finished (the probe awaits a font load), so without it the stepped shape
+  // measured first would be served from the cache forever after the family was
+  // promoted — the card then keeps offering the coarse notches the mode replaced.
+  var key = String(stack) + "\u0000" + base + "\u0000" + (promoted ? "continuous" : "stepped");
   if (Object.prototype.hasOwnProperty.call(weightProfileCache, key)) {
     return weightProfileCache[key];
   }
-  var profile = { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
+  var profile = promoted
+    ? shared.continuousWeightProfile()
+    : { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
   try {
-    var resolved = String(stack) === "" ? liveFamily() : String(stack);
-    profile = weightProfileFrom(function (weight) {
-      return sampleWeightSignature(resolved, weight);
-    }, { top: base });
+    // A continuous family is measured THROUGH ITS ALIAS, on the fine candidate grid:
+    // the axis answers at every notch, so the finest one that still moves body text
+    // wins, and the range stops where the family's own axis does instead of running
+    // past it into weights that render the same.
+    var target = promoted ? '"' + alias + '"' : resolved;
+    var seen = {};
+    var sample = function (weight) {
+      if (!Object.prototype.hasOwnProperty.call(seen, weight)) {
+        seen[weight] = sampleWeightSignature(target, weight);
+      }
+      return seen[weight];
+    };
+    profile = weightProfileFrom(sample, promoted ? { top: base, candidates: shared.CONTINUOUS_CANDIDATES } : { top: base });
   } catch (error) {
-    profile = { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
+    profile = promoted
+      ? shared.continuousWeightProfile()
+      : { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
   }
   weightProfileCache[key] = profile;
   return profile;
@@ -1510,14 +1589,17 @@ var scheduleWeightWarm = function (editing) {
   warmSignature = signature;
   var jobs = [
     function () {
+      probeContinuity(stacks.dialog);
       weightProfileFor(stacks.dialog, shared.WEIGHT_LADDER_STRONG);
       probeLog("weight-warm", { axis: "dialog", stack: stacks.dialog });
     },
     function () {
+      probeContinuity(stacks.ui);
       weightProfileFor(stacks.ui, shared.WEIGHT_LADDER_STRONG);
       probeLog("weight-warm", { axis: "ui", stack: stacks.ui });
     },
     function () {
+      probeContinuity(stacks.code);
       weightProfileFor(stacks.code, shared.WEIGHT_BASE);
       probeLog("weight-warm", { axis: "code", stack: stacks.code });
     },
@@ -1530,6 +1612,201 @@ var scheduleWeightWarm = function (editing) {
   };
   deferWeightWarm(runNext);
 };
+
+/**
+ * Families measured as continuous, family → alias (see FT-060).
+ *
+ * Filled by `probeContinuity` once a family has proven, in THIS page's own
+ * rendering, that it moves in small steps through its variable axis. A family
+ * that is not in here keeps the measured notch shape it always had.
+ */
+var variableFamilies = {};
+var continuityProbed = {};
+
+/**
+ * What to re-render when a family is promoted.
+ *
+ * The promotion lands a second or so after load, while the floating panel may already
+ * be on screen with its weight row built from the stepped shape. Rebuilding the
+ * stylesheet is not enough — the row caches the shape it was rendered with, so the
+ * panel would keep offering the coarse notches until something else happened to
+ * redraw it. Each mounted panel pushes its own render here and takes it back on
+ * destroy.
+ */
+var promotionListeners = [];
+
+/** Redraw whatever is showing a weight shape that the promotion just changed. */
+function notifyPromoted() {
+  var pending = promotionListeners.slice();
+  for (var index = 0; index < pending.length; index += 1) {
+    try {
+      pending[index]();
+    } catch (error) {
+      // A listener must never break the probe.
+    }
+  }
+}
+
+/**
+ * A stamp for the build the page is running.
+ *
+ * The client script is cached, and "I refreshed" has been wrong before: this is what
+ * a live page reports about itself (the panel host carries it as `data-dfp-build`).
+ */
+var CLIENT_BUILD = "2026-10-12-3";
+
+/** The families this page promoted to continuous weight, in map order. */
+function continuousNames() {
+  return Object.keys(variableFamilies);
+}
+
+/**
+ * Publish the promoted families on the panel host, when one is on screen.
+ *
+ * Promotion happens AFTER the first render (the probe awaits a font load), so the
+ * attribute set during render is re-stamped here: the host element is then the one
+ * place a reader — or a support session — can look without opening the console.
+ */
+function announceContinuous() {
+  if (typeof document === "undefined") return;
+  try {
+    var nodes = document.querySelectorAll("[data-dfp-build]");
+    var names = continuousNames().join(", ");
+    for (var index = 0; index < nodes.length; index += 1) {
+      if (names === "") nodes[index].removeAttribute("data-dfp-continuous");
+      else nodes[index].setAttribute("data-dfp-continuous", names);
+    }
+  } catch (error) {
+    // Diagnostics only: a host without attributes costs nothing.
+  }
+}
+
+/**
+ * The first family a stack names that is a REAL family, or "" when there is none.
+ *
+ * Our own alias families are skipped: once a family is promoted, any stack read back
+ * from the page (`liveFamily()`) leads with the alias, and treating that as the
+ * family name would miss the promotion map and hand back the stepped shape — which is
+ * how the floating panel kept offering the coarse notches after the card moved on.
+ * @param {string} stack - a formatted font-family value.
+ * @returns {string} the family the stack really draws with.
+ */
+function primaryFamilyOf(stack) {
+  var names = parseStack(stack);
+  for (var index = 0; index < names.length; index += 1) {
+    if (names[index].indexOf(shared.VARIABLE_ALIAS_PREFIX) !== 0) return names[index];
+  }
+  return "";
+}
+
+/**
+ * Ask the page whether a family is continuous under weight, once per family.
+ *
+ * The probe does what the page does: it installs the alias face for the family
+ * (`local()` plus a weight range) and waits for the browser to load it. It then
+ * asks TWO ways, both through that alias:
+ *
+ *  * the laid-out width, in the real DOM — what a reader's eye follows in prose;
+ *  * the canvas ink, which is the only signal a monospace family ever moves on,
+ *    since its advance is the same at every weight.
+ *
+ * A family that answers continuously on either signal is promoted to
+ * `variableFamilies`; the stylesheet is then rebuilt so the alias leads its
+ * stacks. Anything that cannot be measured (no font loading API, a rejected load)
+ * leaves the family as it was.
+ * @param {string} stack - the axis's formatted font-family value.
+ */
+function probeContinuity(stack) {
+  var family = primaryFamilyOf(stack);
+  if (family === "" || continuityProbed[family] === true) return;
+  continuityProbed[family] = true;
+  if (typeof document === "undefined" || !document.fonts || typeof document.fonts.load !== "function") return;
+  var alias = shared.variableAliasFor(family);
+  var style = document.createElement("style");
+  style.setAttribute("data-dfp-continuity", alias);
+  style.textContent = shared.variableFaceRule(family, alias);
+  document.head.appendChild(style);
+  var host = document.createElement("span");
+  host.style.cssText =
+    "position:fixed;left:-10000px;top:0;white-space:nowrap;font-size:64px;font-family:\"" + alias + "\"";
+  host.textContent = WEIGHT_SAMPLE_TEXT;
+  document.body.appendChild(host);
+  var keepFace = false;
+  var finish = function () {
+    host.remove();
+    // A promoted family keeps its face: the stylesheet will declare the same alias,
+    // and the weight profile is measured THROUGH it after promotion, so removing the
+    // rule here would leave that measurement drawing with the fallback.
+    if (!keepFace) style.remove();
+  };
+  // Two signals, because neither covers every family on its own: the DOM width
+  // moves for a proportional font, while a monospace font never changes width and
+  // can only be seen in the canvas ink. The ink is also read through the FAMILY
+  // itself, and the two responses are compared: a family that snaps to named
+  // instances answers identically either way, while a variable family moves through
+  // its alias at weights where its own path already stopped.
+  //
+  // All values equal means the face has not taken effect yet (the page is still
+  // drawing with its fallback), not that the family is stepped: a stepped family
+  // still changes between its faces. Wait a beat and measure again, a few times at
+  // most, so a slow face is not mistaken for a static one.
+  var attempts = 0;
+  var measure = function () {
+    attempts += 1;
+    // `!important` on purpose: the page's own weight rules are `!important`, and a
+    // plain inline weight loses to them, which measured every width as one value.
+    var widths = shared.CONTINUITY_WEIGHTS.map(function (weight) {
+      host.style.setProperty("font-weight", String(weight), "important");
+      return host.getBoundingClientRect().width;
+    });
+    var inks = shared.CONTINUITY_WEIGHTS.map(function (weight) {
+      return inkOfSignature(sampleWeightSignature('"' + alias + '"', weight));
+    });
+    var plainInks = shared.CONTINUITY_WEIGHTS.map(function (weight) {
+      return inkOfSignature(sampleWeightSignature('"' + family + '"', weight));
+    });
+    var unchanged = function (list) {
+      return list.every(function (value) {
+        return value === list[0];
+      });
+    };
+    if (unchanged(widths) && unchanged(inks) && attempts < 8) {
+      globalThis.setTimeout(measure, 80);
+      return;
+    }
+    // The alias must answer more finely than the family itself. A family that snaps
+    // to named instances cannot: both responses hold the same values.
+    var finer = shared.respondsFinerThan(inks, plainInks);
+    var continuous = finer || shared.isContinuousResponse(widths);
+    keepFace = continuous;
+    finish();
+    probeLog("continuity", {
+      family: family,
+      continuous: continuous,
+      attempts: attempts,
+      byWidth: shared.isContinuousResponse(widths),
+      aliasInk: shared.distinctCount(inks),
+      plainInk: shared.distinctCount(plainInks),
+      widths: widths.map(function (width) {
+        return Math.round(width * 100) / 100;
+      }),
+    });
+    if (!continuous) return;
+    variableFamilies[family] = alias;
+    announceContinuous();
+    notifyPromoted();
+    if (typeof repaint === "function") repaint();
+  };
+  document.fonts.load('400 64px "' + alias + '"').then(
+    function () {
+      measure();
+    },
+    function () {
+      finish();
+      probeLog("continuity", { family: family, continuous: false, error: "load" });
+    }
+  );
+}
 
 /**
  * The family the page actually renders with, as a `font-family` value.
@@ -4118,12 +4395,17 @@ function FontCard(props) {
   // nothing else — the weight, size and line height all come from the
   // conversation section.
   var previewUiStyle = {};
-  if (uiStack !== "") previewUiStyle.fontFamily = uiStack;
+  if (uiStack !== "") previewUiStyle.fontFamily = shared.withVariableFaces(uiStack, variableFamilies);
   var previewDialogStyle = {};
   // Independent and unset: the conversation keeps DSH's own family, so the
   // preview shows the theme's default rather than the interface stack the page
   // rule would otherwise paint into this box.
-  if (dialogStack !== "") previewDialogStyle.fontFamily = dialogStack;
+  //
+  // The alias leads these stacks exactly as it leads the real surfaces: without it
+  // the preview would draw through the system family, where the fine notches snap to
+  // the same named instance — so a notch that visibly moves the conversation would
+  // do nothing here.
+  if (dialogStack !== "") previewDialogStyle.fontFamily = shared.withVariableFaces(dialogStack, variableFamilies);
   previewDialogStyle.fontSize = 13 + editing[SIZE_DIALOG_FIELD] + "px";
   // The axis is a percentage OF DSH's own line height, so the preview multiplies the
   // measured base by the same percentage — and does it at every notch including 100,
@@ -4144,7 +4426,7 @@ function FontCard(props) {
   }
   var previewCodeStyle = {};
   if (editing[MONO_FIELD] !== "") {
-    previewCodeStyle.fontFamily = formatStack(parseStack(editing[MONO_FIELD]));
+    previewCodeStyle.fontFamily = shared.withVariableFaces(formatStack(parseStack(editing[MONO_FIELD])), variableFamilies);
   }
   previewCodeStyle.fontSize = 13 + editing[CODE_SIZE_FIELD] + "px";
   if (editing[CODE_LINE_HEIGHT_FIELD] !== 0) {
@@ -6491,8 +6773,13 @@ function mountFloatPanel(scope, t, hostCtx) {
     host.textContent = "";
     // One line in the console answers "which build is live": with a linked plugin
     // and a cached client script, "I refreshed" is not evidence on its own.
-    host.setAttribute("data-dfp-build", "2026-10-01-2");
-    var dot = el("button", "dfp-dot");
+    host.setAttribute("data-dfp-build", CLIENT_BUILD);
+    // And which families this build promoted to continuous weight, so a report of
+    // "the slider still has four notches" can be answered without a console session:
+    // an empty attribute means the probe has not (yet) promoted the reader's family,
+    // a missing one means the page is running a build from before the mode existed.
+    if (continuousNames().length > 0) host.setAttribute("data-dfp-continuous", continuousNames().join(", "));
+    else host.removeAttribute("data-dfp-continuous");    var dot = el("button", "dfp-dot");
     dot.type = "button";
     dot.setAttribute("aria-label", t("panel.dot"));
     dot.title = t("panel.dot");
@@ -6682,7 +6969,13 @@ function mountFloatPanel(scope, t, hostCtx) {
 
     // The dialog weight in the family's own steps, like the card's control:
     // the document keeps the offset, the readout counts steps.
-    var dialogStack = formatStack(parseStack(config[STACK_DIALOG_FIELD]));
+    //
+    // The stack comes from the SAME helper the card and the warm-up use. Resolving it
+    // here instead (the configured field alone) meant an unset stack fell through to
+    // the page's computed family, which carries our alias once a family is promoted —
+    // so the panel missed the promotion and kept showing the coarse notches while the
+    // card showed the fine ones.
+    var dialogStack = weightAxisStacks(config).dialog;
     var profile = { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
     try {
       profile = weightProfileFor(dialogStack, shared.WEIGHT_LADDER_STRONG);
@@ -6694,6 +6987,13 @@ function mountFloatPanel(scope, t, hostCtx) {
       { min: Math.min(profile.min, storedWeight), max: Math.max(profile.max, storedWeight), step: profile.step },
       storedWeight
     );
+    probeLog("panel-weight", {
+      stack: dialogStack,
+      profile: profile,
+      stored: storedWeight,
+      shape: shape,
+      promoted: continuousNames(),
+    });
     (function () {
       var row = el("div", "dfp-floatRow");
       var label = el("div", "dfp-floatLabel");
@@ -6906,8 +7206,14 @@ function mountFloatPanel(scope, t, hostCtx) {
     // A document without events still gets the interval.
   }
 
+  // A promotion changes the weight row's shape; the panel redraws itself when one
+  // lands, and stops listening when it goes away.
+  promotionListeners.push(render);
+
   return {
     destroy: function () {
+      var at = promotionListeners.indexOf(render);
+      if (at >= 0) promotionListeners.splice(at, 1);
       if (statusTimer !== null) globalThis.clearTimeout(statusTimer);
       if (closeTimer !== null) globalThis.clearTimeout(closeTimer);
       if (reflowTimer !== null) globalThis.clearTimeout(reflowTimer);

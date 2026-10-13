@@ -1918,6 +1918,9 @@ await test("the polling refresh walks the CSS only when something moved", async 
       ownerNode: null,
       cssRules: [
         {
+          // The theme declares its tokens on a root scope; a rule scoped to a class is
+          // another plugin's local choice and is deliberately not read.
+          selectorText: "body",
           style: {
             length: 1,
             0: "--dsh-content-font-size",
@@ -2199,7 +2202,10 @@ await test("the retired interface line-height injects nothing", () => {
         "700 calc(21px + var(--dsh-content-font-delta)) / calc(30px + var(--dsh-content-font-delta)) var(--dsw-font-family)",
     }
   );
-  assert.match(dialog, /--dsw-font-markdown-h1:700 calc\(21px \+ var\(--dsh-content-font-delta\)\) \/ calc\(\(calc\(30px \+ var\(--dsh-content-font-delta\)\)\) \* 1\.4\)/);
+  assert.match(
+    dialog,
+    /--dsw-font-markdown-h1:700 calc\(21px \+ var\(--dsh-content-font-delta, 0px\)\) \/ calc\(\(calc\(30px \+ var\(--dsh-content-font-delta, 0px\)\)\) \* 1\.4\)/
+  );
 });
 
 await test("the dialog line-height rebuilds the markdown shorthands", () => {
@@ -2212,7 +2218,7 @@ await test("the dialog line-height rebuilds the markdown shorthands", () => {
   );
   assert.match(
     css,
-    /--dsw-font-markdown-h1:700 calc\(21px \+ var\(--dsh-content-font-delta\)\) \/ calc\(\(calc\(30px \+ var\(--dsh-content-font-delta\)\)\) \* 1\.4\) var\(--dsw-font-family\) !important/
+    /--dsw-font-markdown-h1:700 calc\(21px \+ var\(--dsh-content-font-delta, 0px\)\) \/ calc\(\(calc\(30px \+ var\(--dsh-content-font-delta, 0px\)\)\) \* 1\.4\) var\(--dsw-font-family\) !important/
   );
 });
 
@@ -3632,6 +3638,149 @@ await test("the manifest resolves and ships the locale directory", async () => {
   const manifest = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
   assert.ok(manifest.exports["./locale/*"], "an unexported subpath is invisible to the host's resource resolver");
   assert.ok(manifest.files.includes("locale"), "a whitelist without it ships no locale file");
+});
+
+/* ------------------------------------------------------------------ */
+
+section("continuous weight: the alias, its rule and the stacks that lead with it (FT-060)");
+
+await test("an alias is a stable identifier per family, and distinct across families", () => {
+  const a = shared.variableAliasFor("Noto Serif SC");
+  assert.equal(a, shared.variableAliasFor("Noto Serif SC"), "the same family always gets the same alias");
+  assert.notEqual(a, shared.variableAliasFor("SimSun"), "different families never share one");
+  assert.ok(a.startsWith(shared.VARIABLE_ALIAS_PREFIX));
+  assert.match(a, /^[a-z0-9-]+$/, "a plain identifier, whatever the family is called");
+});
+
+await test("the face rule draws the installed family through a weight RANGE", () => {
+  const rule = shared.variableFaceRule("Noto Serif SC", "dfp-vf-x");
+  assert.ok(rule.includes('font-family:"dfp-vf-x"'));
+  assert.ok(rule.includes('src:local("Noto Serif SC")'));
+  assert.ok(rule.includes("font-weight:100 900"), "the range is what makes the family continuous");
+  assert.equal(shared.buildVariableFaces({}), "", "no families, no rules");
+  assert.equal(shared.buildVariableFaces(null), "");
+});
+
+await test("the alias leads only the stacks that name its family, and keeps the family after it", () => {
+  const variable = { "Noto Serif SC": "dfp-vf-x" };
+  assert.equal(
+    shared.withVariableFaces('"Noto Serif SC", serif', variable),
+    '"dfp-vf-x", "Noto Serif SC", serif',
+    "the alias first, the reader's own family still behind it"
+  );
+  assert.equal(shared.withVariableFaces('"Inter", sans-serif', variable), '"Inter", sans-serif', "other stacks untouched");
+  assert.equal(shared.withVariableFaces("", variable), "", "the page default stays the page default");
+  assert.equal(shared.withVariableFaces('"Noto Serif SC", serif', undefined), '"Noto Serif SC", serif', "no map, no change");
+});
+
+await test("leading a stack with an alias twice is a no-op, not a duplicate", () => {
+  const variable = { "Noto Serif SC": "dfp-vf-x" };
+  const once = shared.withVariableFaces('"Noto Serif SC", serif', variable);
+  // A stack read back from the page's computed style already carries the alias; the
+  // previews and the stylesheet both feed such stacks back in.
+  assert.equal(shared.withVariableFaces(once, variable), once, "the alias is not stacked up again");
+  assert.equal(
+    (shared.withVariableFaces(once, variable).match(/dfp-vf-x/g) || []).length,
+    1,
+    "exactly one alias in the result"
+  );
+});
+
+await test("every reference to the content-size delta carries a fallback", () => {
+  // DSH's own heading shorthand reads `calc(21px + var(--dsh-content-font-delta))` and
+  // nothing outside this plugin defines that property. A bare reference therefore makes
+  // the whole `font` shorthand invalid at computed-value time, and every heading is
+  // painted at body size (measured live: h1 23px → 16px).
+  const hardened = shared.hardenDeltaRefs("a:calc(21px + var(--dsh-content-font-delta));b:ok");
+  assert.ok(hardened.includes("var(--dsh-content-font-delta, 0px)"), "the reference gets a fallback");
+  assert.equal(
+    hardened,
+    shared.hardenDeltaRefs(hardened),
+    "already-hardened text is left alone (the call is idempotent)"
+  );
+  const withFallback = "x:calc(1px + var(--dsh-content-font-delta, 2px))";
+  assert.equal(shared.hardenDeltaRefs(withFallback), withFallback, "an authored fallback is never rewritten");
+  assert.equal(shared.hardenDeltaRefs(""), "");
+  assert.equal(shared.hardenDeltaRefs(null), null);
+
+  // And end to end: whatever the map says, the CSS we ship carries no bare reference.
+  const marks = Object.assign({}, shared.FALLBACK_TOKENS);
+  marks["--dsw-font-markdown-h1"] = "700 calc(21px + var(--dsh-content-font-delta)) / calc(30px + var(--dsh-content-font-delta)) var(--dsw-font-family)";
+  const css = shared.buildFontCss({ lineHeightDialog: 120, sizeOffsetDialog: 1, stackDialog: "" }, marks);
+  assert.ok(css.length > 0, "the axes produced declarations");
+  assert.equal(css.includes("var(--dsh-content-font-delta)"), false, "no bare reference survives the build");
+  assert.ok(css.includes("var(--dsh-content-font-delta, 0px)"), "the rebuilt heading keeps a safe reference");
+});
+
+await test("only a root-scoped declaration counts as a base token value", () => {
+  for (const selector of [":root", "html", "body", "*", ":root, body", "  BODY ", "html,body"]) {
+    assert.equal(shared.isRootScopeSelector(selector), true, `${selector} declares for the whole page`);
+  }
+  // Measured on the real page: dsh-better-sidebar redefines --dsw-font-markdown-h1 as a
+  // compact 600 13px/18px on its own panel class. A class-scoped value is that panel's
+  // choice, never the conversation's base — reading it shrank every heading.
+  for (const selector of [".d2hvtW_taskMarkdown", "body .markdown", "[data-theme] body", ".a, body", ":root:not(.x)", "", null]) {
+    assert.equal(shared.isRootScopeSelector(selector), false, `${String(selector)} is a local override`);
+  }
+});
+
+await test("continuity needs nearly every neighbour to differ, not a lucky few", () => {
+  const continuous = shared.CONTINUITY_WEIGHTS.map((_, index) => 100 + index * 3);
+  assert.equal(shared.isContinuousResponse(continuous), true, "every neighbour differs");
+  // A family drawn through its named instances repeats its width across each stretch.
+  const snapped = [10, 10, 10, 10, 10, 20, 20, 20, 20, 30, 30, 30, 30];
+  assert.equal(shared.isContinuousResponse(snapped), false, "stepped families stay stepped");
+  assert.equal(shared.isContinuousResponse([1, 2]), false, "too few points to call it");
+  assert.equal(shared.isContinuousResponse(null), false);
+});
+
+await test("a family that snaps answers identically through its alias, so it cannot pass", () => {
+  // Measured ink values from the live page (FT-060), one per probe weight.
+  const aliasOfVariable = [3747309, 3862216, 3978320, 4041461, 4201159, 4315986, 4432825, 4607236, 4905144, 5334222, 5753457, 6001214, 6232556];
+  const plainOfVariable = [3747309, 3747309, 3978320, 3978320, 3978320, 4315986, 4315986, 4315986, 4905144, 4905144, 5753457, 5753457, 6232556];
+  assert.equal(shared.respondsFinerThan(aliasOfVariable, plainOfVariable), true, "the alias resolves what the family cannot");
+  // A monospace variable family moves on ink only (its width never changes): the
+  // measured pair from the live run, alias 11 values against the family's own 6.
+  const aliasOfMono = [523500, 529713, 531659, 603728, 607847, 611186, 614229, 618447, 621108, 624901, 627340, 629118, 632004];
+  const plainOfMono = [523500, 523500, 523500, 592845, 592845, 592845, 592845, 592845, 630309, 630309, 630309, 630309, 630309];
+  assert.equal(shared.respondsFinerThan(aliasOfMono, plainOfMono), true, "monospace passes on ink alone");
+  // A static family: the same three values either way.
+  const staticInk = [4518480, 4518480, 4518480, 5139873, 5139873, 5139873, 5139873, 5139873, 5910401, 5910401, 5910401, 5910401, 6628977];
+  assert.equal(shared.respondsFinerThan(staticInk, staticInk), false, "no finer detail, no promotion");
+  assert.equal(shared.respondsFinerThan([1, 1, 1], [1, 1, 1]), false, "a flat response never counts");
+  assert.equal(shared.respondsFinerThan(null, staticInk), false);
+  assert.equal(shared.distinctCount([1, 1, 2, 2, 3]), 3);
+  assert.equal(shared.distinctCount(null), 0);
+});
+
+await test("the fine notches are the candidates a continuous axis is measured on", () => {
+  assert.deepEqual(shared.CONTINUOUS_CANDIDATES, [10, 20, 25]);
+  assert.ok(Math.max(...shared.CONTINUOUS_CANDIDATES) < 50, "all of them are finer than the stepped shape's 200");
+});
+
+await test("the continuous slider is the finest visible notch, centred on the default", () => {
+  const profile = shared.continuousWeightProfile();
+  assert.deepEqual(profile, { min: -200, max: 200, step: 20 });
+  const range = shared.weightStepRange(profile, 40);
+  assert.equal(range.unit, 20, "one notch is twenty units");
+  assert.equal(range.value, 2, "the stored offset maps back onto its notch");
+  assert.equal(range.min, -10);
+  assert.equal(range.max, 10);
+});
+
+await test("a stylesheet built without the map is byte-for-byte what it was (no regression)", () => {
+  const config = shared.normalizeConfig({ sizeOffsetDialog: 2, weightDialog: 100 });
+  const plain = shared.buildFontCss(config, shared.FALLBACK_TOKENS);
+  assert.equal(shared.buildFontCss(config, shared.FALLBACK_TOKENS, undefined, undefined), plain);
+  assert.equal(shared.buildFontCss(config, shared.FALLBACK_TOKENS, undefined, {}), plain, "an empty map changes nothing");
+  assert.ok(!plain.includes("dfp-vf-"), "no alias without a measured family");
+});
+
+await test("a measured family's alias leads its stacks in the built stylesheet", () => {
+  const config = shared.normalizeConfig({ sizeOffsetDialog: 2, weightDialog: 100, stackDialog: '"Noto Serif SC", serif' });
+  const alias = shared.variableAliasFor("Noto Serif SC");
+  const css = shared.buildFontCss(config, shared.FALLBACK_TOKENS, undefined, { "Noto Serif SC": alias });
+  assert.ok(css.includes('"' + alias + '", "Noto Serif SC"'), "the alias leads the family in the output");
 });
 
 /* ------------------------------------------------------------------ */
