@@ -2,6 +2,19 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.5.0] - 2026-10-13
+
+### Added
+- **Finer weight steps on fonts with a continuous weight range**: for a font that supports one, the weight slider of the conversation, the interface and code goes from a handful of steps to a couple of dozen, and every notch changes the text. Machines whose fonts do not support it keep the steps they had.
+
+### Fixed
+- **Headings shrank when the conversation line height was adjusted**: the axis now moves the spacing alone, leaving the size and the hierarchy of headings and body text untouched.
+- **The floating panel offered different weight steps than the settings card**: both now read and write the same steps and the same range.
+- **The preview box did not match the real conversation**: moving the weight by one step now shows in the preview as well.
+
+### Changed
+- **The weight hints no longer describe a change of face per step**: on a font with a continuous weight range that is not what happens, so they now say every notch makes the text a little bolder or lighter.
+
 ## [0.4.2] - 2026-10-12
 
 ### Changed
