@@ -309,6 +309,67 @@ var LINE_HEIGHT_MAX = 160;
 var CODE_LINE_HEIGHT_MIN = -4;
 var CODE_LINE_HEIGHT_MAX = 8;
 
+/* ------------------------------------------------------------------ *
+ * conversation text shaping (measured against DSH's own markdown)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Field carrying the letter-spacing offset in px (0 = DSH's own `normal`).
+ * DSH leaves tracking at `normal` on the markdown scope (measured 2026-10-13), so
+ * the offset can be written as an absolute value: 0 emits no rule at all.
+ */
+var LETTER_SPACING_DIALOG_FIELD = "letterSpacingDialog";
+
+/**
+ * Field carrying the word-spacing offset in px (0 = DSH's own `0px`).
+ * Word spacing is measured 0px on the same scope, so it is an absolute value too.
+ */
+var WORD_SPACING_DIALOG_FIELD = "wordSpacingDialog";
+
+/**
+ * Field carrying the paragraph-gap offset in px, added on top of DSH's own 16px.
+ * The paragraphs' margins are NOT zero on the shipped markdown (first 0/16, the
+ * rest 16/16, headings 32/16 — measured 2026-10-13), so this axis is an offset
+ * built on that baseline rather than an absolute value.
+ */
+var PARAGRAPH_SPACING_DIALOG_FIELD = "paragraphSpacingDialog";
+
+/** Field carrying the first-line indent, in em (0 = DSH's own none). */
+var INDENT_DIALOG_FIELD = "indentDialog";
+
+/**
+ * Field asking for strict CJK line breaking (`line-break:strict`) in the
+ * conversation: no small kana, no dash starting a line. DSH leaves `auto`.
+ */
+var LINE_BREAK_STRICT_FIELD = "lineBreakStrict";
+
+/** Letter-spacing offset range, in px, and its notch (measured: 0.1px is visible). */
+var LETTER_SPACING_MIN = -0.4;
+var LETTER_SPACING_MAX = 2.0;
+var LETTER_SPACING_STEP = 0.1;
+
+/** Word-spacing offset range, in px, and its notch. */
+var WORD_SPACING_MIN = -1.0;
+var WORD_SPACING_MAX = 4.0;
+var WORD_SPACING_STEP = 0.2;
+
+/** Paragraph-gap offset range, in px, over DSH's own 16px. */
+var PARAGRAPH_SPACING_MIN = -8;
+var PARAGRAPH_SPACING_MAX = 24;
+var PARAGRAPH_SPACING_STEP = 1;
+
+/** First-line indent range, in em, and its notch. */
+var INDENT_MIN = 0;
+var INDENT_MAX = 4;
+var INDENT_STEP = 0.25;
+
+/**
+ * The paragraph gap DSH's own markdown ships, in px. Measured on the conversation
+ * scope (2026-10-13): paragraphs carry 16px top/bottom margins, so that is the
+ * baseline every offset is added to.
+ */
+var PARAGRAPH_BASELINE_PX = 16;
+
 /** Ligature modes. */
 var LIGATURES_DEFAULT = 0;
 var LIGATURES_ON = 1;
@@ -334,6 +395,11 @@ var DEFAULTS = {
   lineHeight: LINE_HEIGHT_MIN,
   lineHeightDialog: LINE_HEIGHT_MIN,
   lineHeightCode: 0,
+  letterSpacingDialog: 0,
+  wordSpacingDialog: 0,
+  paragraphSpacingDialog: 0,
+  indentDialog: 0,
+  lineBreakStrict: false,
   codeLigatures: LIGATURES_DEFAULT,
   codeFeatures: "",
   noSyntheticItalic: false,
@@ -365,6 +431,11 @@ var VALUE_FIELDS = [
   CODE_WEIGHT_FIELD,
   LINE_HEIGHT_DIALOG_FIELD,
   CODE_LINE_HEIGHT_FIELD,
+  LETTER_SPACING_DIALOG_FIELD,
+  WORD_SPACING_DIALOG_FIELD,
+  PARAGRAPH_SPACING_DIALOG_FIELD,
+  INDENT_DIALOG_FIELD,
+  LINE_BREAK_STRICT_FIELD,
   LIGATURES_FIELD,
   FEATURES_FIELD,
   NO_SYNTHETIC_ITALIC_FIELD,
@@ -1507,6 +1578,16 @@ function normalizeField(field, value, relative) {
       return clampRatio(value);
     case CODE_LINE_HEIGHT_FIELD:
       return clampLineOffset(value);
+    case LETTER_SPACING_DIALOG_FIELD:
+      return clampSpacing(value, LETTER_SPACING_MIN, LETTER_SPACING_MAX);
+    case WORD_SPACING_DIALOG_FIELD:
+      return clampSpacing(value, WORD_SPACING_MIN, WORD_SPACING_MAX);
+    case PARAGRAPH_SPACING_DIALOG_FIELD:
+      return clampSpacing(value, PARAGRAPH_SPACING_MIN, PARAGRAPH_SPACING_MAX);
+    case INDENT_DIALOG_FIELD:
+      return clampIndent(value);
+    case LINE_BREAK_STRICT_FIELD:
+      return toBool(value);
     case LIGATURES_FIELD:
       return clampLigatures(value);
     case WEIGHT_OFFSETS_FIELD:
@@ -1588,6 +1669,52 @@ function clampWeight(value) {
   weight = Math.round(weight);
   if (weight === WEIGHT_UNSET) return WEIGHT_UNSET;
   return Math.min(WEIGHT_MAX, Math.max(WEIGHT_MIN, weight));
+}
+
+/**
+ * Clamp one spacing offset (letter, word) to its allowed range, in px.
+ *
+ * These axes sit on top of a DSH default that is already zero (`normal` / `0px`,
+ * measured on the conversation scope), so no migration and no baseline is involved:
+ * the offset is written as it stands, and 0 means "emit nothing".
+ * @param {unknown} value - candidate offset.
+ * @param {number} min - the lowest allowed offset.
+ * @param {number} max - the highest allowed offset.
+ * @returns {number} the offset the stylesheet may use.
+ */
+function clampSpacing(value, min, max) {
+  var offset = Number(value);
+  if (!isFinite(offset)) return 0;
+  // Rounded to two decimals: the notches are tenths, and the sum of a few of them
+  // must not turn into 0.30000000000000004 in the emitted CSS.
+  offset = Math.round(offset * 100) / 100;
+  if (offset > max) return max;
+  if (offset < min) return min;
+  return offset;
+}
+
+/**
+ * Clamp the first-line indent to its allowed range, in em.
+ * @param {unknown} value - candidate indent.
+ * @returns {number} the indent the stylesheet may use.
+ */
+function clampIndent(value) {
+  var indent = Number(value);
+  if (!isFinite(indent)) return 0;
+  indent = Math.round(indent * 100) / 100;
+  if (indent > INDENT_MAX) return INDENT_MAX;
+  if (indent < INDENT_MIN) return INDENT_MIN;
+  return indent;
+}
+
+/**
+ * Format a spacing value for CSS, without scientific notation or float noise.
+ * @param {number} value - a clamped px value.
+ * @returns {string} the value as a px length.
+ */
+function pxText(value) {
+  var rounded = Math.round(value * 100) / 100;
+  return String(rounded) + "px";
 }
 
 /**
@@ -3427,6 +3554,11 @@ function isDormant(config) {
     clampWeightDelta(axis[CODE_WEIGHT_FIELD], true) === WEIGHT_UNSET &&
     clampRatio(axis[LINE_HEIGHT_DIALOG_FIELD]) === LINE_HEIGHT_MIN &&
     clampLineOffset(axis[CODE_LINE_HEIGHT_FIELD]) === 0 &&
+    clampSpacing(axis[LETTER_SPACING_DIALOG_FIELD], LETTER_SPACING_MIN, LETTER_SPACING_MAX) === 0 &&
+    clampSpacing(axis[WORD_SPACING_DIALOG_FIELD], WORD_SPACING_MIN, WORD_SPACING_MAX) === 0 &&
+    clampSpacing(axis[PARAGRAPH_SPACING_DIALOG_FIELD], PARAGRAPH_SPACING_MIN, PARAGRAPH_SPACING_MAX) === 0 &&
+    clampIndent(axis[INDENT_DIALOG_FIELD]) === 0 &&
+    toBool(axis[LINE_BREAK_STRICT_FIELD]) === false &&
     clampLigatures(axis[LIGATURES_FIELD]) === LIGATURES_DEFAULT &&
     sanitizeFeatures(axis[FEATURES_FIELD]) === "" &&
     toBool(axis[NO_SYNTHETIC_ITALIC_FIELD]) === false &&
@@ -3808,6 +3940,60 @@ function buildAxisCss(axis, baseTokens, isDark, hints, variable) {
     if (dialogShorthandShifted.length > 0) {
       declarations.push(rootRule(dialogShorthandShifted.join(";")));
     }
+  }
+
+  // ---- conversation text shaping (tracking, word gap, paragraph gap, indent) ----
+  //
+  // Every value here is written on the CONVERSATION scope, and the measurements that
+  // fixed the shape were taken there (2026-10-13): the markdown's tracking is `normal`
+  // and its word gap `0px`, so those two axes are absolute and 0 emits nothing; the
+  // paragraphs carry 16px margins, so the paragraph axis is an offset over that
+  // baseline. Code surfaces are excluded by the same scope rule the weight ladder uses,
+  // so a code block's own tracking is never rewritten by a conversation axis.
+  var letterSpacing = clampSpacing(axis[LETTER_SPACING_DIALOG_FIELD], LETTER_SPACING_MIN, LETTER_SPACING_MAX);
+  var wordSpacing = clampSpacing(axis[WORD_SPACING_DIALOG_FIELD], WORD_SPACING_MIN, WORD_SPACING_MAX);
+  var paragraphSpacing = clampSpacing(
+    axis[PARAGRAPH_SPACING_DIALOG_FIELD],
+    PARAGRAPH_SPACING_MIN,
+    PARAGRAPH_SPACING_MAX
+  );
+  var indent = clampIndent(axis[INDENT_DIALOG_FIELD]);
+  if (letterSpacing !== 0) {
+    declarations.push(weightScopeRule("letter-spacing:" + pxText(letterSpacing) + " !important"));
+  }
+  if (wordSpacing !== 0) {
+    declarations.push(weightScopeRule("word-spacing:" + pxText(wordSpacing) + " !important"));
+  }
+  if (indent !== 0) {
+    // A first-line indent is a PROSE convention, so it belongs to paragraphs. Emitted for
+    // the whole conversation scope it inherited into every block under it; each of these
+    // was measured on the page with the axis at 2em (32px on a 16px base):
+    //   - a heading sat 32px in, where no Chinese reader expects one;
+    //   - an ordered-list item's TEXT moved 32px while the number stayed at the content
+    //     edge (the marker sits outside the content box), so the number ended up in front
+    //     of the indent the text had taken;
+    //   - inline code is `display: inline-flex` in DSH's markdown — a block container of
+    //     its own — so the indent landed INSIDE the chip as blank space before its own
+    //     text, wherever the chip sat in the line;
+    //   - a code block's first line shifted the same way.
+    // Paragraphs are the only place the convention exists, and their descendants are
+    // zeroed so a chip that happens to be its own block still draws flush.
+    var indentDeclarations = "text-indent:" + String(indent) + "em !important";
+    declarations.push(weightScopeRule("p{" + indentDeclarations + "}"));
+    declarations.push(weightScopeRule("p *{text-indent:0 !important}"));
+  }
+  if (paragraphSpacing !== 0) {
+    // Both margins move together: adjacent siblings collapse to the LARGER of the two,
+    // so shifting only `margin-top` would silently ignore every negative offset.
+    var gap =
+      paragraphSpacing > 0
+        ? "calc(" + PARAGRAPH_BASELINE_PX + "px + " + pxText(paragraphSpacing) + ")"
+        : "calc(" + PARAGRAPH_BASELINE_PX + "px - " + pxText(-paragraphSpacing) + ")";
+    declarations.push(weightScopeRule("p{margin-bottom:" + gap + " !important}"));
+    declarations.push(weightScopeRule("p:not(:first-child){margin-top:" + gap + " !important}"));
+  }
+  if (toBool(axis[LINE_BREAK_STRICT_FIELD])) {
+    declarations.push(weightScopeRule("line-break:strict !important"));
   }
 
   // ---- code axes ----
@@ -4431,6 +4617,24 @@ var shared = {
   LINE_HEIGHT_MAX: LINE_HEIGHT_MAX,
   CODE_LINE_HEIGHT_MIN: CODE_LINE_HEIGHT_MIN,
   CODE_LINE_HEIGHT_MAX: CODE_LINE_HEIGHT_MAX,
+  LETTER_SPACING_DIALOG_FIELD: LETTER_SPACING_DIALOG_FIELD,
+  WORD_SPACING_DIALOG_FIELD: WORD_SPACING_DIALOG_FIELD,
+  PARAGRAPH_SPACING_DIALOG_FIELD: PARAGRAPH_SPACING_DIALOG_FIELD,
+  INDENT_DIALOG_FIELD: INDENT_DIALOG_FIELD,
+  LINE_BREAK_STRICT_FIELD: LINE_BREAK_STRICT_FIELD,
+  LETTER_SPACING_MIN: LETTER_SPACING_MIN,
+  LETTER_SPACING_MAX: LETTER_SPACING_MAX,
+  LETTER_SPACING_STEP: LETTER_SPACING_STEP,
+  WORD_SPACING_MIN: WORD_SPACING_MIN,
+  WORD_SPACING_MAX: WORD_SPACING_MAX,
+  WORD_SPACING_STEP: WORD_SPACING_STEP,
+  PARAGRAPH_SPACING_MIN: PARAGRAPH_SPACING_MIN,
+  PARAGRAPH_SPACING_MAX: PARAGRAPH_SPACING_MAX,
+  PARAGRAPH_SPACING_STEP: PARAGRAPH_SPACING_STEP,
+  INDENT_MIN: INDENT_MIN,
+  INDENT_MAX: INDENT_MAX,
+  INDENT_STEP: INDENT_STEP,
+  PARAGRAPH_BASELINE_PX: PARAGRAPH_BASELINE_PX,
   LIGATURES_DEFAULT: LIGATURES_DEFAULT,
   SMOOTHING_FIELD: SMOOTHING_FIELD,
   SMOOTHING_AUTO: SMOOTHING_AUTO,

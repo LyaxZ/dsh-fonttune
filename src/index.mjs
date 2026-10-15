@@ -247,6 +247,44 @@ export const Config = volatileWhenSupported(z.object({
     .description(
       "Code line-height offset in px (0 keeps DSH's own line heights)"
     ),
+  [shared.LETTER_SPACING_DIALOG_FIELD]: z
+    .number()
+    .min(shared.LETTER_SPACING_MIN)
+    .max(shared.LETTER_SPACING_MAX)
+    .default(0)
+    .description(
+      "Conversation letter-spacing offset in px (0 keeps DSH's own tracking)"
+    ),
+  [shared.WORD_SPACING_DIALOG_FIELD]: z
+    .number()
+    .min(shared.WORD_SPACING_MIN)
+    .max(shared.WORD_SPACING_MAX)
+    .default(0)
+    .description(
+      "Conversation word-spacing offset in px (0 keeps DSH's own word gaps)"
+    ),
+  [shared.PARAGRAPH_SPACING_DIALOG_FIELD]: z
+    .number()
+    .min(shared.PARAGRAPH_SPACING_MIN)
+    .max(shared.PARAGRAPH_SPACING_MAX)
+    .default(0)
+    .description(
+      "Conversation paragraph-gap offset in px, added to DSH's own paragraph spacing (0 keeps it)"
+    ),
+  [shared.INDENT_DIALOG_FIELD]: z
+    .number()
+    .min(shared.INDENT_MIN)
+    .max(shared.INDENT_MAX)
+    .default(0)
+    .description(
+      "Conversation first-line indent in em (0 keeps DSH's own flush-left paragraphs)"
+    ),
+  [shared.LINE_BREAK_STRICT_FIELD]: z
+    .boolean()
+    .default(false)
+    .description(
+      "Strict CJK line breaking in the conversation: keeps punctuation and small kana off the start of a line"
+    ),
   [LIGATURES_FIELD]: z
     .number()
     .min(0)

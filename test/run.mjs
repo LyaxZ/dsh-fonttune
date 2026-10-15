@@ -3785,5 +3785,115 @@ await test("a measured family's alias leads its stacks in the built stylesheet",
 
 /* ------------------------------------------------------------------ */
 
+section("conversation text shaping (FT-090)");
+
+await test("each shaping axis writes its own rule on the conversation scope", () => {
+  const scope = '[class*="_markdown_" i]';
+  const letter = shared.buildFontCss({ letterSpacingDialog: 0.3 });
+  assert.ok(letter.includes(scope + "{letter-spacing:0.3px !important}"), "tracking rides the scope");
+  const tightened = shared.buildFontCss({ letterSpacingDialog: -0.15 });
+  assert.ok(tightened.includes("letter-spacing:-0.15px !important"), "negative tracking is written as it stands");
+  const word = shared.buildFontCss({ wordSpacingDialog: 1.2 });
+  assert.ok(word.includes("word-spacing:1.2px !important"), "the word gap rides the same scope");
+  const indent = shared.buildFontCss({ indentDialog: 2 });
+  assert.ok(indent.includes("text-indent:2em !important"), "the indent is an em value");
+  const strict = shared.buildFontCss({ lineBreakStrict: true });
+  assert.ok(strict.includes("line-break:strict !important"), "strict breaking is a switch, off writes nothing");
+});
+
+await test("the first-line indent reaches prose paragraphs only", () => {
+  const css = shared.buildFontCss({ indentDialog: 2 });
+  // Exactly two declarations carry the indent: the paragraph, and its descendants at zero.
+  // A bare scope-level indent is what put a heading 32px in, moved list text away from a
+  // marker that stayed put, and landed INSIDE inline-flex code chips — all measured on the
+  // page with the axis at 2em.
+  assert.deepEqual(
+    css.match(/text-indent:[^;}]*/g),
+    ["text-indent:2em !important", "text-indent:0 !important"],
+    "one indent for paragraphs, one reset for everything inside them"
+  );
+  // `weightScopeRule` wraps DECLARATIONS, so a nested `p{…}` is what these rules are: the
+  // emitted bytes read `[scope]{p{…}}`, which CSS Nesting resolves to `[scope] p` (the
+  // paragraph-gap rules have shipped in this shape since 0.6.0 and were measured working).
+  assert.ok(css.includes("{p{text-indent:2em !important}}"), "the paragraph carries it");
+  assert.ok(css.includes("{p *{text-indent:0 !important}}"), "a chip that is its own block still draws flush");
+  assert.equal(/\]\{text-indent/.test(css), false, "never bare on the scope itself");
+  assert.equal(shared.buildFontCss({ indentDialog: 0 }).includes("text-indent"), false, "neutral injects nothing");
+  // The em value is what makes the indent follow the reader's own font size.
+  assert.ok(shared.buildFontCss({ indentDialog: 1.5 }).includes("p{text-indent:1.5em !important}"));
+});
+
+await test("the paragraph axis is an offset over DSH's own 16px, both margins together", () => {
+  const opened = shared.buildFontCss({ paragraphSpacingDialog: 6 });
+  // Both margins move: adjacent siblings collapse to the LARGER one, so shifting only
+  // `margin-top` would silently ignore every negative offset.
+  assert.ok(opened.includes("p{margin-bottom:calc(16px + 6px) !important}"), "the bottom margin carries the gap");
+  assert.ok(opened.includes("p:not(:first-child){margin-top:calc(16px + 6px) !important}"), "and so does the top one");
+  const tightened = shared.buildFontCss({ paragraphSpacingDialog: -4 });
+  assert.ok(tightened.includes("p{margin-bottom:calc(16px - 4px) !important}"), "a negative offset subtracts");
+  assert.equal(shared.PARAGRAPH_BASELINE_PX, 16, "the baseline is the measured one, not a guess");
+});
+
+await test("every shaping axis clamps, and float noise never reaches the CSS", () => {
+  assert.equal(shared.normalizeConfig({ letterSpacingDialog: 99 }).letterSpacingDialog, shared.LETTER_SPACING_MAX);
+  assert.equal(shared.normalizeConfig({ letterSpacingDialog: -99 }).letterSpacingDialog, shared.LETTER_SPACING_MIN);
+  assert.equal(shared.normalizeConfig({ wordSpacingDialog: 99 }).wordSpacingDialog, shared.WORD_SPACING_MAX);
+  assert.equal(shared.normalizeConfig({ paragraphSpacingDialog: 99 }).paragraphSpacingDialog, shared.PARAGRAPH_SPACING_MAX);
+  assert.equal(shared.normalizeConfig({ paragraphSpacingDialog: -99 }).paragraphSpacingDialog, shared.PARAGRAPH_SPACING_MIN);
+  assert.equal(shared.normalizeConfig({ indentDialog: 99 }).indentDialog, shared.INDENT_MAX);
+  assert.equal(shared.normalizeConfig({ indentDialog: -99 }).indentDialog, shared.INDENT_MIN);
+  assert.equal(shared.normalizeConfig({ letterSpacingDialog: "junk" }).letterSpacingDialog, 0, "junk is neutral");
+  // 0.1 + 0.2 is 0.30000000000000004 in binary floating point; a notch-clicking reader
+  // would eventually see that string in the stylesheet.
+  const noisy = shared.buildFontCss({ letterSpacingDialog: 0.1 + 0.2 });
+  assert.ok(noisy.includes("letter-spacing:0.3px !important"), "the value is rounded before it is written");
+  assert.equal(noisy.includes("0.30000000000000004"), false, "no floating-point tail");
+});
+
+await test("a shaping axis at its neutral point injects nothing at all", () => {
+  const neutral = shared.buildFontCss({
+    letterSpacingDialog: 0,
+    wordSpacingDialog: 0,
+    paragraphSpacingDialog: 0,
+    indentDialog: 0,
+    lineBreakStrict: false,
+  });
+  assert.equal(neutral, "", "no rule, no bytes");
+  assert.equal(
+    shared.isDormant({
+      letterSpacingDialog: 0,
+      wordSpacingDialog: 0,
+      paragraphSpacingDialog: 0,
+      indentDialog: 0,
+      lineBreakStrict: false,
+    }),
+    true,
+    "and a configuration carrying only neutral values stays dormant"
+  );
+  // The other way round: one axis alone is enough to wake the stylesheet up.
+  assert.equal(shared.isDormant({ indentDialog: 2 }), false, "a real indent is not dormant");
+  assert.equal(shared.isDormant({ lineBreakStrict: true }), false, "nor is the breaking switch");
+});
+
+await test("the shaping axes are preset material, so a setup can carry them", () => {
+  for (const field of [
+    shared.LETTER_SPACING_DIALOG_FIELD,
+    shared.WORD_SPACING_DIALOG_FIELD,
+    shared.PARAGRAPH_SPACING_DIALOG_FIELD,
+    shared.INDENT_DIALOG_FIELD,
+    shared.LINE_BREAK_STRICT_FIELD,
+  ]) {
+    assert.ok(shared.VALUE_FIELDS.includes(field), `${field} belongs to a preset snapshot`);
+    assert.ok(shared.DURABLE_FIELDS.includes(field), `${field} belongs in the document`);
+  }
+  const preset = shared.normalizePresets(
+    JSON.stringify([{ name: "reading", values: { indentDialog: 2, paragraphSpacingDialog: 8 } }])
+  );
+  assert.ok(JSON.stringify(preset).includes("indentDialog"), "a preset keeps the new fields");
+  assert.ok(JSON.stringify(preset).includes("paragraphSpacingDialog"), "and the paragraph gap too");
+});
+
+/* ------------------------------------------------------------------ */
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
