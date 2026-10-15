@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Font tune (dsh-fonttune)",
-    "description": "Interface and conversation fonts, a size, a weight and a line height for each, code extras and presets"
+    "description": "Interface and conversation fonts, size, weight and line height, CJK type shaping (tracking, paragraph gaps, first-line indent), code extras and presets"
   }
 }
