@@ -48,6 +48,23 @@ var WEIGHT_DIALOG_FIELD = shared.WEIGHT_DIALOG_FIELD;
 var CODE_WEIGHT_FIELD = shared.CODE_WEIGHT_FIELD;
 var LINE_HEIGHT_DIALOG_FIELD = shared.LINE_HEIGHT_DIALOG_FIELD;
 var CODE_LINE_HEIGHT_FIELD = shared.CODE_LINE_HEIGHT_FIELD;
+var LETTER_SPACING_DIALOG_FIELD = shared.LETTER_SPACING_DIALOG_FIELD;
+var WORD_SPACING_DIALOG_FIELD = shared.WORD_SPACING_DIALOG_FIELD;
+var PARAGRAPH_SPACING_DIALOG_FIELD = shared.PARAGRAPH_SPACING_DIALOG_FIELD;
+var INDENT_DIALOG_FIELD = shared.INDENT_DIALOG_FIELD;
+var LINE_BREAK_STRICT_FIELD = shared.LINE_BREAK_STRICT_FIELD;
+var LETTER_SPACING_MIN = shared.LETTER_SPACING_MIN;
+var LETTER_SPACING_MAX = shared.LETTER_SPACING_MAX;
+var LETTER_SPACING_STEP = shared.LETTER_SPACING_STEP;
+var WORD_SPACING_MIN = shared.WORD_SPACING_MIN;
+var WORD_SPACING_MAX = shared.WORD_SPACING_MAX;
+var WORD_SPACING_STEP = shared.WORD_SPACING_STEP;
+var PARAGRAPH_SPACING_MIN = shared.PARAGRAPH_SPACING_MIN;
+var PARAGRAPH_SPACING_MAX = shared.PARAGRAPH_SPACING_MAX;
+var PARAGRAPH_SPACING_STEP = shared.PARAGRAPH_SPACING_STEP;
+var INDENT_MIN = shared.INDENT_MIN;
+var INDENT_MAX = shared.INDENT_MAX;
+var INDENT_STEP = shared.INDENT_STEP;
 var LIGATURES_FIELD = shared.LIGATURES_FIELD;
 var FEATURES_FIELD = shared.FEATURES_FIELD;
 var NO_SYNTHETIC_ITALIC_FIELD = shared.NO_SYNTHETIC_ITALIC_FIELD;
@@ -250,7 +267,7 @@ var DICTS = {
   en: {
     "card.title": "Font tune",
     "card.description":
-      "Interface and conversation fonts, a size, a weight and a line height for each, code extras and presets",
+      "Interface and conversation fonts, size, weight and line height, CJK type shaping, code extras and presets",
     "card.expand": "Expand",
     "card.collapse": "Collapse",
     "card.resetAll": "Reset all",
@@ -329,6 +346,37 @@ var DICTS = {
       "Adds {offset} to code line heights only; 0 keeps DSH's own line heights.",
     "line.unit": "%",
 
+    "shape.letterLabel": "Letter spacing",
+    "shape.letterHint":
+      "Adds {offset} to the conversation's own letter spacing; 0 keeps DSH's own tracking. Positive values open the text up, negative values tighten it.",
+    "shape.wordLabel": "Word spacing",
+    "shape.wordHint":
+      "Adds {offset} to the gaps between words in the conversation; 0 keeps DSH's own word gaps. Only Latin text has word gaps to widen.",
+    "shape.paragraphLabel": "Paragraph spacing",
+    "shape.paragraphHint":
+      "Adds {offset} to the space between conversation paragraphs; 0 keeps DSH's own paragraph spacing. Headings keep their own spacing either way.",
+    "shape.indentLabel": "First-line indent",
+    "shape.indentHint":
+      "Indents the first line of each conversation paragraph by {offset}; 0 leaves paragraphs flush left. Paragraphs only — headings, lists and code keep their own alignment.",
+    "shape.breakLabel": "Strict line breaking",
+    "shape.breakHint":
+      "Keeps Chinese punctuation and small kana from starting a line when the text wraps.",
+    "shape.off": "Off",
+    "shape.on": "On",
+
+    "status.title": "In force",
+    "status.dialog": "Conversation",
+    "status.ui": "Interface",
+    "status.code": "Code",
+    "status.weight": "Weight slider",
+    "status.steps": "{count} steps",
+    "status.continuous": "fine",
+    "status.hostDefault": "DSH's own",
+    "status.followDialog": "follows the conversation",
+    "status.usesHost": "not set here: DSH's own font",
+    "status.usesInterface": "not set on its own: uses the interface font",
+    "status.uiFollowsNote": "the interface uses the conversation's font",
+
     "lig.label": "Code ligatures",
     "lig.hint":
       "Programming ligatures render multiple characters as one glyph (=> as an arrow, != as ≠). Browsers enable them by default.",
@@ -396,6 +444,7 @@ var DICTS = {
     "preview.monoCaption": "Code",
     "preview.sample":
       "The quick brown fox jumps over the lazy dog — 中文排版预览，标点符号，数字 0123456789。",
+    "preview.sampleSecond": "第二段：段距与首行缩进在这里显现出来，正文其余部分不变。",
     "preview.code": "const greet = (name) => `hello ${name}`; // => != >= -> 代码预览",
 
     "panel.dot": "Tuning panel",
@@ -414,7 +463,7 @@ var DICTS = {
   zh: {
     "card.title": "字体增强",
     "card.description":
-      "界面与对话字体、各自的字号/字重/行高，代码增强与预设方案",
+      "界面与对话字体、字号/字重/行高，字距/段距/首行缩进等中文排印，代码增强与预设方案",
     "card.expand": "展开",
     "card.collapse": "收起",
     "card.resetAll": "全部重置",
@@ -489,6 +538,36 @@ var DICTS = {
     "line.codeHint": "只给代码行高加 {offset}px；0 表示保持原样。",
     "line.unit": "%",
 
+    "shape.letterLabel": "字距",
+    "shape.letterHint":
+      "给对话自身的字距加 {offset}；0 表示保持 DSH 原样。正值更疏、负值更紧。",
+    "shape.wordLabel": "词距",
+    "shape.wordHint":
+      "给对话里词与词之间的间隔加 {offset}；0 表示保持 DSH 原样。只有西文有词间空隙可调。",
+    "shape.paragraphLabel": "段距",
+    "shape.paragraphHint":
+      "给对话段落之间的间隔加 {offset}；0 表示保持 DSH 原样。标题自身的间距不受影响。",
+    "shape.indentLabel": "首行缩进",
+    "shape.indentHint":
+      "把对话每段的第一行缩进 {offset}；0 表示与 DSH 一样顶格。只缩段落——标题、列表与代码保持原样对齐。",
+    "shape.breakLabel": "严格避头尾",
+    "shape.breakHint": "换行时不让中文标点、小假名等出现在行首。",
+    "shape.off": "关闭",
+    "shape.on": "开启",
+
+    "status.title": "当前生效",
+    "status.dialog": "对话",
+    "status.ui": "界面",
+    "status.code": "代码",
+    "status.weight": "字重滑块",
+    "status.steps": "{count} 档",
+    "status.continuous": "细档",
+    "status.hostDefault": "DSH 自带",
+    "status.followDialog": "跟随对话",
+    "status.usesHost": "本插件未设置，用 DSH 自带的字体",
+    "status.usesInterface": "未单独设置，沿用界面字体",
+    "status.uiFollowsNote": "界面沿用对话的字体",
+
     "lig.label": "代码连字",
     "lig.hint":
       "把多个字符连成一个字形（如 => 变箭头、!= 变 ≠）。浏览器默认就是开启的。",
@@ -555,6 +634,8 @@ var DICTS = {
     "preview.monoCaption": "代码",
     "preview.sample":
       "The quick brown fox jumps over the lazy dog —— 中文排版预览，标点符号，数字 0123456789。",
+    "preview.sampleSecond":
+      "Second paragraph: the paragraph gap and the first-line indent show up here, and nothing else in the text changes.",
     "preview.code": "const greet = (name) => `hello ${name}`; // => != >= -> 代码预览",
 
     "panel.dot": "调参面板",
@@ -791,7 +872,11 @@ var CARD_CSS = [
   // IS the card's corner: the clip, the scale and the fade still ride the card
   // (and every measurement still reads it), while the anchored edge, the size
   // and the shadow belong to the wrapper around it.
-  ".dfp-floatCard{position:relative;box-sizing:border-box;width:100%;height:100%;max-height:calc(100vh - 24px);overflow:hidden;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l3);border-radius:16px;padding:10px 12px 12px;pointer-events:auto;clip-path:inset(0px 0px 0px 0px round 16px);transition:clip-path .28s cubic-bezier(.22,1,.28,1),opacity .28s cubic-bezier(.22,1,.28,1),transform .28s cubic-bezier(.22,1,.28,1)}",
+  ".dfp-floatCard{position:relative;box-sizing:border-box;display:flex;flex-direction:column;width:100%;height:100%;max-height:calc(100vh - 24px);overflow:hidden;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l3);border-radius:16px;padding:10px 12px 12px;pointer-events:auto;clip-path:inset(0px 0px 0px 0px round 16px);transition:clip-path .28s cubic-bezier(.22,1,.28,1),opacity .28s cubic-bezier(.22,1,.28,1),transform .28s cubic-bezier(.22,1,.28,1)}",
+  // The body owns the scrolling: seven sliders and the status block do not fit a panel
+  // that was resized to its minimum, and a clipped slider is worse than a scrollbar.
+  ".dfp-floatHead{flex:0 0 auto}",
+  ".dfp-floatBody{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column}",
   // the enter frame: the card is clipped to the dot's own rectangle, a hair
   // smaller and dimmer, and the transition (started by dropping this class two
   // frames later) carries all three home at once. Once it has arrived the card
@@ -847,6 +932,16 @@ var CARD_CSS = [
   // the write-failure line takes no room at all while it carries no message
   ".dfp-floatStatus{margin-top:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}",
   ".dfp-floatStatus:empty{display:none}",
+  ".dfp-floatInfo{margin-top:2px;padding-top:6px;border-top:.5px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}",
+  ".dfp-floatInfoHead{display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;margin:0;padding:2px 0;border:0;background:none;color:var(--dsw-alias-label-tertiary);font:inherit;cursor:pointer;text-align:left}",
+  ".dfp-floatInfoHead:hover .dfp-chevron,.dfp-floatInfoHead:hover .dfp-floatInfoTitle{color:var(--dsw-alias-label-secondary)}",
+  ".dfp-floatInfoClip{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .24s cubic-bezier(.22,1,.28,1),opacity .24s cubic-bezier(.22,1,.28,1)}",
+  ".dfp-floatInfoOpen .dfp-floatInfoClip{grid-template-rows:1fr;opacity:1}",
+  ".dfp-floatInfoLines{min-height:0;overflow:hidden}",
+  ".dfp-floatInfoLine{display:flex;align-items:baseline;gap:6px;margin-top:2px}",
+  ".dfp-floatInfoKey{flex:0 0 auto;opacity:.75}",
+  ".dfp-floatInfoValue{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}",
+  ".dfp-floatInfoFlag{flex:0 0 auto;padding:0 6px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}",
 ].join("");
 
 /**
@@ -1653,7 +1748,7 @@ function notifyPromoted() {
  * The client script is cached, and "I refreshed" has been wrong before: this is what
  * a live page reports about itself (the panel host carries it as `data-dfp-build`).
  */
-var CLIENT_BUILD = "2026-10-12-3";
+var CLIENT_BUILD = "2026-10-15-1";
 
 /** The families this page promoted to continuous weight, in map order. */
 function continuousNames() {
@@ -1895,6 +1990,27 @@ function liveCodeFamily() {
   if (typeof document === "undefined") return "";
   try {
     var sample = document.querySelector("pre, code, kbd, samp");
+    if (sample === null) return liveFamily();
+    return document.defaultView.getComputedStyle(sample).fontFamily || liveFamily();
+  } catch (error) {
+    return "";
+  }
+}
+
+/**
+ * The family the conversation renders with when the conversation axis sets none.
+ *
+ * Read from a real conversation surface rather than from `body`: the two can differ (the
+ * interface's family is its own axis), and a panel that named the body's family while the
+ * conversation drew with something else would be reporting the wrong surface.
+ * @returns {string} the computed family, or "" when unreadable.
+ */
+function liveDialogFamily() {
+  if (typeof document === "undefined") return "";
+  try {
+    // `dialogSelector()` is what the stylesheet itself scopes the conversation with, so
+    // the sample is the same kind of element the rules land on.
+    var sample = document.querySelector(shared.dialogSelector(null));
     if (sample === null) return liveFamily();
     return document.defaultView.getComputedStyle(sample).fontFamily || liveFamily();
   } catch (error) {
@@ -3991,6 +4107,102 @@ function FontCard(props) {
     );
   };
 
+  // ---- conversation text shaping: tracking, word gap, paragraph gap, indent ----
+  //
+  // Four axes that move the shape of the conversation text rather than its face. Every
+  // value here is an OFFSET over what DSH already ships, measured on the conversation
+  // scope (2026-10-13): tracking `normal`, word gap `0px`, paragraph margins 16px, no
+  // indent. 0 therefore means "leave DSH alone" and emits no rule at all, exactly like
+  // the size and weight offsets.
+  var spacingField = function (props) {
+    var value = editing[props.field];
+    var neutral = props.neutral === undefined ? 0 : props.neutral;
+    var within = value !== neutral;
+    var shown = function (number) {
+      var text = props.decimals === 2 ? number.toFixed(2) : String(number);
+      return (number > 0 ? "+" : "") + text + props.unit;
+    };
+    return h(
+      FieldShell,
+      {
+        t: t,
+        label: t(props.labelKey),
+        // The hint names the value the reader is looking at: without the parameter the
+        // literal `{offset}` ships to the screen (caught by a screenshot, not by a test).
+        hint: t(props.hintKey, { offset: shown(value) }),
+        overridden: overridden(props.field) && within,
+        disabled: !writable,
+        onReset: function () {
+          resetField(props.field);
+        },
+      },
+      h(NumberSlider, {
+        min: props.min,
+        max: props.max,
+        step: props.step,
+        value: value,
+        disabled: !writable,
+        label: t(props.labelKey),
+        revertedText: t("write.reverted"),
+        refusedToken: refused[props.field] || 0,
+        readout: shown(value),
+        minLabel: shown(props.min),
+        maxLabel: shown(props.max),
+        pendingText: shown,
+        onChange: function (next) {
+          setField(props.field, next);
+        },
+      })
+    );
+  };
+
+  /**
+   * A switch for a property DSH itself leaves alone, so "off" writes nothing.
+   * @param {{field: string, labelKey: string, hintKey: string}} props - the axis.
+   * @returns {object} the row.
+   */
+  var switchField = function (props) {
+    var value = editing[props.field] === true;
+    return h(
+      FieldShell,
+      {
+        t: t,
+        label: t(props.labelKey),
+        hint: t(props.hintKey),
+        overridden: overridden(props.field) && value,
+        disabled: !writable,
+        onReset: function () {
+          resetField(props.field);
+        },
+        inline: true,
+      },
+      h(Segmented, {
+        label: t(props.labelKey),
+        value: value ? 1 : 0,
+        options: [
+          { value: 0, label: t("shape.off") },
+          { value: 1, label: t("shape.on") },
+        ],
+        onChange: function (next) {
+          setField(props.field, next === 1);
+        },
+      })
+    );
+  };
+
+  /**
+   * Strict CJK line breaking, as a switch: DSH leaves `line-break` at `auto`, so
+   * "off" writes nothing and the reader keeps DSH's own breaking.
+   * @returns {object} the row.
+   */
+  var lineBreakField = function () {
+    return switchField({
+      field: LINE_BREAK_STRICT_FIELD,
+      labelKey: "shape.breakLabel",
+      hintKey: "shape.breakHint",
+    });
+  };
+
   // ---- ligature segmented control ----
   var ligatureField = function () {
     var value = editing[LIGATURES_FIELD];
@@ -4424,6 +4636,29 @@ function FontCard(props) {
     // conversation does instead of one flat weight.
     previewDialogStyle["--dfp-wdelta"] = editing[WEIGHT_DIALOG_FIELD];
   }
+  // The shaping axes ride the preview inline, for the same reason the weight offset
+  // does: the reader has to see the same change here that the conversation gets. The
+  // paragraph gap needs two paragraphs to be visible at all, so the preview renders a
+  // second, shorter one — the pair is what makes the axis honest.
+  if (editing[LETTER_SPACING_DIALOG_FIELD] !== 0) {
+    previewDialogStyle.letterSpacing = String(editing[LETTER_SPACING_DIALOG_FIELD]) + "px";
+  }
+  if (editing[WORD_SPACING_DIALOG_FIELD] !== 0) {
+    previewDialogStyle.wordSpacing = String(editing[WORD_SPACING_DIALOG_FIELD]) + "px";
+  }
+  if (editing[INDENT_DIALOG_FIELD] !== 0) {
+    previewDialogStyle.textIndent = String(editing[INDENT_DIALOG_FIELD]) + "em";
+  }
+  if (editing[LINE_BREAK_STRICT_FIELD] === true) {
+    previewDialogStyle.lineBreak = "strict";
+  }
+  var previewDialogGap = editing[PARAGRAPH_SPACING_DIALOG_FIELD];
+  // The preview paragraph keeps DSH's own 16px gap as its baseline, exactly like the
+  // conversation rule does, so a "+6px" reads as the same change in both places.
+  var previewSecondStyle = { marginTop: String(shared.PARAGRAPH_BASELINE_PX + previewDialogGap) + "px" };
+  if (editing[INDENT_DIALOG_FIELD] !== 0) {
+    previewSecondStyle.textIndent = String(editing[INDENT_DIALOG_FIELD]) + "em";
+  }
   var previewCodeStyle = {};
   if (editing[MONO_FIELD] !== "") {
     previewCodeStyle.fontFamily = shared.withVariableFaces(formatStack(parseStack(editing[MONO_FIELD])), variableFamilies);
@@ -4675,6 +4910,49 @@ function FontCard(props) {
               value: editing[WEIGHT_DIALOG_FIELD],
               stack: dialogStack,
             }),
+            // Text shaping: the four spacing axes, then the line-breaking switch. Each
+            // one leaves DSH's own value alone at its neutral position.
+            lineBreakField(),
+            spacingField({
+              field: LETTER_SPACING_DIALOG_FIELD,
+              labelKey: "shape.letterLabel",
+              hintKey: "shape.letterHint",
+              min: LETTER_SPACING_MIN,
+              max: LETTER_SPACING_MAX,
+              step: LETTER_SPACING_STEP,
+              unit: "px",
+              decimals: 2,
+            }),
+            spacingField({
+              field: WORD_SPACING_DIALOG_FIELD,
+              labelKey: "shape.wordLabel",
+              hintKey: "shape.wordHint",
+              min: WORD_SPACING_MIN,
+              max: WORD_SPACING_MAX,
+              step: WORD_SPACING_STEP,
+              unit: "px",
+              decimals: 2,
+            }),
+            spacingField({
+              field: PARAGRAPH_SPACING_DIALOG_FIELD,
+              labelKey: "shape.paragraphLabel",
+              hintKey: "shape.paragraphHint",
+              min: PARAGRAPH_SPACING_MIN,
+              max: PARAGRAPH_SPACING_MAX,
+              step: PARAGRAPH_SPACING_STEP,
+              unit: "px",
+              decimals: 2,
+            }),
+            spacingField({
+              field: INDENT_DIALOG_FIELD,
+              labelKey: "shape.indentLabel",
+              hintKey: "shape.indentHint",
+              min: INDENT_MIN,
+              max: INDENT_MAX,
+              step: INDENT_STEP,
+              unit: "em",
+              decimals: 2,
+            }),
             h(
               "div",
               { className: "dfp-previewBox" },
@@ -4682,7 +4960,8 @@ function FontCard(props) {
               h(
                 "div",
                 { className: "dfp-previewText dfp-previewDialog", style: previewDialogStyle },
-                t("preview.sample")
+                h("p", { style: { margin: "0" } }, t("preview.sample")),
+                h("p", { style: previewSecondStyle }, t("preview.sampleSecond"))
               )
             )
           ),
@@ -5118,6 +5397,10 @@ function mountFloatPanel(scope, t, hostCtx) {
   var corner = null;
   // The live card size while resizing; otherwise the document's size rules.
   var liveSize = null;
+  // Whether the panel's "in force" block is unfolded. It is view state, not a setting:
+  // it lives for the session and is deliberately not written to the document, because a
+  // fold the reader chose is not a configuration anyone should have to sync.
+  var infoOpen = true;
   // The document value `pos` was last reconciled with: a snapshot carrying
   // anything else is an edit from elsewhere and is adopted. Our own writes
   // set `pos` first, so their echo always matches and is a no-op.
@@ -6502,6 +6785,128 @@ function mountFloatPanel(scope, t, hostCtx) {
   };
 
   /**
+   * The panel's "in force right now" block: what is actually on the page.
+   *
+   * Three rounds of "it did not take effect" reports were settled by reading the panel's
+   * own attributes in DevTools, which is not a thing a reader should have to do. This
+   * prints the same facts where the reader already is, and it prints the FAMILY each
+   * surface renders with rather than a relationship: an unset conversation shows the name
+   * it actually uses plus "DSH default", and the only place the word "follows" appears is
+   * the interface following the conversation, which is the one relationship the plugin
+   * ships by default.
+   *
+   * The block folds away, because a panel that is being used to drag a slider does not
+   * need four lines of prose under it.
+   * @param {HTMLElement} body - the card body.
+   * @param {object} state - the resolved families, the notch count and the fold state.
+   * @returns {HTMLElement} the block.
+   */
+  var infoBlock = function (body, state) {
+    var block = el("div", "dfp-floatInfo" + (state.open ? " dfp-floatInfoOpen" : ""));
+    var head = el("button", "dfp-floatInfoHead");
+    head.type = "button";
+    head.setAttribute("aria-expanded", state.open ? "true" : "false");
+    head.appendChild(el("span", "dfp-floatInfoTitle", t("status.title")));
+    // The card's own chevron, so the two surfaces fold the same way round: it starts
+    // pointing down (there is something below) and turns over when the block is open.
+    // Built with the SVG helper, not with `h`: the panel is plain DOM, and a React
+    // element appended to it is not a node at all.
+    var glyph = svgEl("svg", {
+      class: "dfp-chevron" + (state.open ? " dfp-chevronOpen" : ""),
+      viewBox: "0 0 14 14",
+      width: "14",
+      height: "14",
+      fill: "none",
+      "aria-hidden": "true",
+      focusable: "false",
+    });
+    glyph.appendChild(svgEl("path", { d: CHEVRON_PATH, fill: "currentColor" }));
+    head.appendChild(glyph);
+    head.addEventListener("click", function () {
+      infoOpen = !infoOpen;
+      block.classList.toggle("dfp-floatInfoOpen", infoOpen);
+      head.setAttribute("aria-expanded", infoOpen ? "true" : "false");
+      glyph.setAttribute("class", "dfp-chevron" + (infoOpen ? " dfp-chevronOpen" : ""));
+    });
+    block.appendChild(head);
+    // The grid-row transition needs a single child that clips: 0fr cannot be animated on
+    // the row container itself.
+    var clip = el("div", "dfp-floatInfoClip");
+    var lines = el("div", "dfp-floatInfoLines");
+    /**
+     * One fact: a key, the family it resolves to, and — only when the family is NOT this
+     * surface's own setting — where it came from. The reason lives in the tooltip: the
+     * visible line stays short, and "why" is one hover away.
+     * @param {string} key - the localized label.
+     * @param {string} value - the family name.
+     * @param {string} tag - the provenance tag, or "" for none.
+     * @param {string} note - the tooltip sentence, or "" for none.
+     * @returns {HTMLElement} the line.
+     */
+    var line = function (key, value, tag, note) {
+      var row = el("div", "dfp-floatInfoLine");
+      row.appendChild(el("span", "dfp-floatInfoKey", key));
+      var shown = el("span", "dfp-floatInfoValue", value);
+      if (note !== "") shown.title = note;
+      row.appendChild(shown);
+      if (tag !== "") row.appendChild(el("span", "dfp-floatInfoFlag", tag));
+      return row;
+    };
+    var hostDefault = t("status.hostDefault");
+    var usesHost = t("status.usesHost");
+    // "Set by this plugin" means the surface's own field OR — for the conversation — the
+    // interface font it takes when its own field is empty (`expandFollow`). Naming a family
+    // the reader chose "DSH's own" was simply wrong: measured on the reporting machine the
+    // conversation field is empty, the interface font is "Noto Serif SC", and the
+    // conversation really does draw with it. The flags come in through `state` because
+    // `config` belongs to the caller.
+    lines.appendChild(
+      line(
+        t("status.dialog"),
+        state.dialog.family,
+        state.dialog.own ? "" : hostDefault,
+        // The note follows where the family CAME FROM, not whether it is the reader's:
+        // a conversation field left empty while the interface font is set is still the
+        // reader's own font, and the tooltip is the only place that says so.
+        state.dialog.fromInterface
+          ? t("status.usesInterface")
+          : state.dialog.own
+            ? ""
+            : usesHost
+      )
+    );
+    lines.appendChild(
+      line(
+        t("status.ui"),
+        state.ui.family,
+        state.ui.follows ? t("status.followDialog") : state.ui.own ? "" : hostDefault,
+        state.ui.follows ? t("status.uiFollowsNote") : state.ui.own ? "" : usesHost
+      )
+    );
+    lines.appendChild(
+      line(
+        t("status.code"),
+        state.code.family,
+        state.code.own ? "" : hostDefault,
+        state.code.own ? "" : usesHost
+      )
+    );
+    if (state.notches > 0) {
+      var weight = line(
+        t("status.weight"),
+        t("status.steps", { count: state.notches }),
+        state.continuous === true ? t("status.continuous") : "",
+        ""
+      );
+      lines.appendChild(weight);
+    }
+    clip.appendChild(lines);
+    block.appendChild(clip);
+    body.appendChild(block);
+    return block;
+  };
+
+  /**
    * Start a dot drag from a press on the dot or the card head.
    *
    * A press below the click threshold is a click, not a drag: the pointer
@@ -6873,9 +7278,16 @@ function mountFloatPanel(scope, t, hostCtx) {
       // a card sized on a big screen must still fit a small one. The card fills
       // the wrapper, so the wrapper is the box that gets the size.
       shadow.style.width = "min(" + sized.w + "px,calc(100vw - 32px))";
-      if (sized.h > 0) {
-        shadow.style.height = "min(" + sized.h + "px,calc(100vh - 24px))";
-      }
+      // The stored HEIGHT is a cap on the card, not a fixed box for it. As a fixed box it
+      // left a hole wherever the content had been: folding the panel's own block kept the
+      // card at its stored height with 260px of nothing under the sliders (measured). As a
+      // cap the panel is exactly as tall as its content up to that height, so folding gives
+      // the space back — while a panel dragged shorter than its content still scrolls,
+      // because the card is a flex column whose body owns the overflow. The wrapper is left
+      // to size itself, except mid-drag, where the pointer's own height is in charge.
+      card.style.maxHeight =
+        sized.h > 0 ? "min(" + sized.h + "px,calc(100vh - 24px))" : "";
+      if (resize === null) shadow.style.height = "";
     }
     var head = el("div", "dfp-floatHead");
     // Plain padding on one side only: the two round buttons are out of flow in
@@ -6935,9 +7347,15 @@ function mountFloatPanel(scope, t, hostCtx) {
       startDrag(event, head, state.writable);
     });
 
+    // Every axis lives here, in the same order the card uses, inside a body that
+    // scrolls when the panel has been resized smaller than its content: seven sliders
+    // and a status block do not fit a 160px-tall panel, and a clipped slider is worse
+    // than a scrollbar.
+    var body = el("div", "dfp-floatBody");
+
     var size = config[SIZE_DIALOG_FIELD];
     sliderRow(
-      card,
+      body,
       t("size.dialogLabel"),
       function (next) {
         return (next > 0 ? "+" + next : String(next)) + " " + t("size.unit");
@@ -6953,7 +7371,7 @@ function mountFloatPanel(scope, t, hostCtx) {
 
     var line = config[LINE_HEIGHT_DIALOG_FIELD];
     sliderRow(
-      card,
+      body,
       t("line.dialogLabel"),
       function (next) {
         return String(next) + " " + t("line.unit");
@@ -7017,10 +7435,107 @@ function mountFloatPanel(scope, t, hostCtx) {
         else commit({ weightDialog: count * shape.unit });
       });
       row.appendChild(input);
-      card.appendChild(row);
+      body.appendChild(row);
     })();
 
-    card.appendChild(el("div", "dfp-floatStatus", ""));
+    // Every one of the four shaping axes lives here too, in the card's own order, so the
+    // panel can tune the whole conversation without the settings page.
+    sliderRow(
+      body,
+      t("shape.letterLabel"),
+      function (next) {
+        return (next > 0 ? "+" : "") + Number(next).toFixed(2) + "px";
+      },
+      LETTER_SPACING_MIN,
+      LETTER_SPACING_MAX,
+      LETTER_SPACING_STEP,
+      config[LETTER_SPACING_DIALOG_FIELD],
+      function (next) {
+        commit({ letterSpacingDialog: next });
+      }
+    );
+    sliderRow(
+      body,
+      t("shape.wordLabel"),
+      function (next) {
+        return (next > 0 ? "+" : "") + Number(next).toFixed(2) + "px";
+      },
+      WORD_SPACING_MIN,
+      WORD_SPACING_MAX,
+      WORD_SPACING_STEP,
+      config[WORD_SPACING_DIALOG_FIELD],
+      function (next) {
+        commit({ wordSpacingDialog: next });
+      }
+    );
+    sliderRow(
+      body,
+      t("shape.paragraphLabel"),
+      function (next) {
+        return (next > 0 ? "+" : "") + Number(next).toFixed(2) + "px";
+      },
+      PARAGRAPH_SPACING_MIN,
+      PARAGRAPH_SPACING_MAX,
+      PARAGRAPH_SPACING_STEP,
+      config[PARAGRAPH_SPACING_DIALOG_FIELD],
+      function (next) {
+        commit({ paragraphSpacingDialog: next });
+      }
+    );
+    sliderRow(
+      body,
+      t("shape.indentLabel"),
+      function (next) {
+        return Number(next).toFixed(2) + "em";
+      },
+      INDENT_MIN,
+      INDENT_MAX,
+      INDENT_STEP,
+      config[INDENT_DIALOG_FIELD],
+      function (next) {
+        commit({ indentDialog: next });
+      }
+    );
+
+    // What is actually in force, in the panel itself: the three families the page is
+    // really rendering with, then the weight control's shape. An axis that sets no family
+    // reports the one the page hands that surface — measured from the surface itself, not
+    // from `body`, because the two really can differ (the interface is its own axis).
+    var resolved = weightAxisStacks(config);
+    var dialogConfigured = config[STACK_DIALOG_FIELD] !== "";
+    var dialogFamily = primaryFamilyOf(
+      dialogConfigured ? resolved.dialog : liveDialogFamily()
+    );
+    var uiConfigured = config[SANS_FIELD] !== "";
+    var uiFollows = config[UI_FOLLOWS_FIELD] !== false;
+    infoBlock(body, {
+      open: infoOpen,
+      dialog: {
+        family: dialogFamily,
+        // Own: the conversation's own field. From the interface: its field is empty and
+        // the interface font is the one filling it in — still the reader's own choice.
+        own: dialogConfigured || uiConfigured,
+        fromInterface: !dialogConfigured && uiConfigured,
+      },
+      ui: {
+        // Following the conversation means showing the conversation's family: the same
+        // fallback the stylesheet resolves, so the two lines can never disagree.
+        family: uiFollows
+          ? dialogFamily
+          : primaryFamilyOf(uiConfigured ? resolved.ui : liveFamily()),
+        follows: uiFollows,
+        own: uiConfigured,
+      },
+      code: {
+        family: primaryFamilyOf(
+          config[MONO_FIELD] !== "" ? resolved.code : liveCodeFamily()
+        ),
+        own: config[MONO_FIELD] !== "",
+      },
+      continuous: continuousNames().indexOf(dialogFamily) >= 0,
+      notches: shape.max - shape.min + 1,
+    });
+    card.appendChild(body);
     // Edge resize handles: right, bottom and the corner. The card follows the
     // pointer live; one size write lands on release (see `startResize`).
     (function () {

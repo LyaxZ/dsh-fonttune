@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Prove the committed `lib/` artifacts are exactly what the current `src/`
  * produces.
  *
@@ -337,12 +337,15 @@ check(
   "follow the system / sharp / smooth"
 );
 // Compact choices sit ON their label row (pushed right), never under the hint:
-// the toggle rows must read as one component family with the synthesis row.
+// the toggle rows must read as one component family with the synthesis row. There are
+// four of them now (synthetic italic, synthetic bold, smoothing, strict line breaking),
+// and the count is the point: a new segmented row that forgets `inline` would drop back
+// under its hint.
 check(
   "compact choices sit on their label row, never under the hint",
-  (expected["lib/client.js"].match(/inline: true,/g) || []).length === 3 &&
+  (expected["lib/client.js"].match(/inline: true,/g) || []).length === 4 &&
     expected["lib/client.js"].includes('h("div", { className: "dfp-inline" }, props.children)'),
-  "the three segmented rows share the label-row layout"
+  "the four segmented rows share the label-row layout"
 );
 // The dot's first corner is a decision: the region's bottom-right, never the
 // accident of wherever the page flow placed the unpositioned host.
@@ -972,6 +975,117 @@ check(
     expected["lib/client.js"].includes("if (!Object.prototype.hasOwnProperty.call(out, name)) out[name] = local[name];") &&
     expected["lib/shared.cjs"].includes("function isRootScopeSelector(selector)"),
   "a class-scoped token is that panel's local choice, and only ever a fallback"
+);
+// The shaping axes (tracking, word gap, paragraph gap, indent) and the breaking switch.
+// Each one is a FIELD wired to a CONTROL: a row that renders but writes another field, or
+// a switch wired to a slider, is invisible in a CSS-only test and obvious to a reader.
+check(
+  "every shaping axis has a card control wired to its own field",
+  expected["lib/client.js"].includes('field: LETTER_SPACING_DIALOG_FIELD,\n              labelKey: "shape.letterLabel"') &&
+    expected["lib/client.js"].includes('field: WORD_SPACING_DIALOG_FIELD,\n              labelKey: "shape.wordLabel"') &&
+    expected["lib/client.js"].includes('field: PARAGRAPH_SPACING_DIALOG_FIELD,\n              labelKey: "shape.paragraphLabel"') &&
+    expected["lib/client.js"].includes('field: INDENT_DIALOG_FIELD,\n              labelKey: "shape.indentLabel"') &&
+    expected["lib/client.js"].includes('field: LINE_BREAK_STRICT_FIELD,\n      labelKey: "shape.breakLabel"'),
+  "four sliders and a switch, one field each"
+);
+// The panel carries the two a reader reaches for most often, plus the readout. The card
+// and the panel read the same fields, so a value set in one shows in the other (verified
+// live: the panel read back 字距 +0.60px and 首行缩进 1.50em straight after the card
+// wrote them).
+check(
+  "the panel offers every conversation axis inside a scrolling body",
+  (expected["lib/client.js"].match(/sliderRow\(\n      body,/g) || []).length === 6 &&
+    expected["lib/client.js"].includes('var body = el("div", "dfp-floatBody");') &&
+    expected["lib/client.js"].includes("card.appendChild(body);") &&
+    expected["lib/client.js"].includes(".dfp-floatBody{flex:1 1 auto;min-height:0;overflow-y:auto;") &&
+    expected["lib/client.js"].includes("commit({ wordSpacingDialog: next });") &&
+    expected["lib/client.js"].includes("commit({ paragraphSpacingDialog: next });"),
+  "six slider rows plus the weight row, and the two shaping gaps among them"
+);
+// The block under the sliders: the three families the page is really rendering with, then
+// the weight control's shape — and it folds away, because a panel being used to drag a
+// slider does not need four lines of prose under it.
+check(
+  "the in-force block groups the three families, then the notch count",
+  expected["lib/client.js"].includes('t("status.dialog")') &&
+    expected["lib/client.js"].includes("state.dialog.family") &&
+    expected["lib/client.js"].includes("state.ui.family") &&
+    expected["lib/client.js"].includes("state.code.family") &&
+    expected["lib/client.js"].includes('t("status.steps", { count: state.notches })') &&
+    expected["lib/client.js"].indexOf('t("status.dialog")') < expected["lib/client.js"].indexOf('t("status.weight")'),
+  "conversation, interface and code together; the slider's shape below them"
+);
+// "Follows" belongs to the interface and nowhere else, and a family the reader chose must
+// never be labelled as the host's: the conversation takes the interface font when its own
+// field is empty (`expandFollow`), so labelling that "DSH default" told a reader who set
+// the interface font that the conversation was on DSH's own — measured on the reporting
+// machine, where exactly that was on screen.
+check(
+  "a chosen family is never labelled as the host's own",
+  expected["lib/client.js"].includes("own: dialogConfigured || uiConfigured,") &&
+    expected["lib/client.js"].includes("own: uiConfigured,") &&
+    expected["lib/client.js"].includes("state.dialog.own ? \"\" : hostDefault,") &&
+    expected["lib/client.js"].includes('state.ui.follows ? t("status.followDialog") : state.ui.own ? "" : hostDefault,') &&
+    expected["lib/client.js"].includes("state.code.own ? \"\" : hostDefault,") &&
+    expected["lib/client.js"].includes('"status.hostDefault": "DSH 自带"') &&
+    expected["lib/client.js"].includes('"status.hostDefault": "DSH\'s own"') &&
+    expected["lib/client.js"].includes('"status.usesInterface": "未单独设置，沿用界面字体"') &&
+    expected["lib/client.js"].includes('"status.uiFollowsNote": "界面沿用对话的字体"') &&
+    expected["lib/client.js"].includes('"status.followDialog": "跟随对话"') &&
+    expected["lib/client.js"].includes('"status.title": "当前生效"'),
+  "the reason lives in the tooltip; the visible line stays short"
+);
+// The stored height is a CAP, not a fixed box. As a box it left a hole wherever the
+// content had been — measured: after a fold, 261px of nothing under the sliders.
+check(
+  "a stored panel height caps the card instead of boxing it",
+  expected["lib/client.js"].includes('card.style.maxHeight =\n        sized.h > 0 ? "min(" + sized.h + "px,calc(100vh - 24px))" : "";') &&
+    expected["lib/client.js"].includes("if (resize === null) shadow.style.height = \"\";") &&
+    expected["lib/client.js"].includes(".dfp-floatBody{flex:1 1 auto;min-height:0;overflow-y:auto;"),
+  "folding gives the space back, and a short panel still scrolls"
+);
+check(
+  "the in-force block folds, with an animated clip",
+  expected["lib/client.js"].includes('head.setAttribute("aria-expanded", state.open ? "true" : "false");') &&
+    expected["lib/client.js"].includes('block.classList.toggle("dfp-floatInfoOpen", infoOpen);') &&
+    expected["lib/client.js"].includes("var infoOpen = true;") &&
+    expected["lib/client.js"].includes(".dfp-floatInfoClip{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .24s") &&
+    expected["lib/client.js"].includes(".dfp-floatInfoOpen .dfp-floatInfoClip{grid-template-rows:1fr;opacity:1}") &&
+    expected["lib/client.js"].includes('glyph.setAttribute("class", "dfp-chevron" + (infoOpen ? " dfp-chevronOpen" : ""));'),
+  "a grid-row transition clips the body open and shut"
+);
+// The panel is plain DOM (`el`/`svgEl`), while the card is React (`h` = createElement). A
+// React element appended to a plain node is not a Node at all, and the failure is total:
+// the whole panel stops rendering. This cost one debugging round; the pin is cheap.
+check(
+  "the panel builds its chevron as DOM, never as a React element",
+  expected["lib/client.js"].includes('var glyph = svgEl("svg", {\n      class: "dfp-chevron"') &&
+    expected["lib/client.js"].includes('glyph.appendChild(svgEl("path", { d: CHEVRON_PATH, fill: "currentColor" }));') &&
+    expected["lib/client.js"].includes("var body = el(\"div\", \"dfp-floatBody\");"),
+  "the card renders with h(), the panel with el() and svgEl()"
+);
+// The preview has to show what the conversation shows: the shaping rides the preview's own
+// inline style, and the box carries a second paragraph, because a paragraph gap between
+// one paragraph and nothing is invisible.
+check(
+  "the preview carries the shaping axes and a second paragraph",
+  expected["lib/client.js"].includes("previewDialogStyle.letterSpacing = String(editing[LETTER_SPACING_DIALOG_FIELD])") &&
+    expected["lib/client.js"].includes("previewDialogStyle.wordSpacing = String(editing[WORD_SPACING_DIALOG_FIELD])") &&
+    expected["lib/client.js"].includes("previewDialogStyle.textIndent = String(editing[INDENT_DIALOG_FIELD])") &&
+    expected["lib/client.js"].includes("shared.PARAGRAPH_BASELINE_PX + previewDialogGap") &&
+    expected["lib/client.js"].includes('h("p", { style: previewSecondStyle }, t("preview.sampleSecond"))'),
+  "a preview that cannot show the axis is worse than none"
+);
+// A hint with a placeholder in it must be given its value. The four shaping hints all say
+// "adds {offset}", they all render through ONE factory, and a missing parameter ships the
+// braces to the screen — which is how this was found (a screenshot of the card), and is
+// exactly what no test looked at. Pinning the single call site covers all four.
+check(
+  "the shaping hints interpolate the value they name",
+  expected["lib/client.js"].includes("hint: t(props.hintKey, { offset: shown(value) }),") &&
+    expected["lib/client.js"].includes('"shape.letterHint":\n      "Adds {offset} to the conversation') &&
+    expected["lib/client.js"].includes('"shape.indentHint":\n      "Indents the first line of each conversation paragraph by {offset}'),
+  "one factory, one interpolation, four hints"
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);
