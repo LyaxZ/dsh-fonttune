@@ -2,6 +2,17 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.6.0] - 2026-10-15
+
+### Changed
+- **Conversation type shaping**: tracking, word spacing, paragraph spacing and first-line indent are now adjustable, together with a strict line-breaking switch; 0 keeps DSH's own values for all four, and the paragraph gap moves only the space between paragraphs while headings keep their own.
+- **The floating panel carries every conversation adjustment**: a new "in force" section names the fonts the conversation, the interface and code actually render with, plus the weight slider's step count, and it folds away.
+- **Descriptions and docs**: the plugin description and both READMEs cover the new shaping, and the README gained interface screenshots.
+
+### Fixed
+- **The first-line indent reached headings, lists and code**: headings were indented along with the text, an ordered list's number stopped lining up with its item, and inline code gained leading space; it now applies to paragraphs only.
+- **The floating panel kept a blank area after folding**: when the panel had been made taller, folding left that space behind; the panel now shrinks with its content, and still scrolls when it is made short.
+
 ## [0.5.0] - 2026-10-13
 
 ### Added
