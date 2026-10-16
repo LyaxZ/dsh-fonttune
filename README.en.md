@@ -37,7 +37,7 @@ The floating tuning panel (left, with its "in force right now" readout) and the 
 
 | Plugin version | Supported DSH versions |
 | --- | --- |
-| **0.6.x** (latest, 0.6.0) | 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2, 0.2.0-rc.1, 0.2.0-rc.2, 0.2.1-alpha.1, 0.2.1-alpha.2 |
+| **0.6.x** (latest, 0.6.1) | 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2, 0.2.0-rc.1, 0.2.0-rc.2, 0.2.1-alpha.1, 0.2.1-alpha.2, 0.2.1-alpha.3, 0.2.1-alpha.4, 0.2.1-alpha.5 |
 | 0.5.x (0.5.0) | 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2, 0.2.0-rc.1, 0.2.0-rc.2, 0.2.1-alpha.1, 0.2.1-alpha.2 |
 | 0.4.x (0.4.2) | 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2, 0.2.0-rc.1, 0.2.0-rc.2, 0.2.1-alpha.1, 0.2.1-alpha.2 |
 | 0.3.x (0.3.6) | 0.1.7-alpha.1, 0.1.7-alpha.2, 0.1.7-rc.1, 0.1.7-rc.2, 0.2.0-rc.1, 0.2.0-rc.2 |
