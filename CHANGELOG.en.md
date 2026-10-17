@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.6.2] - 2026-10-17
+
+### Changed
+- **DSH 0.2.1-rc.1 and rc.2 join the compatibility table**: both were verified live — the settings card, the floating panel's tweaks and their writes, and the plugin's page all behave as documented.
+
 ## [0.6.1] - 2026-10-16
 
 ### Changed
