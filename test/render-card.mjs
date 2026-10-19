@@ -512,7 +512,7 @@ await test("an open card shows three sections, the preset bar and the flat fine-
   assert.equal(out.classes.some((c) => c.includes("dfp-switch")), false, "no pill switches");
 });
 
-await test("an open card with a fully configured setup renders (light and dark share one set)", async () => {
+await test("an open card with a fully configured setup renders (light and dark set separately)", async () => {
   const scope = createScope({
     value: {
       sans: "Inter",
@@ -537,9 +537,13 @@ await test("an open card with a fully configured setup renders (light and dark s
   const out = await renderCard(scope, { open: true });
   const text = out.text.join("\n");
   assert.ok(out.classes.some((c) => c.includes("dfp-cardOpen")), "the card is open");
-  // The per-theme editor ships in a later release: no switcher, no editor.
-  assert.equal(text.includes("theme.edit"), false, "no theme editor row");
-  assert.equal(text.includes("theme.label"), false, "no per-theme switch row");
+  // 0.7.0 ships the per-theme editor, so the switch row is present and reflects
+  // the stored flag (this document has the split on). The surfaces it offers are
+  // the two this document actually carries.
+  assert.ok(text.includes("theme.label"), "the per-theme switch row renders");
+  assert.ok(text.includes("theme.split"), "the shared/split control renders");
+  assert.ok(text.includes("theme.light"), "the light surface can be picked");
+  assert.ok(text.includes("theme.dark"), "the dark surface can be picked");
   // The conversation owns every axis, so its summary lists its own values.
   assert.ok(text.includes("Noto Serif SC"), "the conversation summary lists its family");
   assert.ok(text.includes("ui.follow"), "the interface summary names the follow state");

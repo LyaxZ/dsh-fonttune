@@ -1845,6 +1845,47 @@ function normalizeDarkValues(value, relative) {
 var WEIGHT_FIELDS = [WEIGHT_FIELD, WEIGHT_DIALOG_FIELD, CODE_WEIGHT_FIELD];
 
 /**
+ * Return a copy of a sparse dark-theme override map with one field changed.
+ *
+ * The map holds only the fields the reader overrode for the dark theme; an
+ * absent field inherits the light value. `undefined` therefore means "stop
+ * overriding", not "set to empty" — that distinction is what lets the card show
+ * "follows the light set" instead of a value the reader never chose.
+ * @param {unknown} map - the current sparse map (anything object-shaped).
+ * @param {string} field - a settings field name.
+ * @param {string|number|boolean|undefined} value - the override, or undefined to clear it.
+ * @returns {Record<string, string|number|boolean>} a new map; the input is untouched.
+ */
+function withDarkOverride(map, field, value) {
+  var source = map !== null && typeof map === "object" && !Array.isArray(map) ? map : {};
+  var out = {};
+  var key;
+  for (key in source) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) out[key] = source[key];
+  }
+  if (value === undefined) delete out[field];
+  else out[field] = value;
+  return out;
+}
+
+/**
+ * Serialize a dark override map for storage, with its keys in a stable order.
+ *
+ * Stable order matters twice: the settings document is diffed as text (an
+ * equivalent map written in a different key order would look like a change and
+ * cost a whole-document write), and the preset snapshot compares the text too.
+ * @param {unknown} map - the sparse map.
+ * @returns {string} the JSON text the document stores.
+ */
+function darkValuesText(map) {
+  var source = map !== null && typeof map === "object" && !Array.isArray(map) ? map : {};
+  var keys = Object.keys(source).sort();
+  var out = {};
+  for (var index = 0; index < keys.length; index += 1) out[keys[index]] = source[keys[index]];
+  return JSON.stringify(out);
+}
+
+/**
  * Convert the weight fields of saved preset snapshots to offsets.
  *
  * Runs exactly once per document, right before the card sets
@@ -4676,6 +4717,8 @@ var shared = {
   quoteFamily: quoteFamily,
   normalizeConfig: normalizeConfig,
   normalizeDarkValues: normalizeDarkValues,
+  withDarkOverride: withDarkOverride,
+  darkValuesText: darkValuesText,
   normalizePresets: normalizePresets,
   normalizeValueSet: normalizeValueSet,
   clampOffset: clampOffset,

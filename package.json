@@ -1,8 +1,9 @@
 {
   "name": "dsh-fonttune",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Font plugin for the DeepSeek Harness Web GUI: the conversation gets its own font, size, line height and weight, the interface font and weight follow it, code keeps its own axis with ligature control, and whole setups save as presets.",
   "type": "module",
+  "icon": "icon.svg",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -14,6 +15,7 @@
     "lib",
     "locale",
     "cordis.patch.yml",
+    "icon.svg",
     "README.md",
     "README.en.md",
     "CHANGELOG.md",

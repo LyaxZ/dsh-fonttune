@@ -2,6 +2,17 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.0] - 2026-10-19
+
+### Changed
+- **Light and dark are set separately**: the two themes can be tuned on their own, and the dark set overrides only the items you change while the rest follow the light set.
+- **The floating panel follows the current theme**: on a light page it edits the light set and on a dark page the dark set, and a preset picker at its top switches a whole setup without opening the settings page.
+- **The floating panel is translucent**: it lets the conversation behind it show through, blurred, matching the outline panel's material.
+- **Plugin icon**: the plugin page and the plugin list now show this plugin's own icon.
+
+### Fixed
+- **The floating panel's sliders were cut off at their right end**: every slider lost a sliver of its right end; it now matches the panel's content width.
+
 ## [0.6.2] - 2026-10-17
 
 ### Changed

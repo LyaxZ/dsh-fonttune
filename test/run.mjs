@@ -2285,6 +2285,66 @@ await test("the interface-follow flag defaults on and stores off", () => {
   assert.equal(set.uiFollowsDialog, false);
 });
 
+await test("a dark override is a sparse map that clears back to the light set", () => {
+  // The map holds only what the reader overrode; absent means "inherit light".
+  // That distinction is why clearing removes the key instead of storing a default:
+  // a stored 0 would pin the dark set to a value nobody chose, and the card would
+  // stop being able to say "follows the light set".
+  const empty = {};
+  const one = shared.withDarkOverride(empty, "sizeOffsetDialog", 2);
+  assert.deepEqual(one, { sizeOffsetDialog: 2 });
+  assert.deepEqual(empty, {}, "the input map is not mutated");
+  const two = shared.withDarkOverride(one, "weightDialog", 160);
+  assert.deepEqual(two, { sizeOffsetDialog: 2, weightDialog: 160 });
+  const cleared = shared.withDarkOverride(two, "sizeOffsetDialog", undefined);
+  assert.deepEqual(cleared, { weightDialog: 160 }, "clearing drops the key, not the value");
+  // Something that is not a map must not throw: a document is not a contract.
+  assert.deepEqual(shared.withDarkOverride(null, "indentDialog", 1), { indentDialog: 1 });
+  assert.deepEqual(shared.withDarkOverride("nonsense", "indentDialog", 1), { indentDialog: 1 });
+});
+
+await test("a dark map serializes in a stable key order", () => {
+  // The document diffs this text: an equivalent map written in another order would
+  // look like a change and cost a whole-document write (1.0-5.1 s on this host).
+  const a = shared.darkValuesText({ weightDialog: 100, sizeOffsetDialog: 2 });
+  const b = shared.darkValuesText({ sizeOffsetDialog: 2, weightDialog: 100 });
+  assert.equal(a, b, "key order does not change the text");
+  assert.equal(a, '{"sizeOffsetDialog":2,"weightDialog":100}', "and the order is sorted");
+  assert.equal(shared.darkValuesText({}), "{}", "an empty map is still valid JSON");
+  assert.equal(shared.darkValuesText(null), "{}", "a missing map serializes empty");
+});
+
+await test("the panel routes its writes through the theme it is showing", async () => {
+  // "Light only edits light, dark only edits dark" is the rule the panel was
+  // asked to follow. Three separate pieces hold it up, and each one is invisible
+  // when it breaks (the sliders simply write to the other set), so pin them:
+  // the batch goes through `routeForTheme`, the view is built from the theme the
+  // page is showing, and a theme switch re-renders the panel.
+  const source = await readFile(join(ROOT, "src", "client.js"), "utf8");
+  assert.ok(source.includes("routeForTheme(changes, state.config)"), "the panel routes each batch");
+  assert.ok(source.includes("var themeView = function (config)"), "the panel reads a themed view");
+  assert.ok(
+    source.includes('attributeFilter: ["data-ds-dark-theme"]'),
+    "a theme switch re-renders the panel"
+  );
+  assert.ok(source.includes('el("select", "dfp-floatPreset")'), "the panel carries the preset picker");
+});
+
+await test("the client half never forces the per-theme flag off", async () => {
+  // 0.7.0 ships the theme editor, so the two lines that used to disable per-theme
+  // (one before every stylesheet rebuild, one before the card resolved its sets)
+  // must stay gone: either of them turns a stored dark set into rules that never
+  // paint, which is exactly the "I turned it on and nothing happened" report the
+  // editor exists to prevent.
+  const source = await readFile(join(ROOT, "src", "client.js"), "utf8");
+  const forced = [];
+  for (const line of source.split("\n")) {
+    if (!/^\s*config\[PER_THEME_FIELD\]\s*=/.test(line) && !/^\s*unified\[PER_THEME_FIELD\]\s*=/.test(line)) continue;
+    forced.push(line.trim());
+  }
+  assert.deepEqual(forced, [], "the client must not assign the per-theme flag");
+});
+
 await test("the weight slider's range and notch come from the family", () => {
   // A family can only be made as light or as heavy as the faces it ships, and only
   // in jumps between them. The notch is the COARSEST step that still leaves four

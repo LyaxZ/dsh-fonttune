@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Prove the committed `lib/` artifacts are exactly what the current `src/`
  * produces.
  *
@@ -337,15 +337,29 @@ check(
   "follow the system / sharp / smooth"
 );
 // Compact choices sit ON their label row (pushed right), never under the hint:
-// the toggle rows must read as one component family with the synthesis row. There are
-// four of them now (synthetic italic, synthetic bold, smoothing, strict line breaking),
-// and the count is the point: a new segmented row that forgets `inline` would drop back
-// under its hint.
+// the toggle rows must read as one component family with the synthesis row. There
+// are five of them now (synthetic italic, synthetic bold, smoothing, strict line
+// breaking, light/dark sync), and the count is the point: a new segmented row that
+// forgets `inline` would drop back under its hint.
+//
+// The light/dark SURFACE picker is the one exception, and it is deliberate: it
+// belongs to the sync switch's own block, under the description, and fades in and
+// out with it — it was asked for below rather than beside the label.
 check(
   "compact choices sit on their label row, never under the hint",
-  (expected["lib/client.js"].match(/inline: true,/g) || []).length === 4 &&
+  (expected["lib/client.js"].match(/inline: true,/g) || []).length === 5 &&
     expected["lib/client.js"].includes('h("div", { className: "dfp-inline" }, props.children)'),
-  "the four segmented rows share the label-row layout"
+  "the five segmented rows share the label-row layout"
+);
+check(
+  "the light/dark picker fades in under the description",
+  expected["lib/client.js"].includes('"dfp-themeSplit" + (themesSplit ? " dfp-themeSplitOn" : "")') &&
+    expected["lib/client.js"].includes(
+      ".dfp-themeSplit{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .24s ease,opacity .24s ease}"
+    ) &&
+    expected["lib/client.js"].includes(".dfp-themeSplitOn{grid-template-rows:1fr;opacity:1}") &&
+    expected["lib/client.js"].includes('h("span", { className: "dfp-themeNote" }, t("theme.splitHint"))'),
+  "always mounted, with its height and opacity animated together"
 );
 // The dot's first corner is a decision: the region's bottom-right, never the
 // accident of wherever the page flow placed the unpositioned host.
@@ -454,8 +468,8 @@ check(
   "the live resize sizes the wrapper the card fills",
   resizeBlock.length > 0 &&
     resizeBlock.includes('box.style.width = "min(" + w + "px,calc(100vw - 32px))"') &&
-    resizeBlock.includes('box.style.height = "min(" + h + "px,calc(100vh - 24px))"') &&
-    expected["lib/client.js"].includes("startResize(event, edge.mode, shadow, card)"),
+    !resizeBlock.includes("box.style.height") &&
+    expected["lib/client.js"].includes('startResize(event, "w", shadow, card)'),
   resizeBlock.length === 0 ? "no startResize in the bundle" : "the resize no longer sizes the wrapper"
 );
 // The unfold: the card's anchored corner IS the dot's corner (no slot, no
@@ -470,22 +484,40 @@ check(
   cardRule !== null && cardRule[0].includes("clip-path:inset(0px 0px 0px 0px round 16px)"),
   cardRule === null ? "no .dfp-floatCard rule" : cardRule[0]
 );
+// The glass layer, and why every one of these is load-bearing. `backdrop-filter`
+// samples the backdrop ROOT, and a backdrop root is any ancestor (or the element
+// itself) carrying `filter`, `opacity` below 1 or a blend mode. So:
+//  · no ancestor of the glass may carry `filter` — that is where the shadow used
+//    to live, and leaving it there would make the blur sample the panel itself;
+//  · the glass sits INSIDE the card, so the card's own clip gives it the panel's
+//    silhouette for free (a sibling needs its own, in-step clip transition: two
+//    of those retargeted a frame apart and the surface raced the panel);
+//  · the shadow it displaced rides its own sibling, which nothing clips.
+const glassRule = expected["lib/client.js"].match(/\.dfp-floatGlass\{[^}]*\}/);
+const shadeRule = expected["lib/client.js"].match(/\.dfp-floatShade\{[^}]*\}/);
 check(
-  "the card's shadow rides an unclipped wrapper, never the clipped card",
+  "the glass layer blurs the page from beside the card",
   floatShadow !== null &&
-    floatShadow[0].includes("filter:drop-shadow(") &&
-    floatShadow[0].includes("box-shadow") === false &&
-    // Chromium clips an element's OWN filter output with that element's
-    // `clip-path`: a shadow on the card would be carved away for the whole
-    // unfold and the whole fold, then pop in on the frame the resting clip is
-    // released. The wrapper must therefore carry no clip and no overflow of any
-    // kind, or the shadow is clipped a level higher instead.
+    floatShadow[0].includes("filter") === false &&
     floatShadow[0].includes("clip-path") === false &&
     floatShadow[0].includes("overflow") === false &&
     // a pure paint layer: the card and everything inside it keeps the pointer
     floatShadow[0].includes("pointer-events:none") &&
     floatCard !== null &&
-    floatCard[0].includes("filter") === false,
+    floatCard[0].includes("filter") === false &&
+    floatCard[0].includes("background:transparent") &&
+    glassRule !== null &&
+    glassRule[0].includes("z-index:0") &&
+    // It carries the resting clip AND gets the card's live one copied onto it
+    // every frame (two CSS transitions on one property are not one animation).
+    glassRule[0].includes("clip-path:inset(0px 0px 0px 0px round 16px)") &&
+    expected["lib/client.js"].includes("var mirrorGlassClip = function (card, glass, ms)") &&
+    shadeRule !== null &&
+    shadeRule[0].includes("box-shadow:") &&
+    shadeRule[0].includes("pointer-events:none") &&
+    expected["lib/client.js"].includes("backdrop-filter:blur(3px)") &&
+    expected["lib/client.js"].includes("shadow.appendChild(glass)") &&
+    expected["lib/client.js"].includes('shadow.appendChild(el("div", "dfp-floatShade"))'),
   floatShadow === null ? "no .dfp-floatShadow rule" : floatShadow[0]
 );
 check(
@@ -502,7 +534,7 @@ check(
   "the unfold rides clip, opacity and scale on one non-linear curve",
   cardRule !== null &&
     cardRule[0].includes(
-      "transition:clip-path .28s cubic-bezier(.22,1,.28,1),opacity .28s cubic-bezier(.22,1,.28,1),transform .28s cubic-bezier(.22,1,.28,1)"
+      "transition:clip-path .32s cubic-bezier(.45,0,.25,1),opacity .32s cubic-bezier(.45,0,.25,1),transform .32s cubic-bezier(.45,0,.25,1)"
     ),
   cardRule === null ? "no .dfp-floatCard rule" : cardRule[0]
 );
@@ -511,8 +543,12 @@ check(
   "the enter frame is clipped to the dot's rectangle",
   cardEnter !== null &&
     cardEnter[0].includes("clip-path:var(--dfp-clipStart") &&
-    cardEnter[0].includes("opacity:.6") &&
-    cardEnter[0].includes("transform:scale(.985)"),
+    cardEnter[0].includes("transform:scale(.985)") &&
+    // NO `opacity` on the enter frame, deliberately. The card carries the glass
+    // layer, and an element below opacity 1 is a backdrop root: a fade here would
+    // switch the blur off for the whole unfold, and the panel would read as a bare
+    // translucent box that only becomes the real thing once it lands.
+    cardEnter[0].includes("opacity") === false,
   cardEnter === null ? "no .dfp-floatCardEnter rule" : cardEnter[0]
 );
 check(
@@ -748,7 +784,7 @@ check(
   "the close is pinned to the card's own corner",
   floatClose !== null &&
     floatClose[0].includes("position:absolute") &&
-    floatClose[0].includes("top:8px") &&
+    floatClose[0].includes("top:11px") &&
     floatClose[0].includes("right:8px")
 );
 for (const gone of [
@@ -774,13 +810,13 @@ check(
 // The leave animation has to wait for a paint: a class added in the same task
 // that rendered the card paints the end state at once (the close looked instant
 // while the open animated).
-const leaveStart = expected["lib/client.js"].match(/var startLeave = function \(\) \{[\s\S]{0,1200}?\n  \};/);
+const leaveStart = expected["lib/client.js"].match(/var startLeave = function \(\) \{[\s\S]{0,2400}?\n  \};/);
 check(
   "the leave class waits two frames before it lands",
   expected["lib/client.js"].includes("globalThis.requestAnimationFrame(function () {") &&
     expected["lib/client.js"].includes("globalThis.requestAnimationFrame(startLeave);") &&
     leaveStart !== null &&
-    leaveStart[0].includes('classList.add("dfp-floatCardLeave")') &&
+leaveStart[0].includes('classList.add("dfp-floatCardLeave")') &&
     leaveStart[0].includes("if (open) return;"),
   leaveStart === null ? "no startLeave in the bundle" : leaveStart[0].replace(/\s+/g, " ")
 );
@@ -837,12 +873,12 @@ check(
 // drag: `startDrag` preventDefaults the pointerdown, and that suppresses the
 // compatibility click the button waits for.
 const headPress = expected["lib/client.js"].match(
-  /head\.addEventListener\("pointerdown", function \(event\) \{[\s\S]{0,600}?\}\);/
+  /head\.addEventListener\("pointerdown", function \(event\) \{[\s\S]{0,900}?\}\);/
 );
 check(
-  "a press on a head button never becomes a drag",
+  "a press on a head control never becomes a drag",
   headPress !== null &&
-    headPress[0].includes('closest("button")') &&
+    headPress[0].includes('closest("button,select,input,textarea,a")') &&
     headPress[0].includes("startDrag(event, head, state.writable)"),
   headPress === null ? "no head pointerdown handler" : headPress[0].replace(/\s+/g, " ")
 );
@@ -1035,14 +1071,19 @@ check(
     expected["lib/client.js"].includes('"status.title": "当前生效"'),
   "the reason lives in the tooltip; the visible line stays short"
 );
-// The stored height is a CAP, not a fixed box. As a box it left a hole wherever the
-// content had been — measured: after a fold, 261px of nothing under the sliders.
+// The panel's height is the CONTENT's. It used to be a stored cap produced by the
+// bottom/corner grips; those grips are gone (a press on the panel's own last row
+// landed on the grip instead of the control there), so the cap went with them and
+// the card leans on its viewport `max-height` while the body owns the scroll.
 check(
-  "a stored panel height caps the card instead of boxing it",
-  expected["lib/client.js"].includes('card.style.maxHeight =\n        sized.h > 0 ? "min(" + sized.h + "px,calc(100vh - 24px))" : "";') &&
-    expected["lib/client.js"].includes("if (resize === null) shadow.style.height = \"\";") &&
-    expected["lib/client.js"].includes(".dfp-floatBody{flex:1 1 auto;min-height:0;overflow-y:auto;"),
-  "folding gives the space back, and a short panel still scrolls"
+  "the panel's height follows its content",
+  expected["lib/client.js"].includes('card.style.maxHeight = "";') &&
+    expected["lib/client.js"].includes("if (resize === null) shadow.style.height = " + String.fromCharCode(34, 34) + ";") &&
+    expected["lib/client.js"].includes("max-height:calc(100vh - 24px)") &&
+    expected["lib/client.js"].includes(".dfp-floatBody{flex:1 1 auto;min-height:0;overflow-y:auto;") &&
+    !expected["lib/client.js"].includes("sized.h > 0") &&
+    !expected["lib/client.js"].includes("dfp-floatResizeB"),
+  "the card caps itself at the viewport, and only the width grip remains"
 );
 check(
   "the in-force block folds, with an animated clip",
