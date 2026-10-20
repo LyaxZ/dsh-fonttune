@@ -2,6 +2,19 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.1] - 2026-10-20
+
+### Changed
+- **The panel and the dot each decide their own side**: the panel opens into the quadrant its own middle sits in, while the dot still snaps to the corner it remembers, so the two no longer share one rule.
+- **Switching corners takes less travel**: the conversation's middle is the line to cross, so the corner follows the panel's own middle rather than the region's edge.
+- **Snapping is one continuous motion**: after a release the panel and the dot travel to the target corner together, instead of the panel jumping to the other side first and then sliding.
+
+### Fixed
+- **The panel sometimes rested on the window's bottom-left corner**: while the conversation was not measurable yet, the dot was moved onto the window corner and that position was stored; it now moves only against a measurable conversation and never stores a stand-in.
+- **The dot sat on the sidebar in a narrow window**: a conversation squeezed to a sliver is still the region, instead of falling back to the whole window.
+- **The shadow did not follow the unfold**: the panel's shadow now changes with the shape while it unfolds and folds.
+- **The first frame of an unfold flickered**: the panel no longer blinks before it appears.
+
 ## [0.7.0] - 2026-10-19
 
 ### Changed
