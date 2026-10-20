@@ -3050,9 +3050,11 @@ await test("the panel's bounds are the conversation area, or the window", () => 
     width: 568,
     height: 728,
   });
-  // A box that cannot hold one dot is no region: the next candidate stands in.
+  // A box that cannot hold one dot does not BEAT one that can — but when it is the
+  // only thing the page offers it is still the region. Falling back to the whole
+  // window is what parked the dot on the window's own corner, over the sidebar.
   const sliver = { left: 0, top: 0, width: 30, height: 400 };
-  assert.equal(shared.floatBoundsFrom([sliver], viewport).width, 1000, "a sliver is not a region");
+  assert.equal(shared.floatBoundsFrom([sliver], viewport).width, 30, "a lone sliver is still the region");
   assert.equal(shared.floatBoundsFrom([sliver, scroller], viewport).left, 220, "the next candidate wins");
   assert.deepEqual(
     shared.floatBoundsFrom([{ left: 0, top: 0, width: 0, height: 0 }, { left: NaN, top: 0, width: 10, height: 10 }], viewport),
@@ -3132,9 +3134,15 @@ await test("which candidate is the region is one rule, and it names the box to w
   assert.deepEqual(shared.floatBoundsFrom([deadHolder, conversation], viewport), pick.bounds);
   // Nothing usable (a settings page): the whole window stands in, and the index
   // says so rather than naming a candidate that lost.
-  const nothing = shared.floatBoundsPick([deadHolder, { left: 0, top: 0, width: 30, height: 400 }], viewport);
-  assert.equal(nothing.index, -1, "no candidate won");
-  assert.deepEqual(nothing.bounds, whole);
+  // A cramped box still names itself when it is all the page has: the watcher must
+  // hold the box whose size defines the region, so `index` points at it.
+  const cramped = shared.floatBoundsPick([deadHolder, { left: 0, top: 0, width: 30, height: 400 }], viewport);
+  assert.equal(cramped.index, 1, "the cramped box is the region");
+  assert.equal(cramped.bounds.width, 30);
+  // Nothing readable at all (a settings page): the whole window stands in, and the
+  // index says so rather than naming a candidate that lost.
+  assert.equal(shared.floatBoundsPick([deadHolder], viewport).index, -1);
+  assert.deepEqual(shared.floatBoundsPick([deadHolder], viewport).bounds, whole);
   assert.equal(shared.floatBoundsPick([], viewport).index, -1);
   // A candidate that is unreadable or degenerate never wins, so the index always
   // points at a box the panel can actually be measured against.
@@ -3152,6 +3160,35 @@ await test("which candidate is the region is one rule, and it names the box to w
     820,
     "the first usable candidate is the region"
   );
+});
+
+await test("the card's side is the one with room, and never the dot's own corner", () => {
+  // The card hangs off the dot, so its side is a question about ROOM: the side
+  // that holds more of the card wins, measured beyond the dot's own box.
+  const region = { left: 220, top: 56, right: 820, bottom: 800, width: 600, height: 744 };
+  const dot = shared.FLOAT_DOT;
+  // The usual home, bottom-right: the card has to grow up and to the left.
+  assert.equal(shared.floatCardCorner(region, region.right - dot, region.bottom - dot), "br");
+  // The other three corners answer for themselves — this is what used to be the
+  // dot's remembered corner instead, so a stale one dragged the card along.
+  assert.equal(shared.floatCardCorner(region, region.left, region.top), "tl");
+  assert.equal(shared.floatCardCorner(region, region.right - dot, region.top), "tr");
+  assert.equal(shared.floatCardCorner(region, region.left, region.bottom - dot), "bl");
+  // It follows the dot and nothing else: the same dot in the same region gives
+  // the same answer every time, so a side cannot be voted back and forth.
+  const middle = { x: Math.round((region.left + region.right) / 2), y: Math.round((region.top + region.bottom) / 2) };
+  assert.equal(
+    shared.floatCardCorner(region, middle.x, middle.y),
+    shared.floatCardCorner(region, middle.x, middle.y),
+    "the answer is a function of the dot and the region"
+  );
+  // A region narrower than the card still answers with the roomier side, and
+  // never with a quadrant the dot is not in.
+  const cramped = { left: 0, top: 0, right: 200, bottom: 400, width: 200, height: 400 };
+  assert.equal(shared.floatCardCorner(cramped, 20, 380 - dot), "bl");
+  // Nothing readable (a settings page): the window stands in, and the answer is
+  // still one of the four corners rather than nothing at all.
+  assert.equal(shared.floatCardCorner(null, 10, 10), "tl");
 });
 
 await test("the fallback watcher answers a changed rectangle, and a detached box is a change", () => {

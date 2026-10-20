@@ -147,6 +147,7 @@ for (const symbol of [
   "floatExpandDirection",
   "floatTransformOrigin",
   "floatCardAnchor",
+  "floatCardCorner",
   "floatClipStart",
   "floatClipRest",
   "floatSnapCorner",
@@ -517,7 +518,7 @@ check(
     shadeRule[0].includes("pointer-events:none") &&
     expected["lib/client.js"].includes("backdrop-filter:blur(3px)") &&
     expected["lib/client.js"].includes("shadow.appendChild(glass)") &&
-    expected["lib/client.js"].includes('shadow.appendChild(el("div", "dfp-floatShade"))'),
+    expected["lib/client.js"].includes('shadow.appendChild(shadeEl)'),
   floatShadow === null ? "no .dfp-floatShadow rule" : floatShadow[0]
 );
 check(
@@ -608,7 +609,7 @@ check(
 // back"). A position the DOCUMENT handed over is painted on the corner and left
 // alone, so the flag is what keeps one writer from arguing with another.
 const settle = expected["lib/client.js"].match(
-  /var settleOnCorner = function \(regionMoved\) \{[\s\S]*?\n  \};/
+  /var settleOnCorner = function \(regionMoved, instant\) \{[\s\S]*?\n  \};/
 );
 const cornerHome = expected["lib/client.js"].match(
   /var cornerHome = function \(bounds, at\) \{[\s\S]*?\n  \};/
@@ -622,13 +623,46 @@ check(
     settle[0].includes("if (regionMoved === true) persistIfDirty();") &&
     expected["lib/client.js"].includes("if (adoptDocPos()) settleOnCorner();") &&
     expected["lib/client.js"].includes("if (wasMoved) settleOnCorner();") &&
-    /var reflowIntoBounds = function \(\) \{\n    if \(!settleOnCorner\(true\)\) return;/.test(
+    /var reflowIntoBounds = function \(\) \{\n    var bounds = floatBounds\(\);/.test(
       expected["lib/client.js"]
     ) &&
     // the open asks it BEFORE the unfold is armed, so the card grows away from
-    // the corner the dot actually rests on
-    /settleOnCorner\(\);\n      playEnter = true;/.test(expected["lib/client.js"]),
+    // the corner the dot actually rests on; the card's own side is voted in the
+    // same breath, and only then is the unfold armed
+    /settleOnCorner\(false, true\);\n(?:\s*\/\/[^\n]*\n)*\s*voteCardQuadrant\(\);\n(?:\s*\/\/[^\n]*\n)*\s*playEnter = true;/.test(
+      expected["lib/client.js"]
+    ),
   settle === null ? "no settleOnCorner in the bundle" : settle[0].slice(0, 120)
+);
+// The CARD's side is a different question from the dot's, and asked from a
+// different place: the room on either side of the dot, measured against the
+// conversation. Sharing the dot's rule is what made the card jump when the dot
+// crossed a line the card had not, so the two are kept apart on purpose.
+check(
+  "the card picks its own side, by the room the conversation has for it",
+  expected["lib/client.js"].includes("cardQuadrant = shared.floatCardCorner(region, origin.x, origin.y);") &&
+    expected["lib/shared.cjs"].includes("var growRight = box.right - x >= x + size - box.left;") &&
+    expected["lib/shared.cjs"].includes("var growDown = box.bottom - y >= y + size - box.top;") &&
+    // the answer is about the dot and the region only: nothing measures the card
+    // it just placed, so it cannot vote itself back and forth
+    !expected["lib/client.js"].includes("panelCentre") &&
+    !expected["lib/client.js"].includes("cardQuadrantBefore") &&
+    // a card with no history of its own still unfolds out of the dot
+    expected["lib/client.js"].includes("if (cardQuadrant !== null) {") &&
+    // rendering is never a moment a side may change: the vote lives at the open
+    // (no card yet) and at a release that lands the dot elsewhere, and a region
+    // that changed shape decides it from the target corner before the settle
+    (expected["lib/client.js"].match(/voteCardQuadrant\(/g) || []).length === 2 &&
+    expected["lib/client.js"].includes("cardQuadrant = shared.floatCardCorner(bounds, home.x, home.y);") &&
+    // a side is an anchored EDGE, so a snap that changes it would jump a
+    // panel-width and THEN slide. The card is put back where it already was and
+    // that offset is released over the dot's own slide: one motion, no middle.
+    expected["lib/client.js"].includes('shadow.style.transform = "translate("') &&
+    expected["lib/client.js"].includes(
+      'shadow.style.transition = "transform " + FLOAT_SNAP_MS + "ms ease";'
+    ) &&
+    expected["lib/client.js"].includes("var FLOAT_SNAP_MS = 160;") &&
+  "the card's side is voted where a side may change, never on every render"
 );
 // The corner is an identity, not a conclusion drawn from where the dot happens
 // to be: it is NAMED in exactly one place (a document that never had one), and
@@ -639,8 +673,12 @@ check(
   "the corner is chosen by a release, never re-voted by a change of shape",
   cornerHome !== null &&
     cornerHome[0].includes("if (corner === null) corner = shared.floatNearestCorner(bounds, at.x, at.y);") &&
+    // the corner is read from the PANEL's own middle while it is up: a panel
+    // dragged by its head hangs a whole card away from the dot
+    expected["lib/client.js"].includes("corner = shared.floatQuadrantIn(bounds, ref.x, ref.y);") &&
+    expected["lib/client.js"].includes("var ref = cardMiddle();") &&
     expected["lib/client.js"].includes(
-      "corner = shared.floatNearestCorner(floatBounds(), pos.x, pos.y);"
+      "ref = { x: pos.x + shared.FLOAT_DOT / 2, y: pos.y + shared.FLOAT_DOT / 2 };"
     ) &&
     settle[0].includes("shared.floatNearestCorner") === false &&
     settle[0].includes("shared.floatSnapTo") === false,
@@ -680,11 +718,23 @@ check(
 check(
   "the bounds and the watched boxes come from one candidate list",
   expected["lib/client.js"].includes(
-    "return shared.floatBoundsFrom(floatBoundsRects(), floatViewport());"
+    "var picked = shared.floatBoundsPick(floatBoundsRects(), floatViewport());"
   ) &&
+    expected["lib/client.js"].includes("boundsAreReal = picked.index >= 0;") &&
     (expected["lib/client.js"].match(/var list = floatRegions\(\);/g) || []).length === 2 &&
     expected["lib/shared.cjs"].includes("floatBoundsPick(rects, viewport).bounds"),
   "the region a dot is measured against and the region that is watched are not one list"
+);
+// The whole window is a STAND-IN for "no conversation measurable right now", and
+// a stand-in must never move a dot the document already placed: that move is the
+// reported "it sits on the window's left edge instead of the conversation's
+// corner". Both paths that move the dot refuse it, and the region observer
+// settles the dot for real as soon as a region exists.
+check(
+  "a whole-window stand-in never moves a dot that already has a home",
+  expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null) return pos;") &&
+    expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null) return false;"),
+  "a stand-in region can still move the dot onto the window's corner"
 );
 // The candidate set alone cannot be the whole line: a host that REPLACES the
 // conversation element leaves every observed box detached, and a detached box
