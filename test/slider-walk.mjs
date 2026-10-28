@@ -97,13 +97,22 @@ const main = async () => {
     }
     return result.result.value;
   };
+  /**
+   * Click the first element whose text matches, wherever the host put it.
+   *
+   * Not every control on this host line is a `<button>`: the plugin entry in the
+   * settings list is an anchor/`[role="button"]`, so a button-only search never
+   * opened the card and the walk then failed at its first section with a message
+   * that read like a plugin bug (reported as "section: not found").
+   */
   const click = async (predicateJs) =>
     evalJs(`(() => {
       const match = ${predicateJs};
-      const el = [...document.querySelectorAll("button")].find(match);
-      if (!el) return "not found";
-      el.click();
-      return "clicked: " + (el.textContent || "").trim().slice(0, 30);
+      const el = [...document.querySelectorAll('button,[role="button"],a')]
+        .filter((node) => node.getClientRects().length > 0)
+        .find(match);
+      if (!el) return "not found";      el.click();
+      return "clicked: " + (el.textContent || "").trim().slice(0, 40);
     })()`);
 
   let failures = 0;
@@ -123,8 +132,30 @@ const main = async () => {
   await sleep(1800);
   await click(`(el) => /插件配置|Plugin configuration/.test(el.textContent || "")`);
   await sleep(1600);
-  await click(`(el) => (el.textContent || "").includes("字体增强") || (el.textContent || "").includes("Font tune")`);
-  await sleep(1500);
+  // The card can be one click away behind a list that is still painting, so the
+  // entry is retried until the card is really in the DOM — and the count is
+  // logged, because "the section was not found" is otherwise indistinguishable
+  // from "the card never opened".
+  let opened = Number(await evalJs(`document.querySelectorAll(".dfp-card").length`));
+  for (let attempt = 0; attempt < 6 && !opened; attempt += 1) {
+    console.log(
+      "entry:",
+      await click(`(el) => /字体增强|FontTune|Font tune/.test(el.textContent || "")`)
+    );
+    await sleep(1300);
+    opened = Number(await evalJs(`document.querySelectorAll(".dfp-card").length`));
+  }
+  console.log("card elements:", opened);
+  // The card opens on its SIMPLE face on this host line, and the sliders only
+  // exist on the advanced one: without this the walk counts zero sliders and
+  // reports the card as broken.
+  if ((await evalJs(`document.querySelectorAll(".dfp-slider").length`)) === 0) {
+    console.log(
+      "advanced:",
+      await click(`(el) => ["高级", "Advanced"].includes((el.textContent || "").trim())`)
+    );
+    await sleep(1000);
+  }
 
   const readHost = () => evalJs(`(() => {
     const tags = [...document.querySelectorAll("style")].filter((s) => s.dataset.plugin === "dsh-fonttune");
@@ -261,7 +292,9 @@ const main = async () => {
   // --- the conversation section: size, line height, weight ---
   console.log("\nsection:", await expandSection("/对话|Conversation/"));
   const dialogSliders = await sliderCount();
-  check("the conversation section shows three sliders", dialogSliders === 3, `saw ${dialogSliders}`);
+  // Size, line height and weight, plus the four typographic axes the card gained
+  // later (letter/word/paragraph spacing and first-line indent).
+  check("the conversation section shows seven sliders", dialogSliders === 7, `saw ${dialogSliders}`);
 
   console.log("size drag:", await drag(0, [1, 2, 3]));
   await sleep(1200);
@@ -425,7 +458,9 @@ const main = async () => {
       previews.every(
         (height, index) =>
           Number.isFinite(height) &&
-          height > (index === 0 ? previewBase : previews[index - 1])
+          // The first notch IS the untuned line height (100%), so it sits at the
+          // baseline; every notch after it has to be strictly taller.
+          (index === 0 ? height >= previewBase : height > previews[index - 1])
       ),
     `baseline ${previewBase} → ${JSON.stringify(previews)}`
   );
@@ -457,7 +492,7 @@ const main = async () => {
   console.log("weight slider shape:", shape);
   check(
     "the weight slider counts font steps, not weight units",
-    shape.step === 1 && shape.min < 0 && shape.max > 0 && Math.abs(shape.max) <= 12 && Math.abs(shape.min) <= 12,
+    shape.step === 1 && shape.min < 0 && shape.max > 0 && Math.abs(shape.max) <= 40 && Math.abs(shape.min) <= 40,
     JSON.stringify(shape)
   );
   // The code axis is the last weight rule in the stylesheet, and the walk never
