@@ -2,6 +2,11 @@
 
 **dsh-fonttune** 的重要变更都记录在这里。英文版见 [CHANGELOG.en.md](CHANGELOG.en.md)。
 
+## [Unreleased]
+
+### 修复
+- **DSH 0.2.2 上对话排印轴全部失效**：该版本去掉了对话 markdown 容器的 `_markdown_` 类名哈希段和 `[data-dss-prose]` 包裹层，对话规则因此命中零个元素，字体、字号、行高、字重、字距等轴全部静默失效。现在把 `[data-conversation-content]` 内的 markdown 块元素作为兜底作用域，两条宿主线共用同一份规则。
+
 ## [0.7.2] - 2026-10-28
 
 ### 变更

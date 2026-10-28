@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [Unreleased]
+
+### Fixed
+- **Every conversation axis was inert on DSH 0.2.2**: that release dropped the markdown container's `_markdown_` class-hash segment and its `[data-dss-prose]` wrapper, so the dialog rules matched zero elements and font, size, line height, weight and tracking all failed silently. The markdown block elements inside `[data-conversation-content]` now stand in as the fallback scope, and one rule set covers both host lines.
+
 ## [0.7.2] - 2026-10-28
 
 ### Changed
