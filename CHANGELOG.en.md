@@ -2,10 +2,14 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
-## [Unreleased]
+## [0.7.3] - 2026-10-29
 
 ### Fixed
-- **Every conversation axis was inert on DSH 0.2.2**: that release dropped the markdown container's `_markdown_` class-hash segment and its `[data-dss-prose]` wrapper, so the dialog rules matched zero elements and font, size, line height, weight and tracking all failed silently. The markdown block elements inside `[data-conversation-content]` now stand in as the fallback scope, and one rule set covers both host lines.
+- **Every conversation axis was inert on DSH 0.2.1-rc.4 and 0.2.2**: those releases dropped the conversation container's `_markdown_` class-hash segment and its `[data-dss-prose]` wrapper, so the dialog rules matched zero elements and font, size, line height, weight and tracking all failed silently — while the card, its writes and the floating panel still looked fine. The markdown block elements inside `[data-conversation-content]` now stand in as the fallback scope.
+- **The floating panel measured the whole window instead of the conversation on those same releases**: it looked for the same two markers, so the dot parked on the window's corner and the panel's expand direction was read from the window; it now recognises that content container too.
+
+### Changed
+- **The compatibility table states what was verified**: the 0.2.1-rc.4 and 0.2.2-alpha.2 rows used to mean "the card, its writes and the panel"; from this release on they mean "the type actually renders on the conversation and the panel measures the conversation".
 
 ## [0.7.2] - 2026-10-28
 
