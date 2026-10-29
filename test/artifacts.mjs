@@ -736,6 +736,18 @@ check(
     expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null) return false;"),
   "a stand-in region can still move the dot onto the window's corner"
 );
+// The same host change that dropped the stylesheet's two old markers drops the
+// panel's two old anchors as well — and there the cost is a dot parked on the
+// window's corner instead of the conversation's. The block elements inside the
+// content container are the third anchor, and the panel has to measure them too.
+check(
+  "the panel finds the conversation on the host line that dropped both markers",
+  expected["lib/client.js"].includes(
+    '"[data-conversation-content] :where(p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th)"'
+  ) &&
+    expected["lib/client.js"].includes("add(document.querySelectorAll(PROSE_CONTENT));"),
+  "the panel would fall back to the whole window on that host line"
+);
 // The candidate set alone cannot be the whole line: a host that REPLACES the
 // conversation element leaves every observed box detached, and a detached box
 // never reports a size again — while the resolve that would find the new node can

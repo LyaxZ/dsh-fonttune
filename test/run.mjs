@@ -3992,5 +3992,24 @@ await test("the shaping axes are preset material, so a setup can carry them", ()
 
 /* ------------------------------------------------------------------ */
 
+await test("the dialog scope survives the host line that dropped both old markers", () => {
+  // 0.2.1-rc.4 and 0.2.2 ship neither the `_markdown_` class-hash segment nor the
+  // `[data-dss-prose]` wrapper, and the rules matched zero elements there — the
+  // whole conversation axis went inert. The content container they DO ship is
+  // the third anchor, and it has to keep the code exclusion the others have.
+  const selector = shared.MARKDOWN_SELECTOR;
+  assert.ok(selector.includes("[data-dss-prose]"), "the prose wrapper is still an anchor");
+  assert.ok(selector.includes('[class*="_markdown_" i]'), "the class-hash line is still an anchor");
+  assert.ok(
+    selector.includes("[data-conversation-content]"),
+    "the content container is the third anchor"
+  );
+  assert.ok(selector.includes("p,li,h1,h2"), "the fallback scopes markdown block elements");
+  const fallback = selector.split("[data-conversation-content]")[1] || "";
+  assert.ok(fallback.includes(":not("), "the fallback scope still excludes code text");
+});
+
+/* ------------------------------------------------------------------ */
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

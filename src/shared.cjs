@@ -2988,7 +2988,8 @@ var MARKDOWN_SELECTOR =
   CODE_EXCLUDES +
   ',[data-conversation-content] :where(' +
   MARKDOWN_BLOCK_ELEMENTS +
-  ')';
+  ')' +
+  CODE_EXCLUDES;
 
 /**
  * The dialog selector for one build, given the harvested wrapper.
