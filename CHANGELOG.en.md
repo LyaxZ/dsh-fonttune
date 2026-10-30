@@ -2,6 +2,14 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.4] - 2026-10-30
+
+### Fixed
+- **The weight slider moved the Latin and the Chinese text by different amounts**: when a Chinese family ships only a few faces, some notches changed only the Latin side and others made the browser thicken the Chinese one itself, so one script read heavier than the other. The notches are now taken from what both families can draw, and each one changes the two sides by a similar amount.
+
+### Changed
+- **How many notches you get follows the faces the fonts ship**: a Chinese family with more faces offers more notches — three faces give at most three positions, seven give about twice that. The readout counts positions, so it changes with the font.
+
 ## [0.7.3] - 2026-10-29
 
 ### Fixed

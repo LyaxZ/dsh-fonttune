@@ -1013,10 +1013,53 @@ check(
 // shape the alias exists to remove.
 check(
   "a promoted family's shape is measured through its alias",
-  expected["lib/client.js"].includes("var target = promoted ? '\"' + alias + '\"' : resolved;") &&
-    expected["lib/client.js"].includes("candidates: shared.CONTINUOUS_CANDIDATES"),
+  expected["lib/client.js"].includes('var target = \'"\' + (alias === "" ? family : alias) + \'"\';') &&
+    expected["lib/client.js"].includes("candidates: shared.CONTINUOUS_CANDIDATES") &&
+    // the alias belongs to the primary family only; the fallback behind it is
+    // measured through its own name
+    expected["lib/client.js"].includes('index === 0 && promoted ? alias : ""'),
   "the fine notches are measured, not assumed"
 );
+// The notch has to be one EVERY family in the stack can follow: the reader sets
+// one offset, and a three-face CJK fallback behind a variable Latin family only
+// moves where the Latin one moved five times (issue #4).
+check(
+  "the notch is measured across the whole stack, not just its first family",
+  expected["lib/client.js"].includes("var families = stackFamilies(resolved);") &&
+    expected["lib/client.js"].includes("shared.combineWeightProfiles(shapes, { base: shared.WEIGHT_BASE })") &&
+    expected["lib/shared.cjs"].includes("function combineWeightProfiles(profiles, options)") &&
+    expected["lib/shared.cjs"].includes("step = commonStep(step, list[other].step);"),
+  "the fallback family can sit out most notches"
+);
+// Two families being moved by ONE offset are only even when one notch changes BOTH
+// of them by a comparable share of their own ink, and when they have not drifted
+// apart over the notches before it (issue #4: the synthetic-bold step added +44%
+// to the Latin family and +51% to the Chinese one, 7.4 points apart).
+check(
+  "a pairing is kept even: one comparable ink change per notch, and no drift",
+  expected["lib/client.js"].includes("var WEIGHT_SAMPLE_LATIN =") &&
+    expected["lib/client.js"].includes("var WEIGHT_SAMPLE_FALLBACK =") &&
+    expected["lib/client.js"].includes("inks[weight] = inkOfSignature(sampleWeightSignature(target, weight, text));") &&
+    expected["lib/shared.cjs"].includes("var INK_BALANCE_SPREAD = 0.05;") &&
+    expected["lib/shared.cjs"].includes("var INK_BALANCE_STEP = 0.15;") &&
+    expected["lib/shared.cjs"].includes("function evennessOf(entries, from, to)") &&
+    expected["lib/shared.cjs"].includes("function balancedStackShape(entries, base, low, high, spread)") &&
+    expected["lib/shared.cjs"].includes("if (!moveIsEven(evennessOf(entries, base, base + position), budget)) break;") &&
+    expected["lib/shared.cjs"].includes("var INK_BALANCE_SPREAD_WIDE = 0.15;") &&
+    expected["lib/shared.cjs"].includes("if (relaxedPositions > positions) return relaxed;"),
+  "the synthetic bold of the three-face CJK family is offered as a notch"
+);
+// The comparison costs a second set of canvas renders per family, so it runs only
+// when a second family exists to be even with; a lone family keeps the shape its
+// own faces measured.
+check(
+  "the evenness comparison runs only for a stack that has someone to be even with",
+  expected["lib/client.js"].includes("var keepEven = families.length > 1;") &&
+    expected["lib/client.js"].includes("keepEven ? (index === 0 ? WEIGHT_SAMPLE_LATIN : WEIGHT_SAMPLE_FALLBACK) : null") &&
+    expected["lib/shared.cjs"].includes("if (list.length === 1) return { min: list[0].min, max: list[0].max, step: list[0].step };"),
+  "a lone family pays canvas renders for an answer nobody uses"
+);
+
 // A monospace family never changes width with weight. The discriminator therefore
 // compares the alias response against the family's own: dropping the comparison
 // silently returns every code font to the stepped shape.

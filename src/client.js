@@ -1300,6 +1300,114 @@ var weightProbeCanvas = null;
 var weightProfileCache = {};
 
 /**
+ * The families a stack can actually render text with.
+ *
+ * The first family draws the Latin text and a later one draws whatever the first
+ * cannot (that is where the Chinese comes from), so the notch step has to be one
+ * every one of them can follow. Generic keywords are dropped: `serif` is not a
+ * family anyone ships faces for.
+ * @param {string} stack - resolved `font-family` value.
+ * @returns {string[]} the family names, primary first.
+ */
+function stackFamilies(stack) {
+  var parsed = shared.parseStack(String(stack));
+  var out = [];
+  for (var index = 0; index < parsed.length; index += 1) {
+    var name = String(parsed[index]).trim();
+    if (name === "") continue;
+    if (shared.GENERIC_FAMILIES.indexOf(name.toLowerCase()) >= 0) continue;
+    if (out.indexOf(name) >= 0) continue;
+    out.push(name);
+  }
+  return out;
+}
+
+/**
+ * How many families of one stack are measured.
+ *
+ * Two covers the reported case — a Latin family with the CJK fallback behind it
+ * — and keeps the first measurement to about twice what it was: the probe renders
+ * the family on a canvas for every weight it asks about.
+ */
+var WEIGHT_STACK_FAMILIES = 2;
+
+/** Measured shapes per family, so a combined stack measures each family once. */
+var familyProfileCache = {};
+
+/**
+ * The text each family of a stack is measured on when the two have to move together.
+ *
+ * A stack is one Latin family followed by whatever draws the Chinese, and each of
+ * them draws only part of a mixed sample: measured on mixed text the Latin family
+ * borrows the Chinese from the browser's own fallback — a third family the reader
+ * never sees beside it — and its ink curve would then partly describe that one. The
+ * evenness comparison therefore measures each family on the script it renders.
+ */
+var WEIGHT_SAMPLE_LATIN = "Hamburgefonstiv 0189";
+var WEIGHT_SAMPLE_FALLBACK = "对话字体粗细大小变化";
+
+/**
+ * One family's slider shape, measured through its alias when it is promoted.
+ *
+ * `null` means the canvas could not answer; the caller then falls back to the
+ * nominal window instead of offering a control built on no data.
+ *
+ * When the stack has a second family, the record also carries `inkOf`, a sampler
+ * for that family's ink on the script it draws. `combineWeightProfiles` walks it to
+ * find the notch and range that move both families evenly (issue #4).
+ * @param {string} family - the family name, unquoted.
+ * @param {number} base - the heaviest weight the offset lands on.
+ * @param {string} alias - the variable alias to measure through, "" when none.
+ * @param {string|null} [inkText] - the text the ink is measured on, or null when the
+ *   stack has nothing to be even with.
+ * @returns {{min: number, max: number, step: number, inkOf: Function|null}|null}
+ *   the shape plus the ink sampler.
+ */
+function familyWeightProfile(family, base, alias, inkText) {
+  var text = typeof inkText === "string" && inkText !== "" ? inkText : null;
+  var key =
+    family +
+    "\u0000" +
+    base +
+    "\u0000" +
+    (alias === "" ? "stepped" : "continuous") +
+    "\u0000" +
+    (text === null ? "plain" : "ink");
+  if (Object.prototype.hasOwnProperty.call(familyProfileCache, key)) {
+    return familyProfileCache[key];
+  }
+  var record = null;
+  try {
+    var target = '"' + (alias === "" ? family : alias) + '"';
+    var seen = {};
+    var sample = function (weight) {
+      if (!Object.prototype.hasOwnProperty.call(seen, weight)) {
+        seen[weight] = sampleWeightSignature(target, weight);
+      }
+      return seen[weight];
+    };
+    var shape =
+      alias === ""
+        ? weightProfileFrom(sample, { top: base })
+        : weightProfileFrom(sample, { top: base, candidates: shared.CONTINUOUS_CANDIDATES });
+    record = { min: shape.min, max: shape.max, step: shape.step, inkOf: null };
+    if (text !== null) {
+      var inks = {};
+      record.inkOf = function (weight) {
+        if (!Object.prototype.hasOwnProperty.call(inks, weight)) {
+          inks[weight] = inkOfSignature(sampleWeightSignature(target, weight, text));
+        }
+        return inks[weight];
+      };
+    }
+  } catch (error) {
+    record = null;
+  }
+  familyProfileCache[key] = record;
+  return record;
+}
+
+/**
  * Values the card has moved but the settings document has not confirmed yet.
  *
  * The card paints these over the document's own values the moment the user lets go
@@ -1629,13 +1737,17 @@ function probeLog(kind, detail) {
  * — and report a coarse family where the weights are in fact continuous.
  * @param {string} stack - resolved `font-family` value.
  * @param {number} weight - CSS weight to draw with.
+ * @param {string} [text] - the text to draw; the card's shared sample by default.
  * @returns {string} the signature; equal signatures mean identical rendering.
  */
-function sampleWeightSignature(stack, weight) {
+function sampleWeightSignature(stack, weight, text) {
+  var sampleText = typeof text === "string" && text !== "" ? text : WEIGHT_SAMPLE_TEXT;
+  // Wide and tall enough for the longest sample (a run of CJK glyphs at 32px) and
+  // for the line box no family clips: a clipped glyph would undercount its ink.
   if (weightProbeCanvas === null) {
     weightProbeCanvas = document.createElement("canvas");
-    weightProbeCanvas.width = 260;
-    weightProbeCanvas.height = 56;
+    weightProbeCanvas.width = 420;
+    weightProbeCanvas.height = 64;
   }
   // `willReadFrequently` matters here: the profile probe reads the canvas back once
 // per sampled weight (~80 times on the first measurement), and without it the
@@ -1646,8 +1758,8 @@ var context = weightProbeCanvas.getContext("2d", { willReadFrequently: true });
   context.font = weight + " 32px " + stack;
   context.textBaseline = "top";
   context.fillStyle = "#000";
-  context.fillText(WEIGHT_SAMPLE_TEXT, 2, 6);
-  var advance = Math.round(context.measureText(WEIGHT_SAMPLE_TEXT).width * 1000);
+  context.fillText(sampleText, 2, 6);
+  var advance = Math.round(context.measureText(sampleText).width * 1000);
   var pixels = context.getImageData(0, 0, weightProbeCanvas.width, weightProbeCanvas.height).data;
   var ink = 0;
   for (var index = 3; index < pixels.length; index += 4) ink += pixels[index];
@@ -1701,21 +1813,38 @@ function weightProfileFor(stack, top) {
   var profile = promoted
     ? shared.continuousWeightProfile()
     : { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
-  try {
-    // A continuous family is measured THROUGH ITS ALIAS, on the fine candidate grid:
-    // the axis answers at every notch, so the finest one that still moves body text
-    // wins, and the range stops where the family's own axis does instead of running
-    // past it into weights that render the same.
-    var target = promoted ? '"' + alias + '"' : resolved;
-    var seen = {};
-    var sample = function (weight) {
-      if (!Object.prototype.hasOwnProperty.call(seen, weight)) {
-        seen[weight] = sampleWeightSignature(target, weight);
-      }
-      return seen[weight];
-    };
-    profile = weightProfileFrom(sample, promoted ? { top: base, candidates: shared.CONTINUOUS_CANDIDATES } : { top: base });
-  } catch (error) {
+  // EVERY family the text can land on has to follow the same notch: the reader
+  // sets one offset, and a Chinese family with three faces behind a variable
+  // Latin one only moves where the Latin one has moved five times (issue #4).
+  // The shapes are combined into the coarsest shared step and the range they
+  // can all still express; the primary family alone is the answer only when the
+  // stack names one family.
+  // The shapes are combined into one notch that moves BOTH families evenly: the
+  // first family draws the Latin text and the one behind it draws the Chinese, so
+  // each is measured on its own script (issue #4).
+  var families = stackFamilies(resolved);
+  var shapes = [];
+  // Comparing the families' ink costs a second set of canvas renders, so it runs
+  // only when there IS a second family to be even with.
+  var keepEven = families.length > 1;
+  for (var index = 0; index < families.length && index < WEIGHT_STACK_FAMILIES; index += 1) {
+    // A continuous family is measured THROUGH ITS ALIAS, on the fine candidate
+    // grid: the axis answers at every notch, so the finest one that still moves
+    // body text wins, and the range stops where the family's own axis does.
+    var shape = familyWeightProfile(
+      families[index],
+      base,
+      index === 0 && promoted ? alias : "",
+      keepEven ? (index === 0 ? WEIGHT_SAMPLE_LATIN : WEIGHT_SAMPLE_FALLBACK) : null
+    );
+    if (shape !== null) shapes.push(shape);
+  }
+  // `base` is body text: the weight the two families' ink is compared at.
+  var combined = shared.combineWeightProfiles(shapes, { base: shared.WEIGHT_BASE });
+  if (combined !== null) {
+    profile = combined;
+  } else if (families.length > 0) {
+    // Nothing measured (no canvas, no 2D context): the nominal window it is.
     profile = promoted
       ? shared.continuousWeightProfile()
       : { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };

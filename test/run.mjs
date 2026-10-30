@@ -4011,5 +4011,118 @@ await test("the dialog scope survives the host line that dropped both old marker
 
 /* ------------------------------------------------------------------ */
 
+await test("one notch moves every family the text can land on", () => {
+  // The reader sets ONE offset; the browser then renders Latin with the first
+  // family and Chinese with the fallback, each snapping that same value to its
+  // own faces. Measured on the reporter's pair (issue #4): Inclusive Sans is a
+  // variable 300-700 family that moves at nearly every unit, the CJK fallback
+  // ships three faces (300/400/500). A step measured on the Latin one alone left
+  // the Chinese untouched on most notches.
+  const latin = { min: -100, max: 200, step: 10 };
+  const cjk = { min: -100, max: 100, step: 100 };
+  const combined = shared.combineWeightProfiles([latin, cjk]);
+  assert.equal(combined.step, 100, "the coarsest family sets the unit");
+  assert.ok(combined.min >= cjk.min && combined.max <= cjk.max, "the range is one both can express");
+  // Every notch of the combined shape is a whole number of each family's own
+  // step, so no family can sit one out.
+  for (const shape of [latin, cjk]) assert.equal(combined.step % shape.step, 0, "a shared multiple");
+  // A single family keeps its own shape untouched.
+  assert.deepEqual(shared.combineWeightProfiles([latin]), latin);
+  assert.deepEqual(shared.combineWeightProfiles([cjk]), cjk);
+  // Steps that do not divide one another take the smallest shared multiple
+  // (10 and 25 -> 50), not merely the larger one, or the finer family would
+  // still sit out every other notch.
+  assert.equal(shared.combineWeightProfiles([{ min: -100, max: 100, step: 10 }, { min: -100, max: 100, step: 25 }]).step, 50);
+  // Families whose ranges do not overlap keep the widest single shape instead
+  // of a control with no positions at all.
+  const disjoint = shared.combineWeightProfiles([{ min: 0, max: 100, step: 50 }, { min: -300, max: -100, step: 100 }]);
+  assert.deepEqual(disjoint, { min: -300, max: -100, step: 100 });
+  // Nothing measured: the caller falls back to its nominal window.
+  assert.equal(shared.combineWeightProfiles([]), null);
+  assert.equal(shared.combineWeightProfiles([null, undefined]), null);
+});
+
+/* ------------------------------------------------------------------ */
+
+// The reporter's pair (issue #4), measured on a real page: Inclusive Sans is a
+// variable 300-700 family, the Chinese fallback owns exactly three faces
+// (300/400/500) and above them the browser strokes the 500 face itself.
+const PAIR_LATIN_INK = { 200: 69.2, 300: 69.2, 400: 100, 500: 121.5, 600: 144, 700: 144, 800: 144 };
+const PAIR_CJK_INK = { 200: 67.5, 300: 67.5, 400: 100, 500: 123.9, 600: 151.4, 700: 151.4, 800: 151.4 };
+const PAIR_LATIN = { min: -200, max: 400, step: 200, inkOf: (weight) => PAIR_LATIN_INK[weight] };
+const PAIR_CJK = { min: -200, max: 400, step: 100, inkOf: (weight) => PAIR_CJK_INK[weight] };
+
+await test("a pairing stops before the notch where one family is faked", () => {
+  // One 100-weight notch adds +21.5% ink to the Latin family and +23.9% to the
+  // Chinese one — 2.4 points apart, invisible. One 200-weight notch adds +44% and
+  // +51% — 7.4 apart, because above its last real face the Chinese family is no
+  // longer drawn, it is stroked thicker by the browser. That is the reported
+  // "one side suits, the other is too heavy", and the even range stops in front of it.
+  const pair = shared.combineWeightProfiles([PAIR_LATIN, PAIR_CJK], { base: 400 });
+  assert.deepEqual(pair, { min: -100, max: 100, step: 100 }, "the three faces both families own: 300 / 400 / 500");
+  assert.ok(shared.evennessOf([PAIR_LATIN, PAIR_CJK], 400, 600).spread > shared.INK_BALANCE_SPREAD, "600 is over budget");
+});
+
+/* ------------------------------------------------------------------ */
+
+await test("one notch moves both families by a comparable share of their ink", () => {
+  const even = shared.evennessOf([PAIR_LATIN, PAIR_CJK], 400, 500);
+  assert.equal(Math.round(even.spread * 1000), 24, "2.4 points apart");
+  assert.equal(Math.round(even.smallest * 1000), 215, "and the quieter side still gains 21.5%");
+  assert.ok(even.spread <= shared.INK_BALANCE_SPREAD, "inside the budget");
+  // A family that cannot answer at that weight is left out of the comparison, not
+  // counted as a zero — a zero would look like a perfectly even, totally dead notch.
+  const blind = { min: -200, max: 400, step: 100, inkOf: () => null };
+  assert.equal(shared.evennessOf([PAIR_LATIN, blind], 400, 500), null);
+  // A lone family has nothing to be even with.
+  assert.equal(shared.evennessOf([PAIR_LATIN], 400, 500), null);
+});
+
+/* ------------------------------------------------------------------ */
+
+await test("a pair whose faces are spaced unevenly still gets a lighter position", () => {
+  // Measured on the reporter's own fonts (issue #4): one notch LIGHTER costs the
+  // Latin family 29.7% of its ink and the Chinese one 17.9% — 11.9 points, over the
+  // strict budget, and no finer notch makes it better: the two families simply space
+  // their faces differently. Strict alone would leave the reader nowhere to go down.
+  const latin = {
+    min: -200, max: 400, step: 200,
+    inkOf: (w) => ({ 200: 70.3, 300: 70.3, 400: 100, 500: 119.1, 600: 137.2, 700: 154.9, 800: 154.9 })[w],
+  };
+  const cjk = {
+    min: -200, max: 400, step: 100,
+    inkOf: (w) => ({ 200: 82.1, 300: 82.1, 400: 100, 500: 121.7, 600: 182.9, 700: 182.9, 800: 182.9 })[w],
+  };
+  assert.equal(Math.round(shared.evennessOf([latin, cjk], 400, 300).spread * 1000), 118);
+  assert.ok(shared.INK_BALANCE_SPREAD_WIDE > shared.INK_BALANCE_SPREAD, "the wider budget exists for this case");
+  // One notch each way, and the fake-bold step at 600 is still refused.
+  assert.deepEqual(shared.combineWeightProfiles([latin, cjk], { base: 400 }), { min: -100, max: 100, step: 100 });
+  // Strict alone would have stopped at the neutral position.
+  assert.deepEqual(shared.balancedStackShape([latin, cjk], 400, -200, 400), { min: 0, max: 100, step: 100 });
+});
+
+/* ------------------------------------------------------------------ */
+
+await test("when no notch is even at all, the plain shape is kept rather than a dead control", () => {
+  // One family doubles its ink on a notch while the other barely moves, in both
+  // directions: no budget can make that even, so the plain shared multiple is the
+  // honest answer — it still moves the reader's text.
+  const fast = {
+    min: -200, max: 400, step: 10,
+    inkOf: (w) => ({ 200: 50, 300: 50, 400: 100, 500: 200, 600: 400 })[w],
+  };
+  const slow = {
+    min: -200, max: 400, step: 100,
+    inkOf: (w) => ({ 200: 100, 300: 100, 400: 100, 500: 105, 600: 110 })[w],
+  };
+  assert.equal(shared.balancedStackShape([fast, slow], 400, -200, 400), null);
+  assert.equal(shared.balancedStackShape([fast, slow], 400, -200, 400, shared.INK_BALANCE_SPREAD_WIDE), null);
+  assert.deepEqual(shared.combineWeightProfiles([fast, slow], { base: 400 }), { min: -200, max: 400, step: 100 });
+});
+
+/* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -3255,6 +3255,294 @@ function ceilTo(value, step) {
 }
 
 /**
+ * How far apart two families may land on one notch before the stack refuses it.
+ *
+ * Measured on the reporter's pair (issue #4): one 100-weight notch adds +21.5%
+ * ink to the Latin family and +23.9% to the Chinese one — 2.4 points apart, which
+ * no reader notices. One 200-weight notch adds +44% and +51% — 7.4 points apart,
+ * and that is the reported "one side suits, the other is too heavy". Five points
+ * is the budget between those two observations.
+ */
+var INK_BALANCE_SPREAD = 0.05;
+
+/**
+ * How far apart a pair may land when the strict budget would leave no control.
+ *
+ * Measured on the reporter's pair (issue #4): going one notch LIGHTER, the Latin
+ * family loses 29.7% of its ink and the Chinese one 17.9% — 11.9 points apart, and
+ * no finer notch makes it better, because the two families simply space their faces
+ * differently. Under the strict budget the reader would get a weight control that
+ * cannot go lighter at all (two positions). The wider budget is what keeps that
+ * physical pair usable, and it is only consulted when the strict one is: a stack
+ * that has four even positions never sees it.
+ */
+var INK_BALANCE_SPREAD_WIDE = 0.15;
+
+/** How many notches the evenness walk looks at, one way. */
+var WEIGHT_MAX_POSITIONS = 24;
+
+/**
+ * The least ink one notch has to add before a position is worth having.
+ *
+ * This is the bar `weightProfileFrom` already measured on this host: a 200-weight
+ * step is +30% ink and a 100-weight step +16%, and 100 was not enough — a reader
+ * could not see it. Five per cent would put a variable family's stack at twenty-odd
+ * notches that each move a little (measured live: 29 positions of +6%), which is the
+ * dead-control the coarse step exists to avoid. Fifteen keeps every pair the faces
+ * do allow (the reported one tops out at +19%/+22%) and stops there.
+ */
+var INK_BALANCE_STEP = 0.15;
+
+/**
+ * One family's ink at one weight.
+ *
+ * A family answers through `inkOf`, the sampler its own measurement already uses;
+ * a weight it cannot measure — or a family that cannot be measured at all — answers
+ * null and is left out of a comparison instead of counting as a zero.
+ * @param {Object} entry - one measured family.
+ * @param {number} weight - CSS weight.
+ * @returns {number|null} the ink, or null when there is no measurement.
+ */
+function entryInk(entry, weight) {
+  if (entry === null || typeof entry !== "object") return null;
+  if (typeof entry.inkOf !== "function") return null;
+  var ink = null;
+  try {
+    ink = entry.inkOf(weight);
+  } catch (error) {
+    return null;
+  }
+  ink = Number(ink);
+  if (!isFinite(ink) || ink <= 0) return null;
+  return ink;
+}
+
+/**
+ * How much moving from one weight to another changes each family's ink.
+ *
+ * The share is relative to the family's OWN ink at `from`, so two families that
+ * start out different sizes are still comparable: +20% means the same thing for
+ * both. Families that cannot be measured on both sides are left out.
+ * @param {Array<Object>} entries - the measured families.
+ * @param {number} from - the weight the reader is at.
+ * @param {number} to - the weight being compared.
+ * @returns {number[]|null} the relative changes, or null when fewer than two
+ *   families can be measured.
+ */
+function inkShares(entries, from, to) {
+  var shares = [];
+  for (var index = 0; index < entries.length; index += 1) {
+    var before = entryInk(entries[index], from);
+    var after = entryInk(entries[index], to);
+    if (before === null || after === null) continue;
+    shares.push((after - before) / before);
+  }
+  return shares.length < 2 ? null : shares;
+}
+
+/**
+ * How far apart the families land, and how little the quietest one moved.
+ * @param {number[]} shares - one relative change per family.
+ * @returns {{spread: number, smallest: number}} `spread` is the signed range, so
+ *   families moving in opposite directions count as far apart.
+ */
+function shareSpread(shares) {
+  var least = shares[0];
+  var most = shares[0];
+  var smallest = Math.abs(shares[0]);
+  for (var index = 1; index < shares.length; index += 1) {
+    if (shares[index] < least) least = shares[index];
+    if (shares[index] > most) most = shares[index];
+    var size = Math.abs(shares[index]);
+    if (size < smallest) smallest = size;
+  }
+  return { spread: most - least, smallest: smallest };
+}
+
+/**
+ * The evenness verdict for one move of the stack.
+ * @param {Array<Object>} entries - the measured families.
+ * @param {number} from - the weight the move starts at.
+ * @param {number} to - the weight it ends at.
+ * @returns {{spread: number, smallest: number}|null} the verdict, or null when it
+ *   cannot be measured.
+ */
+function evennessOf(entries, from, to) {
+  var shares = inkShares(entries, from, to);
+  if (shares === null) return null;
+  return shareSpread(shares);
+}
+
+/** Is one move of the stack both visible and even? */
+function moveIsEven(verdict, spread) {
+  return verdict !== null && verdict.smallest >= INK_BALANCE_STEP && verdict.spread <= spread;
+}
+
+/**
+ * The shape a stack of families can follow together, chosen for EVENNESS.
+ *
+ * Issue #4 is not about the range: it is about two families being moved by one
+ * offset and landing on faces that are not the same distance apart. The test is
+ * therefore walked outwards from the neutral position, one notch at a time, and a
+ * notch only survives when BOTH hold:
+ *  - every family's ink changes by at least `INK_BALANCE_STEP` (the notch is
+ *    visible), and
+ *  - the families land within `INK_BALANCE_SPREAD` of each other, measured both for
+ *    that one notch and for the whole way back to the neutral position — a stack
+ *    can be even notch by notch and still drift apart after two of them.
+ *
+ * The walk is what removes the synthetic-bold step without ever having to ask the
+ * browser whether a weight is drawn or faked: above its last real face a family is
+ * stroked thicker by the browser, which adds a much larger share of ink than a drawn
+ * face does — so the notch where one family jumps and the other does not simply
+ * fails the budget and the range stops in front of it.
+ *
+ * Among the shapes that survive, the one with the MOST positions wins: the visible
+ * floor above is what makes a finer notch worth having, and more positions is more
+ * control. (A single family is not put through this at all — it keeps the coarse
+ * shape `weightProfileFrom` measured for it.)
+ * @param {Array<{min: number, max: number, step: number, inkOf?: Function}>} entries
+ *   one record per measured family.
+ * @param {number} base - the weight the offset is added to (body text).
+ * @param {number} low - the lowest offset every family can express.
+ * @param {number} high - the highest offset every family can express.
+ * @returns {{min: number, max: number, step: number}|null} the shape, or null when
+ *   no step leaves the stack two positions to move between.
+ */
+function balancedStackShape(entries, base, low, high, spread) {
+  var budget = typeof spread === "number" && spread > 0 ? spread : INK_BALANCE_SPREAD;
+  var best = null;
+  var bestCount = 1;
+  var bestScore = Infinity;
+  for (var index = 0; index < WEIGHT_STEP_CANDIDATES.length; index += 1) {
+    var step = WEIGHT_STEP_CANDIDATES[index];
+    if (!(step > 0)) continue;
+    var up = 0;
+    var down = 0;
+    // A walk is bounded: no useful shape has more than a couple of dozen
+    // positions, and an unbounded one on a one-unit grid would cost hundreds of
+    // canvas renders on the very first measurement.
+    var limit = step * WEIGHT_MAX_POSITIONS;
+    for (var position = step; position <= high && position <= limit; position += step) {
+      if (!moveIsEven(evennessOf(entries, base + position - step, base + position), budget)) break;
+      if (!moveIsEven(evennessOf(entries, base, base + position), budget)) break;
+      up = position;
+    }
+    for (var back = step; back <= -low && back <= limit; back += step) {
+      if (!moveIsEven(evennessOf(entries, base - back + step, base - back), budget)) break;
+      if (!moveIsEven(evennessOf(entries, base, base - back), budget)) break;
+      down = back;
+    }
+    var count = (up + down) / step + 1;
+    if (count < 2) continue;
+    // How close the two families are on one notch from the neutral position: a tie
+    // between two shapes that move the stack over the same number of positions.
+    var headroom = evennessOf(entries, base, base + step);
+    if (headroom === null) headroom = evennessOf(entries, base, base - step);
+    var score = headroom === null ? Infinity : headroom.spread;
+    if (count > bestCount || (count === bestCount && score < bestScore)) {
+      // -0 would read as a different number to a strict comparison.
+      best = { min: down === 0 ? 0 : -down, max: up, step: step };
+      bestCount = count;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/**
+ * One slider shape for a stack whose text can land on more than one family.
+ *
+ * A reader sets ONE offset; the browser then renders English with the first
+ * family and Chinese with the fallback, each snapping that same requested value
+ * to its own faces. When the fallback ships three faces and the primary is a
+ * variable font, a step measured on the primary alone leaves the fallback
+ * unchanged on most notches — the reported "one side suits, the other is too
+ * heavy or too light" (issue #4: Inclusive Sans beside a three-face CJK family).
+ *
+ * The combined shape keeps every family moving on every notch, but the notch is
+ * chosen for EVENNESS (see `balancedStackShape`): each family has to change by a
+ * comparable share of its own ink, and the stack has to stay together over the
+ * whole length of the range. Families that can report their ink (`inkOf`) get that
+ * shape; a stack measured without a canvas keeps the plain shared-multiple shape,
+ * which is also what a single family gets.
+ * @param {Array<{min: number, max: number, step: number, inkOf?: Function}|null>} profiles
+ *   one shape per family.
+ * @param {{base?: number}} [options] `base` is the weight the offset is added to
+ *   (body text); it anchors the ink comparison.
+ * @returns {{min: number, max: number, step: number}|null} the combined shape, or
+ *   null when nothing usable was measured.
+ */
+function combineWeightProfiles(profiles, options) {
+  var list = [];
+  if (Array.isArray(profiles)) {
+    for (var index = 0; index < profiles.length; index += 1) {
+      var entry = profiles[index];
+      if (entry === null || typeof entry !== "object") continue;
+      if (!isFinite(entry.min) || !isFinite(entry.max) || !isFinite(entry.step)) continue;
+      if (!(entry.step > 0)) continue;
+      list.push(entry);
+    }
+  }
+  if (list.length === 0) return null;
+  if (list.length === 1) return { min: list[0].min, max: list[0].max, step: list[0].step };
+  var step = list[0].step;
+  for (var other = 1; other < list.length; other += 1) {
+    step = commonStep(step, list[other].step);
+  }
+  var low = list[0].min;
+  var high = list[0].max;
+  for (var more = 1; more < list.length; more += 1) {
+    low = Math.max(low, list[more].min);
+    high = Math.min(high, list[more].max);
+  }
+  var settings = options === null || typeof options !== "object" ? {} : options;
+  var base = isFinite(settings.base) ? Number(settings.base) : WEIGHT_BASE;
+  // Every family that can report ink is put through the evenness walk; a stack whose
+  // canvas could not answer keeps the plain shared-multiple shape.
+  var measured = false;
+  for (var scan = 0; scan < list.length; scan += 1) {
+    if (typeof list[scan].inkOf === "function") measured = true;
+  }
+  if (measured) {
+    var even = balancedStackShape(list, base, low, high);
+    var positions = even === null ? 0 : (even.max - even.min) / even.step + 1;
+    if (positions >= 3) return even;
+    // The pair's own faces are spaced so unevenly that the strict budget leaves
+    // no control; the wider one is what keeps a lighter position reachable.
+    var relaxed = balancedStackShape(list, base, low, high, INK_BALANCE_SPREAD_WIDE);
+    var relaxedPositions = relaxed === null ? 0 : (relaxed.max - relaxed.min) / relaxed.step + 1;
+    if (relaxedPositions > positions) return relaxed;
+    if (even !== null) return even;
+  }
+  var onGrid = { min: ceilTo(low, step), max: floorTo(high, step) };
+  if (onGrid.max >= onGrid.min) return { min: onGrid.min, max: onGrid.max, step: step };
+  var widest = list[0];
+  for (var alt = 1; alt < list.length; alt += 1) {
+    if (list[alt].max - list[alt].min > widest.max - widest.min) widest = list[alt];
+  }
+  return { min: widest.min, max: widest.max, step: widest.step };
+}
+
+/**
+ * The smallest candidate step that is a whole multiple of both inputs.
+ *
+ * Profiles come from one candidate list, so a shared multiple usually exists
+ * there; two steps that share none fall back to the coarser one, which still
+ * moves the coarser family on every notch.
+ * @param {number} a - one step.
+ * @param {number} b - another step.
+ * @returns {number} the combined step.
+ */
+function commonStep(a, b) {
+  for (var index = 0; index < WEIGHT_STEP_CANDIDATES.length; index += 1) {
+    var candidate = WEIGHT_STEP_CANDIDATES[index];
+    if (candidate % a === 0 && candidate % b === 0) return candidate;
+  }
+  return Math.max(a, b);
+}
+
+/**
  * Does every position of `[min..max]` in `step` increments render differently?
  *
  * Checked at every base the offset is added to: a step that is fine for body text
@@ -4837,6 +5125,16 @@ var shared = {
   WEIGHT_CSS_MIN: WEIGHT_CSS_MIN,
   WEIGHT_CSS_MAX: WEIGHT_CSS_MAX,
   weightProfileFrom: weightProfileFrom,
+  combineWeightProfiles: combineWeightProfiles,
+  balancedStackShape: balancedStackShape,
+  evennessOf: evennessOf,
+  INK_BALANCE_SPREAD: INK_BALANCE_SPREAD,
+  INK_BALANCE_STEP: INK_BALANCE_STEP,
+  INK_BALANCE_SPREAD_WIDE: INK_BALANCE_SPREAD_WIDE,
+  WEIGHT_PROBE_LOW: WEIGHT_PROBE_LOW,
+  WEIGHT_PROBE_HIGH: WEIGHT_PROBE_HIGH,
+  WEIGHT_PROBE_STEP: WEIGHT_PROBE_STEP,
+  GENERIC_FAMILIES: GENERIC_FAMILIES,
   weightStepRange: weightStepRange,
   isShorthandName: isShorthandName,
   isScaledToken: isScaledToken,
