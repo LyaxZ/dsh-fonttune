@@ -3026,9 +3026,23 @@ await test("the panel's bounds are the conversation area, or the window", () => 
   const viewport = { width: 1000, height: 800 };
   const whole = { left: 0, top: 0, right: 1000, bottom: 800, width: 1000, height: 800 };
   // Nothing to measure (a settings page has no conversation at all): the whole
-  // window stands in, exactly as it did before.
+  // window remains the plain fallback, exactly as it did before.
   assert.deepEqual(shared.floatBoundsFrom([], viewport), whole);
   assert.deepEqual(shared.floatBoundsFrom([null, undefined, {}, "nope"], viewport), whole);
+  // A new session can have a composer but no message prose yet. In that one state,
+  // the shell's main column is the safe stand-in: its left edge is just past the
+  // navigation rail, and its right edge already accounts for a right sidebar.
+  const mainColumn = { left: 280, top: 0, right: 760, bottom: 800, width: 480, height: 800 };
+  assert.deepEqual(shared.floatFallbackBounds(mainColumn, viewport), mainColumn);
+  assert.deepEqual(shared.floatFallbackBounds({ left: 280, top: -30, right: 1200, bottom: 840 }, viewport), {
+    left: 280,
+    top: 0,
+    right: 1000,
+    bottom: 800,
+    width: 720,
+    height: 800,
+  });
+  assert.deepEqual(shared.floatFallbackBounds(null, viewport), whole, "no shell uses the window");
   // The scroll container the conversation lives in wins over the prose inside it.
   const scroller = { left: 220, top: 56, right: 820, bottom: 800, width: 600, height: 744 };
   const prose = { left: 236, top: 72, right: 804, bottom: 2400, width: 568, height: 2328 };

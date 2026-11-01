@@ -6195,9 +6195,9 @@ function mountFloatPanel(scope, t, hostCtx) {
     return null;
   };
 
-  // Whether the last region reading was a real region or the whole-window
-  // stand-in (see `floatBounds`). A stand-in never moves the dot: it means "no
-  // conversation to measure right now", not "the conversation is the window".
+  // Whether the last bounds reading was a REAL conversation region or a stand-in
+  // (main column, then viewport; see `floatBounds`). A stand-in means "no conversation
+  // to measure right now", not "the conversation is that whole shell column".
   var boundsAreReal = false;
 
   /** The window size the bounds are cut to, with the shared fallback. */
@@ -6215,9 +6215,62 @@ function mountFloatPanel(scope, t, hostCtx) {
    * session had 36. The first in document order is usually an old turn scrolled
    * thousands of pixels off screen, and its scroll container can measure zero;
    * reading the bounds from that one element alone threw both of its candidates
-   * away and snapped the dot to the whole window instead of the conversation.
+   * away and snapped the dot to the fallback area instead of the conversation.
    * @returns {Array<object>} the prose elements (possibly empty).
    */
+  var EDITABLE_ANCESTOR =
+    "[contenteditable]:not([contenteditable='false']),textarea,input,[role='textbox']";
+
+  /**
+   * Whether a node sits inside something the reader types into.
+   * @param {object} node - the element to test (it counts as its own ancestor).
+   * @returns {boolean} true for the composer and anything inside it.
+   */
+  var insideEditable = function (node) {
+    try {
+      return node.closest(EDITABLE_ANCESTOR) !== null;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  /**
+   * Whether the dot's stored position lies over a field the reader types into.
+   *
+   * On a fresh session no conversation region is measurable, and a stand-in never
+   * moves a dot that already has a position. A dot saved over the composer (the
+   * reported bug: its region was the input's own box) would therefore stay inside
+   * the input for good. That place is wrong whatever the region is, so this is the
+   * one case the stand-in may relocate.
+   * @returns {boolean} true when the stored square overlaps an editable field.
+   */
+  var strandedInField = function () {
+    if (pos === null) return false;
+    var left = pos.x;
+    var top = pos.y;
+    var right = pos.x + shared.FLOAT_DOT;
+    var bottom = pos.y + shared.FLOAT_DOT;
+    try {
+      var fields = document.querySelectorAll(EDITABLE_ANCESTOR);
+      for (var index = 0; index < fields.length; index += 1) {
+        var box = fields[index].getBoundingClientRect();
+        if (
+          box.width > 0 &&
+          box.height > 0 &&
+          left < box.right &&
+          right > box.left &&
+          top < box.bottom &&
+          bottom > box.top
+        ) {
+          return true;
+        }
+      }
+    } catch (error) {
+      return false;
+    }
+    return false;
+  };
+
   var proseElements = function () {
     var found = [];
     var add = function (nodes) {
@@ -6232,7 +6285,17 @@ function mountFloatPanel(scope, t, hostCtx) {
     } catch (error) {
       // A page without a queryable document keeps the empty list (the window).
     }
-    return found;
+    // The composer is part of the conversation container on a fresh session, so a
+    // paragraph the input holds matches the conversation selector too. Measured
+    // live: one typed character left a `<p>` in the input, and the dot's region
+    // became the input's own scroll box, which parked the dot inside the input. A
+    // message is never typed into a field, so anything inside one is not the
+    // conversation, whatever class or attribute it carries.
+    var kept = [];
+    for (var at = 0; at < found.length; at += 1) {
+      if (!insideEditable(found[at])) kept.push(found[at]);
+    }
+    return kept;
   };
 
   /**
@@ -6325,24 +6388,70 @@ function mountFloatPanel(scope, t, hostCtx) {
   };
 
   /**
+   * The main content column while the conversation itself has no measurable prose.
+   *
+   * DSH's shell marks its bottom-row element with a stable data attribute and puts
+   * it directly inside the three-column frame. The frame's direct children are the
+   * left rail, the main column and the right rail; taking the main column's actual
+   * rectangle means its left edge follows an open or collapsed sidebar without a
+   * plugin-specific width guess, and its right edge leaves room for the right rail.
+   * If the shell changes shape or is not present, the viewport remains the fallback.
+   * @returns {object|null} the main column's rectangle, or null when it is not usable.
+   */
+  var shellMainColumnRect = function () {
+    try {
+      var bottom = document.querySelector("[data-shell-bottom]");
+      var frame = bottom === null ? null : bottom.parentElement;
+      if (frame === null || frame === undefined || frame.children.length < 2) return null;
+      var sidebar = frame.children[0];
+      var main = frame.children[1];
+      if (
+        main === null ||
+        main === undefined ||
+        main.hasAttribute("data-rightbar-col") ||
+        main.hasAttribute("data-shell-bottom") ||
+        main.hasAttribute("data-shell-overlay")
+      ) {
+        return null;
+      }
+      var sidebarRect = rectOf(sidebar);
+      var mainRect = rectOf(main);
+      if (
+        sidebarRect === null ||
+        mainRect === null ||
+        !(sidebarRect.width > 0) ||
+        !(mainRect.width > 0) ||
+        !(mainRect.height > 0) ||
+        mainRect.left + 1 < sidebarRect.right
+      ) {
+        return null;
+      }
+      return mainRect;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  /**
    * The rectangle the dot snaps to, drags within and reads its own quadrant from.
    *
-   * The conversation when it can be found, the whole window when it cannot (a
-   * settings page has no prose at all): the window is what this used to be
-   * everywhere, and it stays the last resort rather than the rule.
+   * The conversation when it can be found; when no conversation is measurable,
+   * the host's main column stands in so the bottom-left home is just past the left
+   * rail, rather than underneath its avatar. On pages that do not expose a main
+   * column, the whole window remains the fallback.
    *
-   * WHICH one answered is remembered in `boundsAreReal`, because the two are not
-   * interchangeable for a MOVE: the whole window is a stand-in for "there is no
-   * conversation to measure at this instant" — a session still mounting, a
-   * message list laid out at 0×0 — and a dot parked on the window's corner over
-   * a page that does have a conversation is exactly the reported "it sits on the
-   * window's left edge instead of the conversation's corner".
+   * WHICH one answered is remembered in `boundsAreReal`, because the main column
+   * is still a stand-in, not a real conversation region: a stored dot only moves
+   * within it when its saved position sits over an editable field (see
+   * `strandedInField`).
    * @returns {object} the bounds, in viewport coordinates.
    */
   var floatBounds = function () {
-    var picked = shared.floatBoundsPick(floatBoundsRects(), floatViewport());
+    var viewport = floatViewport();
+    var picked = shared.floatBoundsPick(floatBoundsRects(), viewport);
     boundsAreReal = picked.index >= 0;
-    return picked.bounds;
+    if (boundsAreReal) return picked.bounds;
+    return shared.floatFallbackBounds(shellMainColumnRect(), viewport);
   };
 
   /**
@@ -6898,13 +7007,12 @@ function mountFloatPanel(scope, t, hostCtx) {
    */
   var snapToCorner = function (instant) {
     var bounds = floatBounds();
-    // A stand-in region is not a home: the window's corner is what the dot would
-    // land on over a page whose conversation is merely not measurable yet, which
-    // is the reported "it snaps to the window's left edge instead of the
-    // conversation's corner". A dot the document already placed keeps the corner
+    // A stand-in region is not a home: the main-column corner is only where an
+    // editable-field position can be re-homed while the conversation is not
+    // measurable yet. A dot the document already placed keeps the corner
     // the last REAL region gave it; the observer settles it again the moment one
     // exists (see `reflowIntoBounds`).
-    if (!boundsAreReal && pos !== null) return pos;
+    if (!boundsAreReal && pos !== null && !strandedInField()) return pos;
     var snapped;
     if (pos !== null) {
       snapped = cornerHome(bounds, pos);
@@ -7046,10 +7154,13 @@ function mountFloatPanel(scope, t, hostCtx) {
     var bounds = floatBounds();
     // Nothing real to settle onto: a shut panel on a settings page, or a
     // conversation that is not measurable at this instant, leaves the dot where
-    // it is — moving it onto the window's corner is the bug, not the fallback.
+    // it is — moving it onto the fallback corner is the bug, not the fallback.
     // With nothing stored at all there is no home to keep, so the stylesheet's
-    // own corner is pinned as before.
-    if (!boundsAreReal && pos !== null) return false;
+    // own corner is pinned as before. The one exception is a dot stored INSIDE a
+    // field the reader types into (see `strandedInField`): that place is wrong
+    // whatever the region is, so it is re-homed to the main column and persisted.
+    var rehomeEditable = !boundsAreReal && pos !== null && strandedInField();
+    if (!boundsAreReal && pos !== null && !rehomeEditable) return false;
     var at = pos;
     if (at === null) {
       var rect = rectOf(host);
@@ -7094,7 +7205,7 @@ function mountFloatPanel(scope, t, hostCtx) {
     // told which corner that is, in the same `mutate`. A region that changed
     // shape is the caller that has to store the move it just made, wherever the
     // dot was standing before (see the note above).
-    if (outside || naming) persistIfDirty();
+    if (outside || naming || rehomeEditable) persistIfDirty();
     if (regionMoved === true) persistIfDirty();
     return true;
   };

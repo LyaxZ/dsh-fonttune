@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.5] - 2026-11-01
+
+### Fixed
+- **The floating dot covered the composer in a new session**: before conversation text appeared, the dot could remain over the input area; it now moves to the lower-left of the main content area, clear of both the composer and the sidebar.
+
 ## [0.7.4] - 2026-10-30
 
 ### Fixed

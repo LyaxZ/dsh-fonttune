@@ -606,8 +606,8 @@ check(
 // region's answer and no document holds them yet — that settle stores what it
 // moved, in either DIRECTION (a region that grew leaves the dot inside it, which
 // is still a move: the reported "the dot stopped following when the sidebar came
-// back"). A position the DOCUMENT handed over is painted on the corner and left
-// alone, so the flag is what keeps one writer from arguing with another.
+// back"). A position the DOCUMENT handed over is normally painted on the corner
+// and left alone; a dot stranded over an editable field is the sole exception.
 const settle = expected["lib/client.js"].match(
   /var settleOnCorner = function \(regionMoved, instant\) \{[\s\S]*?\n  \};/
 );
@@ -619,7 +619,8 @@ check(
   settle !== null &&
     cornerHome !== null &&
     settle[0].includes("var target = cornerHome(bounds, at);") &&
-    settle[0].includes("if (outside || naming) persistIfDirty();") &&
+    settle[0].includes("var rehomeEditable = !boundsAreReal && pos !== null && strandedInField();") &&
+    settle[0].includes("if (outside || naming || rehomeEditable) persistIfDirty();") &&
     settle[0].includes("if (regionMoved === true) persistIfDirty();") &&
     expected["lib/client.js"].includes("if (adoptDocPos()) settleOnCorner();") &&
     expected["lib/client.js"].includes("if (wasMoved) settleOnCorner();") &&
@@ -718,23 +719,42 @@ check(
 check(
   "the bounds and the watched boxes come from one candidate list",
   expected["lib/client.js"].includes(
-    "var picked = shared.floatBoundsPick(floatBoundsRects(), floatViewport());"
+    "var picked = shared.floatBoundsPick(floatBoundsRects(), viewport);"
   ) &&
     expected["lib/client.js"].includes("boundsAreReal = picked.index >= 0;") &&
     (expected["lib/client.js"].match(/var list = floatRegions\(\);/g) || []).length === 2 &&
     expected["lib/shared.cjs"].includes("floatBoundsPick(rects, viewport).bounds"),
   "the region a dot is measured against and the region that is watched are not one list"
 );
-// The whole window is a STAND-IN for "no conversation measurable right now", and
-// a stand-in must never move a dot the document already placed: that move is the
-// reported "it sits on the window's left edge instead of the conversation's
-// corner". Both paths that move the dot refuse it, and the region observer
-// settles the dot for real as soon as a region exists.
+// A fallback area is a STAND-IN for "no conversation measurable right now", and
+// must never move a dot the document already placed: that move is the reported
+// "it sits on the window's left edge instead of the conversation's corner". Both
+// paths that move the dot refuse it, and the region observer settles it for real as
+// soon as a region exists. The one exception is a dot stored over an editable field:
+// that place is wrong whatever the region is, so it is re-homed (see `strandedInField`).
 check(
-  "a whole-window stand-in never moves a dot that already has a home",
-  expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null) return pos;") &&
-    expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null) return false;"),
-  "a stand-in region can still move the dot onto the window's corner"
+  "a stand-in never moves a dot that already has a home, unless it sits in a field",
+  expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null && !strandedInField()) return pos;") &&
+    expected["lib/client.js"].includes("var rehomeEditable = !boundsAreReal && pos !== null && strandedInField();") &&
+    expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null && !rehomeEditable) return false;") &&
+    expected["lib/client.js"].includes("var strandedInField = function () {") &&
+    expected["lib/client.js"].includes("var rehomeEditable = !boundsAreReal && pos !== null && strandedInField();") &&
+    expected["lib/client.js"].includes("if (outside || naming || rehomeEditable) persistIfDirty();") &&
+    expected["lib/client.js"].includes("box.width > 0 &&"),
+  "a stand-in region can still move the dot without the editable-field guard"
+);
+// When there is no prose yet, use DSH's measured center column rather than the
+// viewport: the center column already begins after the live-width sidebar and ends
+// before a visible right rail, so the bottom-left home is in the usable content.
+check(
+  "a no-conversation fallback uses the main column, not the viewport origin",
+  expected["lib/client.js"].includes('document.querySelector("[data-shell-bottom]")') &&
+    expected["lib/client.js"].includes("var sidebar = frame.children[0];") &&
+    expected["lib/client.js"].includes("var main = frame.children[1];") &&
+    expected["lib/client.js"].includes("mainRect.left + 1 < sidebarRect.right") &&
+    expected["lib/client.js"].includes("shared.floatFallbackBounds(shellMainColumnRect(), viewport)") &&
+    expected["lib/shared.cjs"].includes("function floatFallbackBounds(region, viewport)"),
+  "the stand-in corner can overlap the left rail or right rail"
 );
 // The same host change that dropped the stylesheet's two old markers drops the
 // panel's two old anchors as well — and there the cost is a dot parked on the
@@ -1023,6 +1043,15 @@ check(
 // The notch has to be one EVERY family in the stack can follow: the reader sets
 // one offset, and a three-face CJK fallback behind a variable Latin family only
 // moves where the Latin one moved five times (issue #4).
+// The composer sits inside the conversation container on a fresh session, and the
+// conversation selector matches the paragraph a typed character leaves in it. The
+// dot's region must never be taken from inside a field the reader types into.
+check(
+  "the dot's region never comes from inside an editable field",
+  expected["lib/client.js"].includes("if (!insideEditable(found[at])) kept.push(found[at]);") &&
+    expected["lib/client.js"].includes("[contenteditable]:not([contenteditable='false']),textarea,input,[role='textbox']"),
+  "a typed character in the composer parked the dot inside the input"
+);
 check(
   "the notch is measured across the whole stack, not just its first family",
   expected["lib/client.js"].includes("var families = stackFamilies(resolved);") &&

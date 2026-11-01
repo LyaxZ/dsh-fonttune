@@ -1230,6 +1230,23 @@ function floatBoundsFrom(rects, viewport) {
 }
 
 /**
+ * The fallback region to use when the conversation has no measurable text yet.
+ *
+ * The page's whole-window stand-in starts at x=0, which puts the dot over the left
+ * navigation rail. On a host shell that exposes a main-column rectangle, using that
+ * rectangle as the fallback puts the dot at the content column's left corner while
+ * the conversation itself is mounting. If the shell supplies no usable region, the
+ * viewport stays the fallback.
+ * @param {unknown} region - the main content column, or null when unavailable.
+ * @param {{width: number, height: number}} viewport - the window size.
+ * @returns {{left:number,top:number,right:number,bottom:number,width:number,height:number}}
+ *   the clipped content box, or the whole viewport.
+ */
+function floatFallbackBounds(region, viewport) {
+  return floatBoundsPick(region === null || region === undefined ? [] : [region], viewport).bounds;
+}
+
+/**
  * Whether a second reading of the winning rectangle is the same shape as the last.
  *
  * The fallback watcher asks this every tick and nothing else, so it is stated on
@@ -4957,6 +4974,7 @@ var shared = {
   floatBoxOf: floatBoxOf,
   floatBoundsPick: floatBoundsPick,
   floatBoundsFrom: floatBoundsFrom,
+  floatFallbackBounds: floatFallbackBounds,
   sameWatchBounds: sameWatchBounds,
   floatTargetsConnected: floatTargetsConnected,
   floatQuadrantIn: floatQuadrantIn,
