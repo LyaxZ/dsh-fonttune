@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.6] - 2026-11-04
+
+### Fixed
+- **The plugin did not actually load on some hosts**: the Font tune settings card and the first-frame type stylesheet were missing while the conversation still looked completely normal, so it was easy to miss; the plugin now waits for its dependency to finish loading before it registers, and no longer starts half-loaded.
+
 ## [0.7.5] - 2026-11-01
 
 ### Fixed

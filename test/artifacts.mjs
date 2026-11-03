@@ -81,6 +81,22 @@ check(
   "lib/index.js imports lib/shared.cjs relatively",
   expected["lib/index.js"].includes('from "./shared.cjs"')
 );
+// Issue #7: the schema library is RESOLVED with `require` and LOADED with the ESM
+// loader. `@deepseek-ai/schemastery` is CommonJS but its own `require` pulls
+// `@deepseek-ai/cosmokit`, which is ESM only; requiring that while the host is
+// still loading the same graph throws ERR_REQUIRE_ESM_RACE_CONDITION and the whole
+// host half fails to import (no settings namespace, no first-frame stylesheet).
+const hostHalf = expected["lib/index.js"];
+check(
+  "the schema library is resolved with require and loaded with import()",
+  hostHalf.includes('from.resolve("@deepseek-ai/schemastery")') &&
+    hostHalf.includes("await import(pathToFileURL(resolved).href)") &&
+    hostHalf.includes("const z = await loadSchemastery();") &&
+    // A synchronous require of the package is the bug itself.
+    !hostHalf.includes('from("@deepseek-ai/schemastery")') &&
+    !hostHalf.includes('createRequire(import.meta.url)("@deepseek-ai/schemastery")'),
+  "a require() of schemastery races the host's ESM graph and kills the host half"
+);
 check(
   "the client bundle registers exactly one factory",
   [...expected["lib/client.js"].matchAll(/__ModuleLoader__\.load\(/g)].length === 1

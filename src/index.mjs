@@ -22,7 +22,7 @@
  */
 import { createRequire } from "node:module";
 import { dirname, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 // Default import, not named: `shared.cjs` is a CommonJS module, and Node's
 // CJS-to-ESM interop only guarantees `module.exports` as the default binding
 // (statically-detected named exports would break this half at boot).
@@ -47,26 +47,73 @@ import shared from "./shared.cjs";
  * entry (its `node_modules` holds the authoritative copy); anything resolving
  * back inside THIS package is skipped, so the offline suites — which have no
  * host — still fall through to the devDependency.
- * @returns {object} the schemastery export.
+ *
+ * RESOLVE with `require`, LOAD with the ESM loader. The package resolves to its
+ * CommonJS build, and that build `require`s `@deepseek-ai/cosmokit`, which ships
+ * as ES module only. Requiring it while the host is still loading that same
+ * module graph throws `ERR_REQUIRE_ESM_RACE_CONDITION` — "Cannot require() ES
+ * Module … because it is not yet fully loaded" — and then the whole host half
+ * fails to import: no settings namespace, no first-frame stylesheet, while the
+ * browser half keeps working and hides the damage (issue #7, reproduced here).
+ * `import()` waits for the graph instead of racing it, and it lands on the same
+ * instance: a `.cjs` file loaded through the ESM loader goes through the
+ * CommonJS cache, so the host's copy is still the only copy.
+ * @returns {Promise<object>} the schemastery export.
  */
-function loadSchemastery() {
+async function loadSchemastery() {
   const own = dirname(dirname(fileURLToPath(import.meta.url))) + sep;
   const bases = [process.argv[1], fileURLToPath(import.meta.url)];
   for (const base of bases) {
     if (typeof base !== "string" || base === "") continue;
-    try {
-      const from = createRequire(base);
-      if (!from.resolve("@deepseek-ai/schemastery").startsWith(own)) {
-        return from("@deepseek-ai/schemastery");
-      }
-    } catch {
-      // Not resolvable from that anchor: try the next one.
-    }
+    const resolved = resolveSchemastery(createRequire(base), own);
+    if (resolved !== null) return importSchemastery(resolved);
   }
-  return createRequire(import.meta.url)("@deepseek-ai/schemastery");
+  // Nothing outside this package offers it (the offline suites have no host), so
+  // the devDependency is the answer — still loaded through the ESM loader.
+  const fallback = resolveSchemastery(createRequire(import.meta.url), "");
+  if (fallback === null) {
+    throw new Error("@deepseek-ai/schemastery is not resolvable from the host or this package");
+  }
+  return importSchemastery(fallback);
 }
 
-const z = loadSchemastery();
+/**
+ * Locate the schema library from one anchor WITHOUT loading it.
+ *
+ * Only the resolution is anchored to the host: `createRequire(base).resolve()`
+ * answers "which file would the host use", while nothing is executed. An answer
+ * that points back inside this package is refused, so a linked install cannot
+ * shadow the host's copy with this package's devDependency.
+ * @param {NodeRequire} from - the resolver anchored at the host entry.
+ * @param {string} own - this package's directory prefix, "" to accept anything.
+ * @returns {string|null} the file to load, or null when this anchor cannot offer it.
+ */
+function resolveSchemastery(from, own) {
+  try {
+    const resolved = from.resolve("@deepseek-ai/schemastery");
+    if (typeof resolved !== "string" || resolved === "") return null;
+    if (own !== "" && resolved.startsWith(own)) return null;
+    return resolved;
+  } catch {
+    // Not resolvable from that anchor (or has no `require` entry): try the next.
+    return null;
+  }
+}
+
+/**
+ * Load one resolved file through the ESM loader.
+ *
+ * A CommonJS build arrives as its `default` binding, which is the module's own
+ * `module.exports`; a build that is already ESM answers with itself.
+ * @param {string} resolved - an absolute path, from `resolveSchemastery`.
+ * @returns {Promise<object>} the schemastery export.
+ */
+async function importSchemastery(resolved) {
+  const loaded = await import(pathToFileURL(resolved).href);
+  return loaded.default ?? loaded;
+}
+
+const z = await loadSchemastery();
 
 const {
   buildFontCss,
