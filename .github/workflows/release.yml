@@ -1,4 +1,4 @@
-name: Release
+name: Verify tag
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -80,21 +80,14 @@ jobs:
           } > NOTES.full.md
           echo "HAS_NOTES=1" >> "$GITHUB_ENV"
 
-      - name: Create or update release with tarballs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$ASSET" "$STABLE" --clobber
-            if [ -n "$HAS_NOTES" ]; then
-              gh release edit "$GITHUB_REF_NAME" --notes-file NOTES.full.md
-            fi
-          else
-            if [ -n "$HAS_NOTES" ]; then
-              gh release create "$GITHUB_REF_NAME" "$ASSET" "$STABLE" \
-                --title "$GITHUB_REF_NAME" --notes-file NOTES.full.md
-            else
-              gh release create "$GITHUB_REF_NAME" "$ASSET" "$STABLE" \
-                --title "$GITHUB_REF_NAME" --generate-notes
-            fi
-          fi
+      # The release itself is created from the maintainer's machine, by
+      # release.mjs in the workspace root, so it is credited to the maintainer
+      # and not to github-actions[bot].
+      - name: Keep the tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.STABLE }}
+          if-no-files-found: error
