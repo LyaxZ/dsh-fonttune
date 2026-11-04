@@ -3468,6 +3468,70 @@ function balancedStackShape(entries, base, low, high, spread) {
 }
 
 /**
+ * The FIRST weight of an arithmetic grid whose rendering matches a signature.
+ *
+ * The probe grid is monotone: below a family's lightest face every weight renders
+ * the same (the lightest face), above its heaviest face every weight renders the
+ * same (the heaviest face), and in between it walks the faces. So "renders like the
+ * ceiling" is a predicate that is false, then true, and its boundary is worth
+ * `log2` samples instead of one render per grid point — which is what the two
+ * horizon scans used to cost (eighty-one renders per family, issue #3).
+ * @param {(weight: number) => string|number} sample - renders a probe at one weight.
+ * @param {string|number} signature - the signature the boundary shares.
+ * @param {number} low - first weight of the grid.
+ * @param {number} high - last weight of the grid.
+ * @param {number} step - spacing of the grid.
+ * @param {number|null} fallback - returned when no grid weight matches.
+ * @returns {number|null} the weight, or the fallback.
+ */
+function firstGridWeight(sample, signature, low, high, step, fallback) {
+  var count = Math.floor((high - low) / step) + 1;
+  if (count < 1 || !(step > 0)) return fallback;
+  var at = function (index) {
+    return low + index * step;
+  };
+  if (sample(at(count - 1)) !== signature) return fallback;
+  var first = 0;
+  var last = count - 1;
+  while (first < last) {
+    var middle = (first + last) >> 1;
+    if (sample(at(middle)) === signature) last = middle;
+    else first = middle + 1;
+  }
+  return at(first);
+}
+
+/**
+ * The LAST weight of an arithmetic grid whose rendering matches a signature.
+ *
+ * The mirror of `firstGridWeight`: "renders like the floor" is true, then false,
+ * so the boundary is found from the other end.
+ * @param {(weight: number) => string|number} sample - renders a probe at one weight.
+ * @param {string|number} signature - the signature the boundary shares.
+ * @param {number} low - first weight of the grid.
+ * @param {number} high - last weight of the grid.
+ * @param {number} step - spacing of the grid.
+ * @param {number|null} fallback - returned when no grid weight matches.
+ * @returns {number|null} the weight, or the fallback.
+ */
+function lastGridWeight(sample, signature, low, high, step, fallback) {
+  var count = Math.floor((high - low) / step) + 1;
+  if (count < 1 || !(step > 0)) return fallback;
+  var at = function (index) {
+    return low + index * step;
+  };
+  if (sample(at(0)) !== signature) return fallback;
+  var first = 0;
+  var last = count - 1;
+  while (first < last) {
+    var middle = (first + last + 1) >> 1;
+    if (sample(at(middle)) === signature) first = middle;
+    else last = middle - 1;
+  }
+  return at(first);
+}
+
+/**
  * One slider shape for a stack whose text can land on more than one family.
  *
  * A reader sets ONE offset; the browser then renders English with the first
@@ -3628,30 +3692,38 @@ function weightProfileFrom(sample, options) {
   var top = typeof settings.top === "number" ? settings.top : WEIGHT_LADDER_STRONG;
   var topSignature = sample(WEIGHT_PROBE_HIGH);
   var bottomSignature = sample(WEIGHT_PROBE_LOW);
-  var heaviest = WEIGHT_PROBE_HIGH;
-  for (var weight = WEIGHT_PROBE_LOW; weight <= WEIGHT_PROBE_HIGH; weight += WEIGHT_PROBE_STEP) {
-    if (sample(weight) === topSignature) {
-      heaviest = weight;
-      break;
-    }
-  }
-  var lightest = WEIGHT_PROBE_LOW;
-  for (var back = WEIGHT_PROBE_HIGH; back >= WEIGHT_PROBE_LOW; back -= WEIGHT_PROBE_STEP) {
-    if (sample(back) === bottomSignature) {
-      lightest = back;
-      break;
-    }
-  }
+  // The two horizons used to be found by walking the whole probe grid from one end
+  // — eighty-one canvas renders per family, and on a font collection of a few
+  // hundred megabytes each render is the browser rasterizing a new weight (issue
+  // #3: seconds of blocked main thread). The grid is monotone in weight: everything
+  // from a family's heaviest face UP renders the same, so the horizon is a
+  // boundary, and a bisection finds it in seven samples instead of eighty-one.
+  var heaviest = firstGridWeight(
+    sample,
+    topSignature,
+    WEIGHT_PROBE_LOW,
+    WEIGHT_PROBE_HIGH,
+    WEIGHT_PROBE_STEP,
+    WEIGHT_PROBE_HIGH
+  );
+  var lightest = lastGridWeight(
+    sample,
+    bottomSignature,
+    WEIGHT_PROBE_LOW,
+    WEIGHT_PROBE_HIGH,
+    WEIGHT_PROBE_STEP,
+    WEIGHT_PROBE_LOW
+  );
   // How far the offset can go before NO layer that must move can move any more:
   // the widest horizon among those bases, since a layer that could still change
   // must not be cut off by one that already sits at its heaviest face.
   var headroom = Math.max(0, heaviest - WEIGHT_BASE);
   if (top !== WEIGHT_BASE) {
-    for (var up = top; up <= WEIGHT_PROBE_HIGH; up += WEIGHT_PROBE_STEP) {
-      if (sample(up) === topSignature) {
-        headroom = Math.max(headroom, up - top);
-        break;
-      }
+    // Same boundary, same bisection: the first weight at or above the heavy base
+    // that already renders at the ceiling.
+    var reached = firstGridWeight(sample, topSignature, top, WEIGHT_PROBE_HIGH, WEIGHT_PROBE_STEP, null);
+    if (reached !== null) {
+      headroom = Math.max(headroom, reached - top);
     }
   }
   var reachUp = Math.min(ceil, WEIGHT_DELTA_UP_LIMIT, headroom);

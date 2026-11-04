@@ -601,6 +601,42 @@ await test("the scale is uniform and bounded", () => {
   assert.equal(shared.scaleFor(-100), 0.5);
 });
 
+// The two horizons are found by bisection now (issue #3: eighty-one renders per
+// family is seconds of blocked main thread on a huge font collection). The shape
+// has to stay exactly what the old end-to-end scan produced, and the sampler has
+// to be asked a log2 number of questions, not one per grid point.
+await test("the horizons are bisected, not scanned, and the shape is unchanged", () => {
+  // A family whose faces are 100-250 / 300 / 400 / 500 / 600 / 700 / 800-900.
+  const faceAt = (weight) => {
+    if (weight <= 250) return "light";
+    if (weight >= 800) return "heavy";
+    return "face" + weight;
+  };
+  let asked = 0;
+  const seen = new Map();
+  const sample = (weight) => {
+    if (seen.has(weight)) return seen.get(weight);
+    asked += 1;
+    const signature = faceAt(weight);
+    seen.set(weight, signature);
+    return signature;
+  };
+  const shape = shared.weightProfileFrom(sample);
+  assert.deepEqual(shape, { min: -200, max: 400, step: 200 });
+  // 81 grid points used to be walked; seven comparisons per boundary suffice.
+  assert.ok(asked < 40, `measured with ${asked} samples`);
+
+  // A two-face family: everything clamps to one of two renderings, so there is no
+  // notch to offer and the range collapses to the single position's neighbour.
+  let flatAsked = 0;
+  const flat = shared.weightProfileFrom((weight) => {
+    flatAsked += 1;
+    return weight <= 400 ? "regular" : "bold";
+  });
+  assert.deepEqual(flat, { min: 0, max: 10, step: 10 });
+  assert.ok(flatAsked < 60, `flat family measured with ${flatAsked} samples`);
+});
+
 section("shared: the generated stylesheet");
 
 await test("a dormant configuration injects nothing", () => {
@@ -1940,11 +1976,13 @@ await test("the polling refresh walks the CSS only when something moved", async 
     const { ctx } = cardContext(scope);
     await loadClientBundle(ctx);
     const tag = dom.document.querySelector('style[data-plugin-css="dsh-fonttune"]');
-    assert.equal(timeouts.length, 1, "the first frame is refreshed on a timer");
+    // One timer forces the first refresh; the deferred code-axis warm-up is the
+    // other (it holds its slice back so the first seconds stay free).
+    assert.ok(timeouts.length >= 1, "the first frame is refreshed on a timer");
     assert.equal(intervals.length, 1, "and the poll is installed");
     const initial = reads;
     assert.ok(initial >= 1, "applying read the tokens once");
-    assert.equal(timeouts.length, 1, "the boot refresh is the only timer");
+    assert.ok(timeouts.length <= 2, "no other timer joins the boot refresh");
     assert.ok(idles.length >= 1, "the weight warm-up rides idle, not the poll's timer");
     for (const fire of timeouts) fire(); // the forced first refresh
     const afterForced = reads;
@@ -3657,11 +3695,24 @@ await test("the weight shapes are warmed before any card mounts", async () => {
   const warmed = (globalThis.__DFP_PROBE_LOG__ || []).filter((entry) => entry.kind === "weight-warm");
   assert.deepEqual(
     warmed.map((entry) => entry.detail.axis),
-    ["dialog", "ui", "code"],
-    "one warm slice per weight axis, in order"
+    ["dialog", "ui"],
+    "the two text axes are warmed straight away, one slice each"
   );
+  // The code axis is deferred (its family is rarely touched, and a slow machine is
+  // already busy with the two above), so it lands after `WARM_CODE_DELAY_MS`.
+  await new Promise((resolve) => setTimeout(resolve, 2700));
+  const settled = (globalThis.__DFP_PROBE_LOG__ || []).filter((entry) => entry.kind === "weight-warm");
+  // A slice left over from an earlier test's stacks may land in this window, so the
+  // assertion is about the ORDER of the axes, not the number of journal entries.
+  const axes = settled
+    .map((entry) => entry.detail.axis)
+    .filter((axis, index, all) => all.indexOf(axis) === index);
+  assert.deepEqual(axes, ["dialog", "ui", "code"], "one warm slice per weight axis, in order");
   assert.ok(String(warmed[0].detail.stack).includes("FTWarmProbe"), "the warm measures the dialog stack");
-  assert.ok(String(warmed[2].detail.stack).includes("FTWarmMono"), "the code axis warms against the code family");
+  const codeSlice = settled.find(
+    (entry) => entry.detail.axis === "code" && String(entry.detail.stack).includes("FTWarmMono")
+  );
+  assert.ok(codeSlice, "the code axis warms against the code family");
   globalThis.__DFP_PROBE__ = false;
 });
 

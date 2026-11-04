@@ -2,6 +2,15 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.7] - 2026-11-05
+
+### Fixed
+- **The stall when opening the font settings**: the weight notches are now measured in steps that stay out of the settings page's open and refresh, and a family is measured once — later opens read the result instead of measuring again.
+- **A long unresponsive page with some very large font collections**: when the font file is exceptionally large the measurement falls back to coarse notches after a time limit instead of holding the interface for a long time.
+
+### Changed
+- **DSH 0.2.2-rc.1 is supported**: the compatibility table in the README and the plugin manifest now list 0.2.1-rc.3, 0.2.1-rc.5 and 0.2.2-rc.1.
+
 ## [0.7.6] - 2026-11-04
 
 ### Fixed

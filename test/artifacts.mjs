@@ -1068,6 +1068,31 @@ check(
     expected["lib/client.js"].includes("[contenteditable]:not([contenteditable='false']),textarea,input,[role='textbox']"),
   "a typed character in the composer parked the dot inside the input"
 );
+// Issue #3: a shape costs ~eighty canvas renders per family, and on a font
+// collection of a few hundred megabytes that is seconds of blocked main thread.
+// Two things keep it out of the way: the answer is stored across loads, and a
+// RENDER never measures (it uses the stored answer or the provisional shape and is
+// redrawn when the measurement lands).
+check(
+  "a measured weight shape survives a reload and is never measured during a render",
+  expected["lib/client.js"].includes('var SHAPE_STORE_KEY = "dsh-fonttune:weight-shapes:v1";') &&
+    expected["lib/client.js"].includes("function storedWeightShape(key)") &&
+    expected["lib/client.js"].includes("function rememberWeightShape(key, profile)") &&
+    expected["lib/client.js"].includes("if (peek) return PENDING_WEIGHT_SHAPE;") &&
+    expected["lib/client.js"].includes("rememberWeightShape(key, profile);") &&
+    // the render paths ask for a peek; the idle warm-up is what measures
+    (expected["lib/client.js"].match(/\{ peek: true \}/g) || []).length >= 3 &&
+    expected["lib/client.js"].includes("function notifyShapes()") &&
+    expected["lib/client.js"].includes("if (changed) notifyShapes();"),
+  "opening the settings can still block on the measurement"
+);
+check(
+  "the card redraws when a shape lands after its first render",
+  expected["lib/client.js"].includes("shapeListeners.push(listener);") &&
+    expected["lib/client.js"].includes("setShapeRevision(function (count) {") &&
+    expected["lib/client.js"].includes("shapeListeners.push(render);"),
+  "the counts would stay at the provisional shape until the card is reopened"
+);
 check(
   "the notch is measured across the whole stack, not just its first family",
   expected["lib/client.js"].includes("var families = stackFamilies(resolved);") &&

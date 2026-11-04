@@ -1300,6 +1300,18 @@ var weightProbeCanvas = null;
 var weightProfileCache = {};
 
 /**
+ * How slow one canvas render may be before the font is treated as too heavy to
+ * sweep in detail (a few-hundred-megabyte collection answers in tens of ms).
+ */
+var SLOW_SAMPLE_MS = 40;
+
+/** How long after load the code axis is measured (the other two go first). */
+var WARM_CODE_DELAY_MS = 2500;
+
+/** Thrown by the guarded sampler to abandon the fine sweep on a slow font. */
+var WEIGHT_TOO_SLOW = { tooSlow: true };
+
+/**
  * The families a stack can actually render text with.
  *
  * The first family draws the Latin text and a later one draws whatever the first
@@ -1377,6 +1389,15 @@ function familyWeightProfile(family, base, alias, inkText) {
     return familyProfileCache[key];
   }
   var record = null;
+  // A font collection of a few hundred megabytes makes EVERY render expensive (the
+  // browser re-parses the collection for a weight it has not drawn yet), and the
+  // sweep asks for a dozen of them in a row — measured at 20-50 ms each on such a
+  // file, i.e. a second of blocked main thread per family (issue #3). One render
+  // that costs more than SLOW_SAMPLE_MS is enough evidence: abandon the fine sweep
+  // and answer with a coarse one, so the worst case stays bounded instead of
+  // growing with the file size.
+  var slow = false;
+  var guarded = null;
   try {
     var target = '"' + (alias === "" ? family : alias) + '"';
     var seen = {};
@@ -1386,10 +1407,16 @@ function familyWeightProfile(family, base, alias, inkText) {
       }
       return seen[weight];
     };
+    guarded = function (weight) {
+      var started = Date.now();
+      var signature = sample(weight);
+      if (Date.now() - started >= SLOW_SAMPLE_MS) throw WEIGHT_TOO_SLOW;
+      return signature;
+    };
     var shape =
       alias === ""
-        ? weightProfileFrom(sample, { top: base })
-        : weightProfileFrom(sample, { top: base, candidates: shared.CONTINUOUS_CANDIDATES });
+        ? weightProfileFrom(guarded, { top: base })
+        : weightProfileFrom(guarded, { top: base, candidates: shared.CONTINUOUS_CANDIDATES });
     record = { min: shape.min, max: shape.max, step: shape.step, inkOf: null };
     if (text !== null) {
       var inks = {};
@@ -1401,7 +1428,31 @@ function familyWeightProfile(family, base, alias, inkText) {
       };
     }
   } catch (error) {
-    record = null;
+    if (error !== WEIGHT_TOO_SLOW) {
+      record = null;
+    } else {
+      // Too slow for the fine sweep: nine renders on the hundred grid describe the
+      // family coarsely, which is still a control that moves in visible steps. No
+      // ink comparison — that would be a second sweep of the same price.
+      slow = true;
+    }
+  }
+  if (slow) {
+    try {
+      var coarseSeen = {};
+      var coarse = weightProfileFrom(
+        function (weight) {
+          if (!Object.prototype.hasOwnProperty.call(coarseSeen, weight)) {
+            coarseSeen[weight] = sampleWeightSignature(target, Math.round(weight / 100) * 100);
+          }
+          return coarseSeen[weight];
+        },
+        { top: base, candidates: [100] }
+      );
+      record = { min: coarse.min, max: coarse.max, step: coarse.step, inkOf: null };
+    } catch (error) {
+      record = null;
+    }
   }
   familyProfileCache[key] = record;
   return record;
@@ -1782,21 +1833,142 @@ function inkOfSignature(signature) {
 }
 
 /**
+ * Where a measured slider shape survives a page reload.
+ *
+ * Measuring one axis is around eighty canvas renders per family, and the cost per
+ * render is the browser rasterizing a weight it has never drawn (measured: ~3 ms
+ * for an 18 MB family, ~6 ms for a 35 MB one, and seconds per render on a font
+ * collection of a few hundred megabytes — issue #3). The answer only changes when
+ * the reader changes the fonts, so it is kept: the first visit pays, every later
+ * one opens instantly. The TTL bounds how long a font file that was replaced
+ * under the same family name may go unnoticed.
+ */
+var SHAPE_STORE_KEY = "dsh-fonttune:weight-shapes:v1";
+var SHAPE_STORE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+var SHAPE_STORE_LIMIT = 32;
+
+/**
+ * What a slider shows while its measurement has not landed yet.
+ *
+ * The nominal offset window, unit one: the same answer the code already gives when
+ * a family cannot be measured at all, so nothing new appears in the document and a
+ * stored offset stays reachable. Rendering is what used to MEASURE (a cold cache at
+ * open = eighty canvas renders on the main thread), which is the "opening the
+ * settings freezes" of issue #3; the real counts replace these the moment the idle
+ * measurement finishes and the card redraws.
+ */
+var PENDING_WEIGHT_SHAPE = { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
+
+/** The decoded store, or an empty one when storage is unavailable. */
+var shapeStore = null;
+
+/**
+ * The persistent shape store, read once.
+ * @returns {Object} key -> `{min, max, step, at}`.
+ */
+function readShapeStore() {
+  if (shapeStore !== null) return shapeStore;
+  shapeStore = {};
+  try {
+    var raw = globalThis.localStorage.getItem(SHAPE_STORE_KEY);
+    var parsed = raw === null ? null : JSON.parse(raw);
+    if (parsed !== null && typeof parsed === "object") {
+      for (var key in parsed) {
+        if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
+        var entry = parsed[key];
+        if (entry === null || typeof entry !== "object") continue;
+        if (!isFinite(entry.min) || !isFinite(entry.max) || !isFinite(entry.step)) continue;
+        if (!(entry.step > 0) || !isFinite(entry.at)) continue;
+        shapeStore[key] = { min: entry.min, max: entry.max, step: entry.step, at: entry.at };
+      }
+    }
+  } catch (error) {
+    // Private mode, a disabled store, a corrupted value: measuring still works.
+  }
+  return shapeStore;
+}
+
+/**
+ * The stored shape for one cache key, when it is still fresh.
+ * @param {string} key - the same key the memory cache uses.
+ * @returns {{min: number, max: number, step: number}|null} the shape, or null.
+ */
+function storedWeightShape(key) {
+  var store = readShapeStore();
+  if (!Object.prototype.hasOwnProperty.call(store, key)) return null;
+  var entry = store[key];
+  if (Date.now() - entry.at > SHAPE_STORE_TTL_MS) return null;
+  return { min: entry.min, max: entry.max, step: entry.step };
+}
+
+/**
+ * Keep one measured shape for the next page load.
+ *
+ * Writes the whole (small) map back, dropping the oldest entries past the limit:
+ * a reader who tries many browsing fonts must not grow this without bound.
+ * @param {string} key - the same key the memory cache uses.
+ * @param {{min: number, max: number, step: number}} profile - what was measured.
+ */
+function rememberWeightShape(key, profile) {
+  var store = readShapeStore();
+  store[key] = { min: profile.min, max: profile.max, step: profile.step, at: Date.now() };
+  var keys = Object.keys(store);
+  if (keys.length > SHAPE_STORE_LIMIT) {
+    keys.sort(function (left, right) {
+      return store[left].at - store[right].at;
+    });
+    for (var index = 0; index < keys.length - SHAPE_STORE_LIMIT; index += 1) {
+      delete store[keys[index]];
+    }
+  }
+  try {
+    globalThis.localStorage.setItem(SHAPE_STORE_KEY, JSON.stringify(store));
+  } catch (error) {
+    // A full or disabled store only costs the next load the measurement again.
+  }
+}
+
+/**
+ * What to redraw when a measurement lands after the first paint.
+ *
+ * The card renders the count of positions, which is a property of the font: a
+ * shape that arrives later (the idle warm-up, a slower family) has to reach the
+ * mounted cards or they would keep showing the provisional counts.
+ */
+var shapeListeners = [];
+
+/** Ask every mounted card to re-read the shapes. */
+function notifyShapes() {
+  var pending = shapeListeners.slice();
+  for (var index = 0; index < pending.length; index += 1) {
+    try {
+      pending[index]();
+    } catch (error) {
+      // A listener must never break the measurement that notified it.
+    }
+  }
+}
+
+/**
  * The slider shape to use for one family: its range and its notch.
  *
  * A family can only be made as light or as heavy as the faces it ships, so the
  * range is measured rather than fixed (`weightProfileFrom`), which also makes
  * every notch a change — for every layer of the ladder, so the measurement is
  * told which base is the heaviest one the offset lands on. Measured once per
- * family and base and cached; any failure (no canvas, no 2D context) falls back
- * to the nominal window with single units.
+ * family and base and cached, in memory and across page loads; any failure (no
+ * canvas, no 2D context) falls back to the nominal window with single units.
  * @param {string} stack - resolved `font-family` value, "" for the page default.
  * @param {number} [top] - the heaviest base the offset is added to; the ladder's
  *   own top for the conversation and interface axes, the axis's base for code.
+ * @param {{peek?: boolean}} [options] - `peek: true` never measures: it answers
+ *   with the stored shape when there is one and the provisional shape otherwise,
+ *   so a render can never block on a canvas sweep (see `PENDING_WEIGHT_SHAPE`).
  * @returns {{min: number, max: number, step: number}} the slider shape.
  */
-function weightProfileFor(stack, top) {
+function weightProfileFor(stack, top, options) {
   var base = typeof top === "number" ? top : shared.WEIGHT_LADDER_TOP;
+  var peek = options !== null && typeof options === "object" && options.peek === true;
   var resolved = String(stack) === "" ? liveFamily() : String(stack);
   // `hasOwnProperty` rather than a truthiness test: the alias map is keyed by family
   // name, and a family called "constructor" must not read as promoted.
@@ -1810,6 +1982,15 @@ function weightProfileFor(stack, top) {
   if (Object.prototype.hasOwnProperty.call(weightProfileCache, key)) {
     return weightProfileCache[key];
   }
+  // Measured on a previous visit: use it and skip the sweep entirely.
+  var stored = storedWeightShape(key);
+  if (stored !== null) {
+    weightProfileCache[key] = stored;
+    return stored;
+  }
+  // A render must never wait for eighty canvas renders: answer with the
+  // provisional shape now, and let the idle warm-up measure and redraw.
+  if (peek) return PENDING_WEIGHT_SHAPE;
   var profile = promoted
     ? shared.continuousWeightProfile()
     : { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
@@ -1850,6 +2031,20 @@ function weightProfileFor(stack, top) {
       : { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
   }
   weightProfileCache[key] = profile;
+  // A measured answer is worth a reload's freedom from the sweep, and the count it
+  // changes has to reach whatever is already on screen with the provisional one.
+  // Only when it actually differs: a family nothing could measure (no canvas) lands
+  // on exactly the provisional window, and redrawing for that would be noise.
+  rememberWeightShape(key, profile);
+  // Nothing distinguishable measured (no canvas, a family the page cannot draw)
+  // leaves the degenerate shape, which is not worth a redraw.
+  var changed =
+    profile.min !== 0 || profile.max !== 0
+      ? profile.min !== PENDING_WEIGHT_SHAPE.min ||
+        profile.max !== PENDING_WEIGHT_SHAPE.max ||
+        profile.step !== PENDING_WEIGHT_SHAPE.step
+      : false;
+  if (changed) notifyShapes();
   return profile;
 }
 
@@ -1902,6 +2097,9 @@ function deferWeightWarm(job) {
  * @param {object} editing - the value set the axes read.
  */
 var warmSignature = null;
+
+/** The code stack the deferred slice was last scheduled for (scheduled once). */
+var codeWarmSignature = null;
 var scheduleWeightWarm = function (editing) {
   var stacks = weightAxisStacks(editing);
   var signature = stacks.dialog + "\u0000" + stacks.ui + "\u0000" + stacks.code;
@@ -1918,11 +2116,6 @@ var scheduleWeightWarm = function (editing) {
       weightProfileFor(stacks.ui, shared.WEIGHT_LADDER_STRONG);
       probeLog("weight-warm", { axis: "ui", stack: stacks.ui });
     },
-    function () {
-      probeContinuity(stacks.code);
-      weightProfileFor(stacks.code, shared.WEIGHT_BASE);
-      probeLog("weight-warm", { axis: "code", stack: stacks.code });
-    },
   ];
   var runNext = function () {
     var job = jobs.shift();
@@ -1931,6 +2124,20 @@ var scheduleWeightWarm = function (editing) {
     deferWeightWarm(runNext);
   };
   deferWeightWarm(runNext);
+  // The code axis is measured LAST and later still: its family is usually a
+  // monospace the reader rarely touches, and on a slow machine the two axes above
+  // already keep the main thread busy. Deferring it keeps the first seconds after
+  // load (when a reader is likeliest to open the settings) free of its sweep.
+  var codeSignature = stacks.code;
+  if (codeSignature === codeWarmSignature) return;
+  codeWarmSignature = codeSignature;
+  globalThis.setTimeout(function () {
+    deferWeightWarm(function () {
+      probeContinuity(stacks.code);
+      weightProfileFor(stacks.code, shared.WEIGHT_BASE);
+      probeLog("weight-warm", { axis: "code", stack: stacks.code });
+    });
+  }, WARM_CODE_DELAY_MS);
 };
 
 /**
@@ -4269,7 +4476,8 @@ function FontCard(props) {
   var weightField = function (props) {
     var profile = weightProfileFor(
       props.stack === undefined ? "" : props.stack,
-      props.top === undefined ? shared.WEIGHT_LADDER_STRONG : props.top
+      props.top === undefined ? shared.WEIGHT_LADDER_STRONG : props.top,
+      { peek: true }
     );
     var stored = props.value === WEIGHT_UNSET ? NEUTRAL_WEIGHT : props.value;
     // A stored offset outside the measured range (the font changed since it was
@@ -4886,7 +5094,7 @@ function FontCard(props) {
     var isCode = field === CODE_WEIGHT_FIELD;
     var stack =
       field === WEIGHT_DIALOG_FIELD ? dialogStack : isCode ? codeStack : uiStack;
-    var profile = weightProfileFor(stack, isCode ? shared.WEIGHT_BASE : shared.WEIGHT_LADDER_STRONG);
+    var profile = weightProfileFor(stack, isCode ? shared.WEIGHT_BASE : shared.WEIGHT_LADDER_STRONG, { peek: true });
     return weightStepRange(profile, value === WEIGHT_UNSET ? 0 : value).value;
   };
 
@@ -4956,6 +5164,23 @@ function FontCard(props) {
   if (editing[CODE_LINE_HEIGHT_FIELD] !== 0) {
     previewCodeStyle.lineHeight = "calc(20px + " + editing[CODE_LINE_HEIGHT_FIELD] + "px)";
   }
+
+  // A shape measured after this render changes the counts the rows above show, so
+  // the card redraws once one lands (see `notifyShapes`). Declared last on purpose:
+  // the hook order of everything before it stays exactly as it was.
+  var [, setShapeRevision] = useState(0);
+  useEffect(function () {
+    var listener = function () {
+      setShapeRevision(function (count) {
+        return count + 1;
+      });
+    };
+    shapeListeners.push(listener);
+    return function () {
+      var at = shapeListeners.indexOf(listener);
+      if (at >= 0) shapeListeners.splice(at, 1);
+    };
+  }, []);
 
   return h(
     "li",
@@ -8299,7 +8524,7 @@ function mountFloatPanel(scope, t, hostCtx) {
     var dialogStack = weightAxisStacks(config).dialog;
     var profile = { min: WEIGHT_DELTA_MIN, max: WEIGHT_DELTA_MAX, step: 1 };
     try {
-      profile = weightProfileFor(dialogStack, shared.WEIGHT_LADDER_STRONG);
+      profile = weightProfileFor(dialogStack, shared.WEIGHT_LADDER_STRONG, { peek: true });
     } catch (profileError) {
       // The nominal window stands in when the family cannot be measured.
     }
@@ -8675,13 +8900,18 @@ function mountFloatPanel(scope, t, hostCtx) {
   }
 
   // A promotion changes the weight row's shape; the panel redraws itself when one
-  // lands, and stops listening when it goes away.
+  // lands, and stops listening when it goes away. A shape that only lands with the
+  // idle measurement is the same story: the row was rendered with the provisional
+  // counts, so it has to be redrawn once the real ones exist.
   promotionListeners.push(render);
+  shapeListeners.push(render);
 
   return {
     destroy: function () {
       var at = promotionListeners.indexOf(render);
       if (at >= 0) promotionListeners.splice(at, 1);
+      var shapeAt = shapeListeners.indexOf(render);
+      if (shapeAt >= 0) shapeListeners.splice(shapeAt, 1);
       if (statusTimer !== null) globalThis.clearTimeout(statusTimer);
       if (closeTimer !== null) globalThis.clearTimeout(closeTimer);
       if (reflowTimer !== null) globalThis.clearTimeout(reflowTimer);
