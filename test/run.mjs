@@ -1248,6 +1248,26 @@ await test("removing one entry leaves the other slots intact", () => {
 
 section("shared: the family picker's groups");
 
+// A large collection (or a Super TTC exposing every weight as its own family)
+// enumerates hundreds of names; building a row for each is the visible stall when
+// the list opens. Browsing renders one screenful, searching renders what matched,
+// and a picked family is always among the rows.
+await test("browsing the picker renders one screenful, and never drops the pick", () => {
+  const families = [];
+  for (let index = 0; index < 300; index += 1) families.push("FTFamily" + String(index).padStart(3, "0"));
+  const selected = { ftfamily299: true };
+  const browsed = shared.pickerRows(families, "", selected, 60);
+  assert.equal(browsed.length, 61, "60 browsed rows plus the picked one");
+  assert.equal(browsed[60], "FTFamily299", "the picked family is rendered although it sits past the cap");
+  assert.ok(browsed.slice(0, 60).every((name) => name !== "FTFamily299"));
+  // Searching narrows the list upstream (`pickerGroups`), and this helper must then
+  // return every match rather than truncating it again.
+  const matched = families.filter((name) => name.toLowerCase().includes("ftfamily12"));
+  const searched = shared.pickerRows(matched, "FTFamily12", {}, 60);
+  assert.equal(searched.length, matched.length, "a search is never truncated");
+  assert.deepEqual(shared.pickerRows([], "", {}, 60), []);
+});
+
 await test("a curated group survives a search, even with a working catalog", () => {
   // The 0.2.2 shape dropped the curated groups whenever the catalog worked and
   // a search was running, so a curated family this machine does not have could

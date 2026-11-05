@@ -2,6 +2,15 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.8] - 2026-11-05
+
+### Fixed
+- **The font picker opened slowly**: the list now builds one screenful, and the names are no longer drawn in each family's own font, so opening and scrolling stay quick on a machine with many installed fonts.
+- **A pause when switching presets**: a preset remembers the notches that were measured for it, so switching uses them directly instead of measuring again at that moment.
+
+### Changed
+- **Only verified host versions are declared**: 0.2.0-rc.1 through 0.2.2-rc.1 are listed one by one; older or untested versions are no longer claimed.
+
 ## [0.7.7] - 2026-11-05
 
 ### Fixed

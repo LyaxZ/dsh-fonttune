@@ -2098,9 +2098,21 @@ function deferWeightWarm(job) {
  */
 var warmSignature = null;
 
+/** When a preset was applied: its warm-up waits so the switch itself feels instant. */
+var presetSwitchAt = 0;
+
 /** The code stack the deferred slice was last scheduled for (scheduled once). */
 var codeWarmSignature = null;
 var scheduleWeightWarm = function (editing) {
+  // A preset switch changes several stacks at once. Hydrated shapes make the rows
+  // correct immediately, so the sweep those stacks would trigger can wait: measuring
+  // inside the switch is what made switching stutter on a slow font.
+  if (Date.now() - presetSwitchAt < 1200) {
+    globalThis.setTimeout(function () {
+      scheduleWeightWarm(editing);
+    }, 1200);
+    return;
+  }
   var stacks = weightAxisStacks(editing);
   var signature = stacks.dialog + "\u0000" + stacks.ui + "\u0000" + stacks.code;
   if (signature === warmSignature) return;
@@ -3291,11 +3303,18 @@ function StackPicker(props) {
   var panel = null;
   if (open) {
     var rows = [];
+    // A machine with a huge font collection (or a Super TTC, which exposes every
+    // weight and variant as its own family) can enumerate hundreds of names. Only
+    // the first screenful is built unless the reader is searching, and a selected
+    // family is always among them — drawing every row was a second of layout on
+    // such a machine. The subsetting itself is pure and covered offline.
+    var RENDER_LIMIT = 60;
     for (var groupRender = 0; groupRender < options.length; groupRender += 1) {
       var group = options[groupRender];
       rows.push(h("div", { className: "dfp-group", key: "g:" + group.label }, t(group.label)));
-      for (var rowIndex = 0; rowIndex < group.families.length; rowIndex += 1) {
-        var name = group.families[rowIndex];
+      var visible = shared.pickerRows(group.families, typed, selectedLower, RENDER_LIMIT);
+      for (var rowIndex = 0; rowIndex < visible.length; rowIndex += 1) {
+        var name = visible[rowIndex];
         var isSelected = selectedLower[name.toLowerCase()] === true;
         rows.push(
           h(
@@ -3304,12 +3323,13 @@ function StackPicker(props) {
               type: "button",
               className: "dfp-option",
               key: "o:" + group.label + ":" + name,
-              style: { fontFamily: quoteFamily(name) },
               "data-family": name,
               onClick: function (event) {
                 toggle(event.currentTarget.dataset.family);
               },
             },
+            // The rows are NOT drawn in their own family: on a large collection that
+            // loaded one font per row, which is exactly the stall this list is about.
             h("span", { className: "dfp-optionLabel" }, name),
             isSelected ? h("span", { className: "dfp-optionCheck" }, "✓") : null
           )
@@ -4089,7 +4109,9 @@ function FontCard(props) {
     var next = presetList.slice();
     for (var index = 0; index < next.length; index += 1) {
       if (next[index].name === entry.name) {
+        var shapes = shapeSnapshotFor(values);
         next[index] = { name: entry.name, values: values, savedAt: Date.now() };
+        if (Object.keys(shapes).length > 0) next[index].shapes = shapes;
       }
     }
     return { op: shared.PENDING_SET, path: [PRESETS_FIELD], value: JSON.stringify(next) };
@@ -4933,10 +4955,63 @@ function FontCard(props) {
    * is exact.
    * @param {{name: string, values: object}} entry - the picked preset.
    */
+  /**
+   * The measured shapes a preset can carry.
+   *
+   * Switching presets changes the font stacks, which invalidates the slider shapes:
+   * the new stacks would be measured again (a second of canvas work on a huge font
+   * collection) the moment they are applied. A preset therefore remembers the
+   * shapes it was saved with — three small records — and applying it restores them
+   * instead of measuring (issue #3 follow-up: "switching presets stutters").
+   * @param {object} values - the preset's value set.
+   * @returns {object} cache key -> shape, empty when nothing is known yet.
+   */
+  var shapeSnapshotFor = function (values) {
+    var stacks = weightAxisStacks(values);
+    var pairs = [
+      [stacks.dialog, shared.WEIGHT_LADDER_STRONG],
+      [stacks.ui, shared.WEIGHT_LADDER_STRONG],
+      [stacks.code, shared.WEIGHT_BASE],
+    ];
+    var snapshot = {};
+    for (var index = 0; index < pairs.length; index += 1) {
+      var stack = pairs[index][0];
+      var base = pairs[index][1];
+      var key = String(stack) + "\u0000" + base + "\u0000stepped";
+      if (Object.prototype.hasOwnProperty.call(weightProfileCache, key)) {
+        snapshot[key] = weightProfileCache[key];
+      } else {
+        var stored = storedWeightShape(key);
+        if (stored !== null) snapshot[key] = stored;
+      }
+    }
+    return snapshot;
+  };
+
+  /**
+   * Put a preset's remembered shapes back into the cache.
+   * @param {object} shapes - what `shapeSnapshotFor` recorded.
+   */
+  var hydrateShapes = function (shapes) {
+    if (shapes === null || typeof shapes !== "object") return;
+    for (var key in shapes) {
+      if (!Object.prototype.hasOwnProperty.call(shapes, key)) continue;
+      var shape = shapes[key];
+      if (shape === null || typeof shape !== "object") continue;
+      if (!isFinite(shape.min) || !isFinite(shape.max) || !isFinite(shape.step)) continue;
+      if (Object.prototype.hasOwnProperty.call(weightProfileCache, key)) continue;
+      weightProfileCache[key] = { min: shape.min, max: shape.max, step: shape.step };
+    }
+  };
+
   var switchPreset = function (entry) {
     if (!writable || entry.name === activeName) return;
+    // Stamp the switch BEFORE anything is written: the sync that follows it would
+    // otherwise start measuring the new stacks in the same task.
+    presetSwitchAt = Date.now();
     applyingRef.current = true;
     try {
+      hydrateShapes(entry.shapes);
       for (var index = 0; index < VALUE_FIELDS.length; index += 1) {
         var field = VALUE_FIELDS[index];
         var value = Object.prototype.hasOwnProperty.call(entry.values, field)

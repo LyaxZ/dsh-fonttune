@@ -4991,6 +4991,40 @@ function catalogRefreshDue(cache, now, retryMs) {
   return now - (cache.at || 0) >= retryMs;
 }
 
+/**
+ * The rows one picker group actually renders.
+ *
+ * A machine with a huge font collection — or a Super TTC, which exposes every
+ * weight and variant as its own family — can enumerate hundreds of names, and
+ * building a row for each one is a visible stall when the list opens (issue #3:
+ * the reporter's second symptom). The list therefore renders a screenful unless
+ * the reader is searching, and a family that is already selected is always
+ * rendered so its check mark never falls outside the window.
+ * @param {string[]} families - the group's families, in display order.
+ * @param {string} query - the search text (empty means "browse the whole list").
+ * @param {Object<string, boolean>} selectedLower - lower-cased names already picked.
+ * @param {number} [limit] - how many rows a browse renders.
+ * @returns {string[]} the families to render.
+ */
+function pickerRows(families, query, selectedLower, limit) {
+  var list = Array.isArray(families) ? families : [];
+  var searching = typeof query === "string" && query.trim() !== "";
+  if (searching) return list.slice();
+  var cap = typeof limit === "number" && limit > 0 ? Math.floor(limit) : 60;
+  var picked = selectedLower !== null && typeof selectedLower === "object" ? selectedLower : {};
+  var rows = [];
+  var shown = 0;
+  for (var index = 0; index < list.length; index += 1) {
+    var name = list[index];
+    var isSelected = picked[String(name).toLowerCase()] === true;
+    if (isSelected || shown < cap) {
+      rows.push(name);
+      shown += 1;
+    }
+  }
+  return rows;
+}
+
 var shared = {
   NAMESPACE: NAMESPACE,
   SANS_FIELD: SANS_FIELD,
@@ -5138,6 +5172,7 @@ var shared = {
   PRESETS: PRESETS,
   PRESET_GROUPS: PRESET_GROUPS,
   MAX_LOCAL_FONTS: MAX_LOCAL_FONTS,
+  pickerRows: pickerRows,
   pickerGroups: pickerGroups,
   catalogRefreshDue: catalogRefreshDue,
   MARKDOWN_SELECTOR: MARKDOWN_SELECTOR,
