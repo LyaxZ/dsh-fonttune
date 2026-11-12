@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.9] - 2026-11-12
+
+### Changed
+- **DSH 0.2.2-rc.2 is supported**: the declared range now reaches one release further, and the README compatibility table follows.
+
 ## [0.7.8] - 2026-11-05
 
 ### Fixed
