@@ -2,6 +2,17 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.11] - 2026-11-18
+
+### Added
+- **The messages you send can be styled on their own**: with Split reply and bubble typography turned on in the conversation section, the conversation divides into Reply and Bubble, and the bubble gets its own font, size and weight; turning the split off returns the bubble to following the conversation and drops the separate settings.
+- **The floating panel switches by element**: its tabs select interface, code or conversation — with the split on, reply and bubble — and only the axes that element has are shown, with readings that match the settings card.
+
+### Fixed
+- **The dot snapped wrongly on pages without a conversation**: on the interface and code pages it used to latch onto a document box or not snap at all; it now uses the four corners of the page's central content area, and no longer jumps when pages change.
+- **The panel and the settings card disagreed about slider ranges**: weight axes read as weight units in the panel instead of notch counts; both surfaces now show the same numbers.
+- **Occasional stutter while dragging the dot**: the drag no longer re-measures the region on every move, and releasing still lands exactly on a corner.
+
 ## [0.7.10] - 2026-11-13
 
 ### Changed
