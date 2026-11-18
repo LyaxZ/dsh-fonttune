@@ -538,18 +538,108 @@ await test("an open card with a fully configured setup renders (light and dark s
   const text = out.text.join("\n");
   assert.ok(out.classes.some((c) => c.includes("dfp-cardOpen")), "the card is open");
   // 0.7.0 ships the per-theme editor, so the switch row is present and reflects
-  // the stored flag (this document has the split on). The surfaces it offers are
-  // the two this document actually carries.
+  // the stored flag (this document has the split on). The set being edited is a
+  // single sun/moon button on that row now — the old segmented control and its
+  // hint paragraph are gone.
   assert.ok(text.includes("theme.label"), "the per-theme switch row renders");
-  assert.ok(text.includes("theme.split"), "the shared/split control renders");
-  assert.ok(text.includes("theme.light"), "the light surface can be picked");
-  assert.ok(text.includes("theme.dark"), "the dark surface can be picked");
+  assert.equal(text.includes("theme.splitHint"), false, "the removed hint paragraph is gone");
+  assert.equal(text.includes("theme.light"), false, "the old light/dark segmented control is gone");
+  const setToggle = out.props.find((entry) => entry.props["data-theme-set"] !== undefined);
+  assert.ok(setToggle, "the sun/moon set toggle renders");
+  assert.equal(setToggle.props["data-theme-set"], "light", "the light set is edited by default");
+  assert.equal(setToggle.props.disabled, false, "the toggle is live while the split is on");
+  assert.ok(
+    out.classes.includes("dfp-themeIcon"),
+    "the toggle is the icon button, not a segmented control"
+  );
   // The conversation owns every axis, so its summary lists its own values.
   assert.ok(text.includes("Noto Serif SC"), "the conversation summary lists its family");
   assert.ok(text.includes("ui.follow"), "the interface summary names the follow state");
   assert.ok(/presets|·/.test(text), "the collapsed sections render their summaries");
   // Nothing in the tree may be the literal string "undefined".
   assert.equal(text.includes("undefined"), false, "no undefined leaks into the copy");
+});
+
+await test("the sun/moon toggle loads the other set into the controls", async () => {
+  // A split document whose dark set overrides the conversation family. Flipping
+  // the toggle has to re-read the axes from THAT set: the family field is where it
+  // shows, because the card reads the resolved set and not the flat fields.
+  const scope = createScope({
+    value: {
+      stackDialog: '"Noto Serif SC"',
+      perTheme: true,
+      darkValues: JSON.stringify({ stackDialog: '"Courier New"' }),
+    },
+    user: { stackDialog: '"Noto Serif SC"', perTheme: true },
+  });
+  const renderWith = async (dark) => {
+    const { face, runtime } = await loadFace();
+    const card = applyAndRegister(face, scope);
+    runtime.rewind();
+    runtime.seed(0, true); // card open
+    runtime.seed(1, "advanced"); // advanced view: the family field is the stack picker
+    runtime.seed(2, "dialog"); // conversation section expanded
+    runtime.seed(13, dark); // slot 13 = the card's `editingDark` state
+    const out = { text: [], classes: [], tags: [], props: [] };
+    walk(card.component({ scope, t: (key) => key }), runtime, out);
+    // The label alone also sits on the field's shell, which has no value and no
+    // handler; the control itself is the one that carries `onChange`.
+    const family = out.props.find(
+      (entry) => entry.props.label === "dialog.label" && typeof entry.props.onChange === "function"
+    );
+    const toggle = out.props.find((entry) => entry.props["data-theme-set"] !== undefined);
+    return { family: family ? family.props.value : null, toggle };
+  };
+
+  const { parseStack } = require(join(ROOT, "lib/shared.cjs"));
+  const light = await renderWith(false);
+  assert.deepEqual(parseStack(light.family), ["Noto Serif SC"], "the light set is what the controls show");
+  assert.equal(light.toggle.props["data-theme-set"], "light");
+
+  const dark = await renderWith(true);
+  assert.deepEqual(parseStack(dark.family), ["Courier New"], "flipping the toggle loads the dark set's family");
+  assert.equal(dark.toggle.props["data-theme-set"], "dark", "the icon reports the set being edited");
+  assert.ok(
+    String(dark.toggle.props.className).includes("dfp-themeIconDark"),
+    "the dark class drives the moon glyph"
+  );
+  assert.equal(
+    dark.toggle.props["aria-label"],
+    "theme.light",
+    "the button says which set it switches TO"
+  );
+});
+
+await test("an edit while the dark set is being edited lands in its overrides", async () => {
+  const scope = createScope({
+    value: { stackDialog: '"Noto Serif SC"', perTheme: true, darkValues: "{}" },
+    user: { stackDialog: '"Noto Serif SC"', perTheme: true },
+  });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true);
+  // The advanced view is the one with the stack picker, whose `onChange` is the
+  // write path this test follows (the simple view splits the same write into
+  // `onPickWest`/`onPickEast`).
+  runtime.seed(1, "advanced");
+  runtime.seed(2, "dialog");
+  runtime.seed(13, true); // editing the dark set
+  const out = { text: [], classes: [], tags: [], props: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  const family = out.props.find(
+    (entry) => entry.props.label === "dialog.label" && typeof entry.props.onChange === "function"
+  );
+  family.props.onChange('"Courier New"');
+  await writeWindow();
+  const written = scope.getSnapshot().value;
+  const overrides = JSON.parse(written.darkValues || "{}");
+  assert.equal(overrides.stackDialog, '"Courier New"', "the override carries the edit");
+  assert.equal(
+    written.stackDialog,
+    '"Noto Serif SC"',
+    "the light set is untouched while the dark set is being edited"
+  );
 });
 
 await test("a read-only deployment renders the note and keeps controls disabled", async () => {
@@ -680,6 +770,7 @@ await test("an unset follow target leaves the interface on DSH's own values", as
 });
 
 await test("an expanded dialog section shows all four of its axes", async () => {
+  // One conversation axis (the split off): the section is 对话 and its labels say so.
   const scope = createScope();
   const { face, runtime } = await loadFace();
   const card = applyAndRegister(face, scope);
@@ -713,6 +804,135 @@ await test("an expanded dialog section shows all four of its axes", async () => 
   assert.ok(dialogSlider.props.step >= 1, "the notch is the family's weight granularity");
   assert.ok(text.includes("preview.dialogCaption"), "the conversation preview renders");
   assert.equal(text.includes("preview.sansCaption"), false, "the interface preview stays closed");
+  // With one conversation there is no view row and no bubble wording anywhere.
+  assert.equal(text.includes("convView.toBubble"), false, "no view switcher while the split is off");
+  assert.equal(text.includes("bubbleFont.label"), false, "no bubble family while off");
+  assert.ok(text.includes("splitBubble.label"), "the split switch renders");
+});
+
+await test("the split shows replies by default and the switch reaches the bubble", async () => {
+  const scope = createScope({ value: { splitBubbleFont: true } });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  const render = () => {
+    const out = { text: [], classes: [], tags: [] };
+    walk(card.component({ scope, t: (key) => key }), runtime, out);
+    return out;
+  };
+  runtime.rewind();
+  runtime.seed(0, true);
+  runtime.seed(2, "dialog");
+  const reply = render();
+  const replyText = reply.text.join("\n");
+  // 对话 stays the big category; the split opens on 回复, so the labels do too.
+  assert.ok(replyText.includes("section.dialog"), "the section title stays the conversation's");
+  assert.equal(replyText.includes("section.reply"), false, "the section is never renamed");
+  assert.ok(replyText.includes("convView.reply"), "the view heading names the reply");
+  assert.ok(replyText.includes("convView.toBubble"), "the text button offers the bubble");
+  assert.ok(replyText.includes("reply.label"), "the reply family field renders");
+  assert.ok(replyText.includes("size.replyLabel"), "the reply size slider renders");
+  assert.ok(replyText.includes("line.replyLabel"), "the reply line-height slider renders");
+  assert.ok(replyText.includes("weight.replyLabel"), "the reply weight slider renders");
+  assert.equal(replyText.includes("bubbleFont.label"), false, "the bubble's controls are not shown yet");
+
+  // The switch is wired to the view state: clicking it records the state update, and
+  // the slot it touched is the one a re-render has to seed to show the bubble.
+  const button = reply.props.find(
+    (entry) => entry.props && entry.props.className === "dfp-viewSwitch"
+  );
+  assert.ok(button, "the view switch is a button");
+  const before = runtime.sets.length;
+  button.props.onClick();
+  assert.equal(runtime.sets.length, before + 1, "the switch updates the view state");
+  const slot = runtime.sets[runtime.sets.length - 1].index;
+  assert.equal(runtime.sets[runtime.sets.length - 1].value, "bubble", "it asks for the bubble view");
+
+  runtime.rewind();
+  runtime.seed(0, true);
+  runtime.seed(2, "dialog");
+  runtime.seed(slot, "bubble");
+  const bubble = render();
+  const bubbleText = bubble.text.join("\n");
+  assert.ok(bubbleText.includes("convView.bubble"), "the heading names the bubble");
+  assert.ok(bubbleText.includes("convView.toReply"), "the text button offers the reply");
+  assert.ok(bubbleText.includes("bubbleFont.label"), "the bubble family field renders");
+  assert.ok(bubbleText.includes("bubbleSize.label"), "the bubble size slider renders");
+  assert.ok(bubbleText.includes("bubbleWeight.label"), "the bubble weight slider renders");
+  assert.equal(bubbleText.includes("line.replyLabel"), false, "a bubble has no line-height axis");
+});
+
+await test("with the split off there is one conversation and no bubble block", async () => {
+  const scope = createScope();
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true); // card open
+  runtime.seed(2, "dialog"); // expanded section id
+  const out = { text: [], classes: [], tags: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  const text = out.text.join("\n");
+  assert.ok(text.includes("splitBubble.label"), "the switch is still offered");
+  assert.equal(text.includes("userBlock.title"), false, "no own-messages block while off");
+  assert.equal(text.includes("userFont.label"), false, "no own-messages family field while off");
+  assert.equal(text.includes("section.reply"), false, "the section stays the conversation's");
+  assert.ok(text.includes("section.dialog"), "the conversation title is kept");
+});
+
+await test("switching the split on copies the conversation, off discards the bubble's own", async () => {
+  const { parseStack } = require(join(ROOT, "lib/shared.cjs"));
+  const dialogValues = {
+    stackDialog: '"Noto Serif SC"',
+    sizeOffsetDialog: 1,
+    weightDialog: 40,
+    weightOffsets: true,
+  };
+  const scope = createScope({ value: { ...dialogValues, splitBubbleFont: false } });
+  const { face, runtime } = await loadFace();
+  const card = applyAndRegister(face, scope);
+  runtime.rewind();
+  runtime.seed(0, true);
+  runtime.seed(2, "dialog");
+  const out = { text: [], classes: [], tags: [] };
+  walk(card.component({ scope, t: (key) => key }), runtime, out);
+  const splitControl = out.props.find(
+    (entry) =>
+      entry.props && entry.props.label === "splitBubble.label" && typeof entry.props.onChange === "function"
+  );
+  assert.ok(splitControl, "the split switch is a control");
+
+  // ON: the bubble starts as a copy of the conversation, so nothing moves. The
+  // card writes the canonical stack, so the families are compared parsed.
+  splitControl.props.onChange(1);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  let value = scope.getSnapshot().value;
+  assert.equal(value.splitBubbleFont, true, "the split is on");
+  assert.deepEqual(
+    parseStack(value.stackUser),
+    parseStack(dialogValues.stackDialog),
+    "the bubble takes the reply's family"
+  );
+  assert.equal(value.sizeOffsetUser, dialogValues.sizeOffsetDialog, "and its size offset");
+  assert.equal(value.weightUser, dialogValues.weightDialog, "and its weight offset");
+
+  // OFF: the bubble's own values are discarded, not kept for next time.
+  const again = { text: [], classes: [], tags: [] };
+  runtime.rewind();
+  runtime.seed(0, true);
+  runtime.seed(2, "dialog");
+  walk(card.component({ scope, t: (key) => key }), runtime, again);
+  const offControl = again.props.find(
+    (entry) =>
+      entry.props && entry.props.label === "splitBubble.label" && typeof entry.props.onChange === "function"
+  );
+  offControl.props.onChange(0);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  // A cleared field arrives as "unset" (undefined) on the host; both that and the
+  // neutral literal mean the same thing to a document that is read back.
+  value = scope.getSnapshot().value;
+  assert.equal(value.splitBubbleFont, false, "the split is off again");
+  assert.ok(value.stackUser === undefined || value.stackUser === "", "the bubble family goes with it");
+  assert.ok(value.sizeOffsetUser === undefined || value.sizeOffsetUser === 0, "so does its size offset");
+  assert.ok(value.weightUser === undefined || value.weightUser === 0, "and its weight offset");
 });
 
 await test("an expanded code section shows the ligature and line-height controls", async () => {

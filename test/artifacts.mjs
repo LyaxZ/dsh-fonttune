@@ -142,6 +142,58 @@ check(
   expected["lib/client.js"].includes("flushRef.current = flushPendingWrites;")
 );
 
+// The fourth axis set (the messages the reader sends, issue #9) has to reach
+// all three halves: the durable field names in the shared core, the schema the
+// host serves, and the card block that edits them. A field that exists in one
+// half only is invisible or unwritable, and nothing else would fail.
+for (const [field, literal] of [
+  ["USER_STACK_FIELD", 'var USER_STACK_FIELD = "stackUser";'],
+  ["USER_SIZE_FIELD", 'var USER_SIZE_FIELD = "sizeOffsetUser";'],
+  ["WEIGHT_USER_FIELD", 'var WEIGHT_USER_FIELD = "weightUser";'],
+]) {
+  check(
+    `the shared core declares ${field}`,
+    expected["lib/shared.cjs"].includes(literal),
+    "run `node build.mjs` after editing src/shared.cjs"
+  );
+  check(
+    `the host schema carries ${field}`,
+    expected["lib/index.js"].includes(field),
+    "run `node build.mjs` after editing src/index.mjs"
+  );
+  check(
+    `the card renders ${field}`,
+    expected["lib/client.js"].includes(`shared.${field}`),
+    "run `node build.mjs` after editing src/client.js"
+  );
+}
+// The split switch is what makes the bubble axis exist at all: the flag must be
+// declared, served by the host schema, and edited by the card — and the CSS gate
+// has to sit in the shared builder, or a stale document would still paint bubbles.
+check(
+  "the split-bubble switch is declared, served and gated",
+  expected["lib/shared.cjs"].includes('var SPLIT_BUBBLE_FIELD = "splitBubbleFont";') &&
+    expected["lib/shared.cjs"].includes("if (splitBubble && user !== \"\")") &&
+    expected["lib/index.js"].includes("SPLIT_BUBBLE_FIELD") &&
+    expected["lib/client.js"].includes("shared.SPLIT_BUBBLE_FIELD") &&
+    expected["lib/client.js"].includes('t("splitBubble.label")') &&
+    // 对话 stays the one big category: the split adds two VIEWS under its own
+    // title, never a second section.
+    expected["lib/client.js"].includes('title: t("section.dialog")') &&
+    !expected["lib/client.js"].includes('t("section.reply")'),
+  "off must mean one conversation axis and no bubble rules at all"
+);
+check(
+  "the bubble scope is matched by class substring, never by a build hash",
+  expected["lib/shared.cjs"].includes('var USER_ROW_SELECTOR = \'[class*="_userRow" i]\';') &&
+    expected["lib/shared.cjs"].includes('var USER_WEIGHT_PROPERTY = "--dfp-wuser";') &&
+    // The CARD keeps its in-section text switch; the panel carries the same
+    // choice as tabs instead, so the panel must have no view switch of its own.
+    expected["lib/client.js"].includes('"dfp-viewSwitch"') &&
+    !expected["lib/client.js"].includes('"dfp-floatViewSwitch"'),
+  "the row class prefix changes with every DSH release"
+);
+
 // The host schema carries the panel chrome fields, and the client bundle
 // carries the floating panel around them. The "paper mode" overlay and the
 // "fitting room" walker were withdrawn: neither a name nor a colour of theirs
@@ -221,6 +273,63 @@ check(
   "the panel's commits share the single-shot write path",
   singleShots >= 2,
   `${singleShots} single-shot call site(s)`
+);
+// The panel switches between elements, and the rows below follow the selection:
+// the table lives in the shared core (asserted there), the switcher and the
+// per-element branches live in the bundle. A panel that forgot either would show
+// the wrong number of sliders without failing anything else.
+check(
+  "the panel builds its rows from the shared element table",
+  expected["lib/client.js"].includes("shared.panelElementEntries(config)") &&
+    expected["lib/client.js"].includes('"data-panel-element"') &&
+    expected["lib/client.js"].includes("dfp-floatTab") &&
+    expected["lib/client.js"].includes('chosen.id === "ui"') &&
+    expected["lib/client.js"].includes('chosen.id === "code"') &&
+    // A live split-off must not strand the selection on a gone entry.
+    expected["lib/client.js"].includes("panelElement = chosen.id;"),
+  "the switcher is missing, so the panel can only edit one element"
+);
+// The switcher is an OPEN bracket under the bar, not a closed pill: bottom edge and
+// bottom-left arc only, no top/right border and no right-side rounding. It also
+// keeps a clear gap from the bar above it.
+check(
+  "the switcher is an open bracket with a gap under the bar",
+  /\.dfp-floatTabs\{[^}]*margin:10px -12px 4px/.test(expected["lib/client.js"]) &&
+    /\.dfp-floatTabs\{[^}]*border:0;/.test(expected["lib/client.js"]) &&
+    // The rule is a pseudo-element so a scrolled container cannot clip its arc;
+    // it spans both edges of the card.
+    /\.dfp-floatTabs::after\{[^}]*left:0;right:0;bottom:0/.test(expected["lib/client.js"]) &&
+    /\.dfp-floatTabs::after\{[^}]*border-left:\.5px solid/.test(expected["lib/client.js"]) &&
+    /\.dfp-floatTabs::after\{[^}]*border-bottom:\.5px solid/.test(expected["lib/client.js"]) &&
+    /\.dfp-floatTabs::after\{[^}]*border-bottom-left-radius:10px/.test(expected["lib/client.js"]) &&
+    !/\.dfp-floatTabs\{[^}]*border-top:/.test(expected["lib/client.js"]) &&
+    !/\.dfp-floatTabs\{[^}]*border-right:/.test(expected["lib/client.js"]) &&
+    !/\.dfp-floatTabs::after\{[^}]*border-top:/.test(expected["lib/client.js"]) &&
+    !/\.dfp-floatTabs::after\{[^}]*border-right:/.test(expected["lib/client.js"]),
+  "the closed pill (top border, right border, both corners round) came back"
+);
+// Dragging the collapsed dot reads the region ONCE per gesture: a pointermove that
+// resolved bounds (and the hysteresis that confirms them) forced a layout read per
+// event, which is what made the drag feel sticky.
+check(
+  "a drag reads the region once and writes one frame at a time",
+  expected["lib/client.js"].includes("bounds: floatBounds(),") &&
+    expected["lib/client.js"].includes("var bounds = drag.bounds;") &&
+    expected["lib/client.js"].includes('globalThis.requestAnimationFrame(flush)') &&
+    expected["lib/client.js"].includes("applyPending();") &&
+    // The watchers stand down while a gesture owns the dot.
+    expected["lib/client.js"].includes("if (drag !== null) return;"),
+  "a pointermove resolves bounds again (a layout read per event)"
+);
+check(
+  "the element table names the axes each element has",
+  expected["lib/shared.cjs"].includes("function panelElementEntries(config)") &&
+    expected["lib/shared.cjs"].includes("panelElementEntries: panelElementEntries") &&
+    // 对话 while the split is off; 回复 and 气泡 are tabs of their own once it is on.
+    expected["lib/shared.cjs"].includes('label: "panel.element.dialog"') &&
+    expected["lib/shared.cjs"].includes('label: "panel.element.reply"') &&
+    expected["lib/shared.cjs"].includes('label: "panel.element.bubble"'),
+  "run `node build.mjs` after editing src/shared.cjs"
 );
 // The settings jump asks the HOST's own navigation first — the plugin
 // manager's cross-plugin service or the layout's panel selection — and only
@@ -364,19 +473,57 @@ check(
 // out with it — it was asked for below rather than beside the label.
 check(
   "compact choices sit on their label row, never under the hint",
-  (expected["lib/client.js"].match(/inline: true,/g) || []).length === 5 &&
+  (expected["lib/client.js"].match(/inline: true,/g) || []).length === 6 &&
     expected["lib/client.js"].includes('h("div", { className: "dfp-inline" }, props.children)'),
-  "the five segmented rows share the label-row layout"
+  "the six segmented rows share the label-row layout"
 );
+// The light/dark editor is one icon button on the right of the sync row: a sun for
+// the light set and a moon for the dark one, cross-faded by a class on the button,
+// with the switch's own transition and a reduced-motion escape hatch. The old
+// paragraph that explained which set was being edited is gone for good.
 check(
-  "the light/dark picker fades in under the description",
-  expected["lib/client.js"].includes('"dfp-themeSplit" + (themesSplit ? " dfp-themeSplitOn" : "")') &&
-    expected["lib/client.js"].includes(
-      ".dfp-themeSplit{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .24s ease,opacity .24s ease}"
-    ) &&
-    expected["lib/client.js"].includes(".dfp-themeSplitOn{grid-template-rows:1fr;opacity:1}") &&
-    expected["lib/client.js"].includes('h("span", { className: "dfp-themeNote" }, t("theme.splitHint"))'),
-  "always mounted, with its height and opacity animated together"
+  "the light/dark editor is one animated sun/moon icon",
+  expected["lib/client.js"].includes('"dfp-themeIcon" + (props.dark ? " dfp-themeIconDark" : "")') &&
+    expected["lib/client.js"].includes('"data-theme-set": props.dark ? "dark" : "light"') &&
+    expected["lib/client.js"].includes('className: "dfp-themeIconGlyph dfp-themeIconSun"') &&
+    expected["lib/client.js"].includes('className: "dfp-themeIconGlyph dfp-themeIconMoon"') &&
+    expected["lib/client.js"].includes(".dfp-themeIconDark .dfp-themeIconMoon{opacity:1;transform:rotate(0)}") &&
+    expected["lib/client.js"].includes("@media (prefers-reduced-motion:reduce){.dfp-themeIcon,.dfp-themeIconGlyph{transition:none}}") &&
+    expected["lib/client.js"].includes("h(ThemeSetToggle,") &&
+    // Both glyphs must sit dead centre in the 28px button: the SVG is block-level
+    // and the button has no line box, which is what removes the baseline gap.
+    expected["lib/client.js"].includes("line-height:0;box-sizing:border-box;width:28px;height:28px") &&
+    expected["lib/client.js"].includes(".dfp-themeIconGlyph>svg{display:block;margin:0}") &&
+    // the removed paragraph must not come back
+    !expected["lib/client.js"].includes("theme.splitHint") &&
+    !expected["lib/client.js"].includes("dfp-themeNote"),
+  "the set being edited is reported by the glyph, not by a paragraph"
+);
+// The card carries the conversation's two views as a heading + text button INSIDE
+// the 对话 section; the panel carries the same choice as tabs of its own (界面/代码/
+// 回复/气泡), so the panel has no in-body view switch and its tab row has no closed
+// box — only the bottom edge and the bottom-left arc, flush with the card's edge.
+check(
+  "the split shows as an in-section switch on the card and as tabs in the panel",
+  expected["lib/client.js"].includes('"dfp-viewSwitch"') &&
+    !expected["lib/client.js"].includes('"dfp-floatViewSwitch"') &&
+    !expected["lib/client.js"].includes('"dfp-floatViewBody"') &&
+    expected["lib/client.js"].includes('"panel.element.reply"') &&
+    expected["lib/client.js"].includes('"panel.element.bubble"') &&
+    expected["lib/client.js"].includes("margin:10px -12px 4px") &&
+    expected["lib/client.js"].includes("border-bottom-left-radius:10px") &&
+    // 对话 keeps its own title: the split never renames the section.
+    expected["lib/client.js"].includes('t("section.dialog")') &&
+    !expected["lib/client.js"].includes('t("section.reply")'),
+  "the panel's tabs replace the in-body switch"
+);
+// The panel edits numeric axes only: no font-family field, no text input for one.
+check(
+  "the panel offers no font-family row",
+  !expected["lib/client.js"].includes("panel.familyLabel") &&
+    !expected["lib/client.js"].includes("dfp-floatText") &&
+    expected["lib/client.js"].includes('"dfp-floatSlider"'),
+  "the family stays in the settings card"
 );
 // The dot's first corner is a decision: the region's bottom-right, never the
 // accident of wherever the page flow placed the unpositioned host.
@@ -737,7 +884,8 @@ check(
   expected["lib/client.js"].includes(
     "var picked = shared.floatBoundsPick(floatBoundsRects(), viewport);"
   ) &&
-    expected["lib/client.js"].includes("boundsAreReal = picked.index >= 0;") &&
+    expected["lib/client.js"].includes("boundsPick = shared.floatBoundsConfirm(boundsPick, picked, needed);") &&
+    expected["lib/client.js"].includes("boundsAreReal = boundsPick.index >= 0;") &&
     (expected["lib/client.js"].match(/var list = floatRegions\(\);/g) || []).length === 2 &&
     expected["lib/shared.cjs"].includes("floatBoundsPick(rects, viewport).bounds"),
   "the region a dot is measured against and the region that is watched are not one list"
@@ -749,16 +897,21 @@ check(
 // soon as a region exists. The one exception is a dot stored over an editable field:
 // that place is wrong whatever the region is, so it is re-homed (see `strandedInField`).
 check(
-  "a stand-in never moves a dot that already has a home, unless it sits in a field",
-  expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null && !strandedInField()) return pos;") &&
-    expected["lib/client.js"].includes("var rehomeEditable = !boundsAreReal && pos !== null && strandedInField();") &&
-    expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null && !rehomeEditable) return false;") &&
-    expected["lib/client.js"].includes("var strandedInField = function () {") &&
+  "every page snaps: a stand-in region is a home like any other",
+  // The stand-in (main column / viewport) used to be refused as a home, which made
+  // every non-conversation page have no snapping at all. It is now the region the
+  // four corners are taken from, while a dot stored over an editable field is still
+  // re-homed and persisted.
+  !expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null && !strandedInField()) return pos;") &&
+    !expected["lib/client.js"].includes("if (!boundsAreReal && pos !== null && !rehomeEditable) return false;") &&
     expected["lib/client.js"].includes("var rehomeEditable = !boundsAreReal && pos !== null && strandedInField();") &&
     expected["lib/client.js"].includes("if (outside || naming || rehomeEditable) persistIfDirty();") &&
-    expected["lib/client.js"].includes("box.width > 0 &&"),
-  "a stand-in region can still move the dot without the editable-field guard"
+    expected["lib/client.js"].includes("var strandedInField = function () {"),
+  "a page without a conversation must still snap to the main content column's corners"
 );
+// The four corners of whatever region `floatBounds` resolved are the snap targets on
+// every page: the fallback region has to yield four distinct points, and a dot that
+// is stored inside it must resolve to the corner it is nearest.
 // When there is no prose yet, use DSH's measured center column rather than the
 // viewport: the center column already begins after the live-width sidebar and ends
 // before a visible right rail, so the bottom-left home is in the usable content.
@@ -1079,6 +1232,10 @@ check(
     expected["lib/client.js"].includes("function storedWeightShape(key)") &&
     expected["lib/client.js"].includes("function rememberWeightShape(key, profile)") &&
     expected["lib/client.js"].includes("if (peek) return PENDING_WEIGHT_SHAPE;") &&
+    // One entry per FAMILY: an axis that names no family and one that names the
+    // page's own must share the cache key, or the panel can sit on the provisional
+    // unit range while the card shows the family's step counts.
+    expected["lib/client.js"].includes('var key = String(resolved) + "\\u0000" + base') &&
     expected["lib/client.js"].includes("rememberWeightShape(key, profile);") &&
     // the render paths ask for a peek; the idle warm-up is what measures
     (expected["lib/client.js"].match(/\{ peek: true \}/g) || []).length >= 3 &&
@@ -1190,12 +1347,16 @@ check(
 // The shaping axes (tracking, word gap, paragraph gap, indent) and the breaking switch.
 // Each one is a FIELD wired to a CONTROL: a row that renders but writes another field, or
 // a switch wired to a slider, is invisible in a CSS-only test and obvious to a reader.
+// The assertions match the pair regardless of indentation, so moving the rows into the
+// conversation's view block cannot silently pass a mismatched pair.
+const wired = (field, label) =>
+  new RegExp(`field: ${field},\\s*\\n\\s*labelKey: "${label}"`).test(expected["lib/client.js"]);
 check(
   "every shaping axis has a card control wired to its own field",
-  expected["lib/client.js"].includes('field: LETTER_SPACING_DIALOG_FIELD,\n              labelKey: "shape.letterLabel"') &&
-    expected["lib/client.js"].includes('field: WORD_SPACING_DIALOG_FIELD,\n              labelKey: "shape.wordLabel"') &&
-    expected["lib/client.js"].includes('field: PARAGRAPH_SPACING_DIALOG_FIELD,\n              labelKey: "shape.paragraphLabel"') &&
-    expected["lib/client.js"].includes('field: INDENT_DIALOG_FIELD,\n              labelKey: "shape.indentLabel"') &&
+  wired("LETTER_SPACING_DIALOG_FIELD", "shape.letterLabel") &&
+    wired("WORD_SPACING_DIALOG_FIELD", "shape.wordLabel") &&
+    wired("PARAGRAPH_SPACING_DIALOG_FIELD", "shape.paragraphLabel") &&
+    wired("INDENT_DIALOG_FIELD", "shape.indentLabel") &&
     expected["lib/client.js"].includes('field: LINE_BREAK_STRICT_FIELD,\n      labelKey: "shape.breakLabel"'),
   "four sliders and a switch, one field each"
 );
@@ -1205,13 +1366,25 @@ check(
 // wrote them).
 check(
   "the panel offers every conversation axis inside a scrolling body",
-  (expected["lib/client.js"].match(/sliderRow\(\n      body,/g) || []).length === 6 &&
+  // The rows land in `rowHost`, which the 对话 branch repoints at its animated view
+  // wrapper; the count is the conversation's own six slider rows either way.
+  (expected["lib/client.js"].match(/sliderRow\(\n      rowHost,/g) || []).length === 6 &&
     expected["lib/client.js"].includes('var body = el("div", "dfp-floatBody");') &&
     expected["lib/client.js"].includes("card.appendChild(body);") &&
     expected["lib/client.js"].includes(".dfp-floatBody{flex:1 1 auto;min-height:0;overflow-y:auto;") &&
     expected["lib/client.js"].includes("commit({ wordSpacingDialog: next });") &&
     expected["lib/client.js"].includes("commit({ paragraphSpacingDialog: next });"),
   "six slider rows plus the weight row, and the two shaping gaps among them"
+);
+// `var` hoists: a local named `host` inside the panel's render shadows the panel's
+// own host element and every earlier `host.style…` in that function then runs on
+// undefined — the panel never mounts and the store subscriber throws on each update.
+// The row destination therefore has its own name.
+check(
+  "the panel's row destination never shadows the host element",
+  !/var host = (body|viewBody);/.test(expected["lib/client.js"]) &&
+    expected["lib/client.js"].includes("var rowHost = body;"),
+  "a local named host hoists over the panel host and breaks the mount"
 );
 // The block under the sliders: the three families the page is really rendering with, then
 // the weight control's shape — and it folds away, because a panel being used to drag a

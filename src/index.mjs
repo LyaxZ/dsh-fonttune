@@ -139,8 +139,11 @@ const {
   SIZE_FIELD,
   STACK_DIALOG_FIELD,
   STYLE_TAG,
+  USER_SIZE_FIELD,
+  USER_STACK_FIELD,
   WEIGHT_DIALOG_FIELD,
   WEIGHT_FIELD,
+  WEIGHT_USER_FIELD,
 } = shared;
 
 /**
@@ -210,6 +213,14 @@ export const Config = volatileWhenSupported(z.object({
     .description(
       "CSS font-family list for the conversation markdown; empty follows the interface stack"
     ),
+  [USER_STACK_FIELD]: z
+    .string()
+    .max(MAX_STACK)
+    .pattern(SAFE_STACK)
+    .default("")
+    .description(
+      "CSS font-family list for the messages you send; empty keeps the family the conversation already gives them"
+    ),
   [MONO_FIELD]: z
     .string()
     .max(MAX_STACK)
@@ -231,6 +242,14 @@ export const Config = volatileWhenSupported(z.object({
     .default(0)
     .description(
       "Conversation font-size offset in px; 0 follows the interface offset"
+    ),
+  [USER_SIZE_FIELD]: z
+    .number()
+    .min(shared.SIZE_MIN)
+    .max(shared.SIZE_MAX)
+    .default(0)
+    .description(
+      "Font-size offset in px for the messages you send; 0 keeps the size the conversation already gives them"
     ),
   [CODE_SIZE_FIELD]: z
     .number()
@@ -255,6 +274,14 @@ export const Config = volatileWhenSupported(z.object({
     .default(shared.WEIGHT_UNSET)
     .description(
       `Conversation font-weight offset; each element keeps its own weight plus this offset (the slider spans whatever weights the chosen font can render), ${shared.WEIGHT_UNSET} follows the interface offset. A legacy absolute weight (${shared.WEIGHT_MIN}..${shared.WEIGHT_MAX}) is accepted and converted to its offset.`
+    ),
+  [WEIGHT_USER_FIELD]: z
+    .number()
+    .min(shared.WEIGHT_DELTA_FLOOR)
+    .max(shared.WEIGHT_MAX)
+    .default(shared.WEIGHT_UNSET)
+    .description(
+      `Font-weight offset for the messages you send; each element inside one keeps its own weight plus this offset (the slider spans whatever weights the chosen font can render), ${shared.WEIGHT_UNSET} keeps DSH's own weights. A legacy absolute weight (${shared.WEIGHT_MIN}..${shared.WEIGHT_MAX}) is accepted and converted to its offset.`
     ),
   [CODE_WEIGHT_FIELD]: z
     .number()
@@ -357,6 +384,12 @@ export const Config = volatileWhenSupported(z.object({
     .default(true)
     .description(
       "The interface follows the conversation: its family and weight take the conversation's values (off = the interface keeps its own)"
+    ),
+  [shared.SPLIT_BUBBLE_FIELD]: z
+    .boolean()
+    .default(false)
+    .description(
+      "Split the conversation typography: the messages you send get a family, size and weight of their own instead of following the answers you read"
     ),
   [shared.PANEL_ENABLED_FIELD]: z
     .boolean()

@@ -782,6 +782,180 @@ await test("the interface offset never scales the conversation chain", () => {
   );
 });
 
+// ------------------------------------------------------------------ *
+// the reader's own messages: a fourth set (issue #9)
+// ------------------------------------------------------------------ *
+
+section("shared: the messages the reader sends");
+
+const USER_SCOPE =
+  '[class*="_userStack" i],[class*="_userRow" i]';
+
+await test("their family reaches the bubble and nothing else", () => {
+  const css = shared.buildFontCss({
+    splitBubbleFont: true,
+    stackUser: '"Inter", "Microsoft YaHei"',
+  });
+  assert.equal(css, USER_SCOPE + '{font-family:"Inter", "Microsoft YaHei" !important}');
+  // The assistant's answers are drawn in the markdown subtree, which the scope
+  // does not name: one rule, one surface.
+  assert.equal(css.includes("_markdown_"), false, "the conversation markdown is untouched");
+  assert.equal(shared.buildFontCss({}), "", "an untouched bubble injects nothing");
+});
+
+await test("with the split off the bubble axes are asleep, whatever the document holds", () => {
+  // A document written while the split was on keeps its bubble values; with the
+  // split off they must not paint — and must not keep the sheet awake either.
+  const stale = { stackUser: '"Inter"', sizeOffsetUser: 3, weightUser: 40, weightOffsets: true };
+  assert.equal(shared.buildFontCss(stale), "", "no bubble rule while the split is off");
+  assert.equal(shared.isDormant(stale), true, "a stale bubble axis does not keep the sheet alive");
+  assert.equal(
+    shared.normalizeConfig({ splitBubbleFont: "true" })[shared.SPLIT_BUBBLE_FIELD],
+    true,
+    "the flag survives a string round-trip"
+  );
+  assert.equal(
+    shared.normalizeConfig({})[shared.SPLIT_BUBBLE_FIELD],
+    false,
+    "absent means one conversation axis"
+  );
+  const on = shared.buildFontCss({ ...stale, splitBubbleFont: true });
+  assert.ok(on.includes(USER_SCOPE), "the same document paints once the split is on");
+});
+
+await test("a per-theme set prefixes every bubble selector with the theme attribute", () => {
+  // The dialog rule has to prefix each selector of its list (see `prefixSelector`);
+  // a plain string prefix would scope only the first one, and the dark value would
+  // then paint in the light theme too.
+  const css = shared.buildFontCss({
+    splitBubbleFont: true,
+    perTheme: true,
+    stackUser: '"Inter"',
+    darkValues: JSON.stringify({ stackUser: '"JetBrains Mono"' }),
+  });
+  assert.ok(
+    css.includes(
+      'body[data-ds-dark-theme] [class*="_userStack" i],body[data-ds-dark-theme] [class*="_userRow" i]{font-family:"JetBrains Mono" !important}'
+    ),
+    "every selector in the dark rule carries the theme attribute"
+  );
+});
+
+await test("their size offset is measured from the conversation's own size", () => {
+  assert.equal(
+    shared.buildFontCss({ splitBubbleFont: true, sizeOffsetUser: 2 }),
+    USER_SCOPE + "{font-size:calc(var(--dsh-content-font-size,1em) + 2px) !important}",
+    "the official content size is the base, so the bubble departs from its neighbours"
+  );
+  assert.match(
+    shared.buildFontCss({ splitBubbleFont: true, sizeOffsetUser: -3 }),
+    /\{font-size:calc\(var\(--dsh-content-font-size,1em\) \+ -3px\) !important\}$/,
+    "a negative offset stays a subtraction inside the calc"
+  );
+  // The conversation's own chain is NOT shifted by this axis: only the bubble moves.
+  const withBase = shared.buildFontCss(
+    { splitBubbleFont: true, sizeOffsetUser: 2, sizeOffsetDialog: 1 },
+    { "--dsh-content-font-size": "17px" }
+  );
+  assert.match(withBase, /--dsh-content-font-size:calc\(\(17px\) \+ 1px\)/, "the dialog axis still owns the chain");
+  assert.match(withBase, /font-size:calc\(var\(--dsh-content-font-size,1em\) \+ 2px\)/);
+});
+
+await test("their weight offset rides its own property, so no other axis leaks in", () => {
+  const css = shared.buildFontCss({ splitBubbleFont: true, weightUser: 40, weightOffsets: true });
+  assert.match(
+    css,
+    /\[class\*="_userStack" i\],\[class\*="_userRow" i\]\{--dfp-wdelta:0;--dfp-wuser:40;font-weight:clamp\(100,calc\(400 \+ var\(--dfp-wuser,0\)\),900\) !important\}/
+  );
+  const lines = css.split("\n");
+  const ladder = lines.filter((line) => line.indexOf('[class*="_userRow" i] :is(') === 0);
+  assert.ok(ladder.length >= 3, `expected the group ladder, saw ${ladder.length}`);
+  for (const line of ladder) {
+    assert.ok(line.includes("var(--dfp-wuser,0)"), "every group reads the bubble's property");
+    assert.equal(line.includes("var(--dfp-wdelta"), false, "never the shared one");
+  }
+  // Code keeps its own family and weight inside a bubble: the selectors name the
+  // bubble only, and a code surface declares its own values.
+  for (const line of lines) {
+    const cut = line.indexOf("{");
+    const selector = cut === -1 ? line : line.slice(0, cut);
+    assert.equal(/\b(pre|code)\b/.test(selector), false, "no code surface in the bubble rules");
+  }
+  assert.equal(shared.buildFontCss({ splitBubbleFont: true, weightUser: shared.WEIGHT_UNSET }), "");
+});
+
+await test("the interface and conversation offsets stay out of the bubble", () => {
+  const css = shared.buildFontCss({
+    splitBubbleFont: true,
+    weight: 80,
+    weightDialog: 100,
+    weightUser: -40,
+    weightOffsets: true,
+  });
+  const bubble = css
+    .split("\n")
+    .filter((line) => line.includes('_userRow" i]') || line.includes('_userStack" i]'));
+  assert.ok(bubble.length >= 2, "the bubble has its own rules");
+  for (const line of bubble) {
+    // Only the pin (`--dfp-wdelta:0`) may mention the shared property; no bubble
+    // rule may READ it, or an interface offset would move these messages too.
+    assert.equal(line.includes("var(--dfp-wdelta"), false);
+  }
+});
+
+await test("the user axes clamp exactly like the dialog ones", () => {
+  const far = (field) => shared.normalizeConfig({ [field]: 9999 });
+  assert.equal(
+    far(shared.USER_SIZE_FIELD)[shared.USER_SIZE_FIELD],
+    far(shared.SIZE_DIALOG_FIELD)[shared.SIZE_DIALOG_FIELD],
+    "same size range"
+  );
+  assert.equal(
+    far(shared.WEIGHT_USER_FIELD)[shared.WEIGHT_USER_FIELD],
+    far(shared.WEIGHT_DIALOG_FIELD)[shared.WEIGHT_DIALOG_FIELD],
+    "same weight range"
+  );
+  const raw = { [shared.STACK_DIALOG_FIELD]: 'A; B{}', [shared.USER_STACK_FIELD]: 'A; B{}' };
+  const normalized = shared.normalizeConfig(raw);
+  assert.equal(normalized[shared.USER_STACK_FIELD], normalized[shared.STACK_DIALOG_FIELD]);
+  assert.equal(
+    shared.normalizeConfig({ [shared.USER_STACK_FIELD]: "x".repeat(400) })[shared.USER_STACK_FIELD]
+      .length,
+    shared.MAX_STACK_LENGTH
+  );
+});
+
+await test("a configuration that only sets their axes still paints", () => {
+  // Dormancy is what decides whether any stylesheet is injected at all; missing
+  // the new fields here would make a user-only configuration render nothing.
+  assert.notEqual(shared.buildFontCss({ splitBubbleFont: true, stackUser: '"Inter"' }), "");
+  assert.notEqual(shared.buildFontCss({ splitBubbleFont: true, sizeOffsetUser: 1 }), "");
+  assert.notEqual(
+    shared.buildFontCss({ splitBubbleFont: true, weightUser: 20, weightOffsets: true }),
+    ""
+  );
+});
+
+await test("a preset carries the user axes", () => {
+  const config = shared.normalizeConfig({
+    weightOffsets: true,
+    presets: JSON.stringify([
+      {
+        name: "mine",
+        values: { stackUser: "Inter", sizeOffsetUser: 2, weightUser: 40 },
+        savedAt: 1,
+      },
+    ]),
+  });
+  const list = config[shared.PRESETS_FIELD];
+  assert.equal(Array.isArray(list), true, "presets decode to a list");
+  const values = list[0].values;
+  assert.equal(values[shared.USER_STACK_FIELD], "Inter");
+  assert.equal(values[shared.SIZE_DIALOG_FIELD] === undefined, true, "only what was stored");
+  assert.equal(values[shared.USER_SIZE_FIELD], 2);
+  assert.equal(values[shared.WEIGHT_USER_FIELD], 40);
+});
+
 await test("the embedded fallback map alone drives the code size rule", () => {
   const code = shared.buildFontCss({ sizeOffsetCode: 2 }, shared.FALLBACK_TOKENS);
   assert.match(code, /--dsw-font-markdown-code-font-size:calc\(\(12px\) \* 1\.125\)/);
@@ -1630,6 +1804,26 @@ await test("the host schema accepts real stacks and refuses bad ones", async () 
   assert.equal(shared.normalizeConfig(module.plainConfigValue(schema({ weightDialog: 460 }))).weightDialog, 60);
   assert.equal(shared.normalizeConfig(module.plainConfigValue(schema({ weightCode: 450 }))).weightCode, 50);
   assert.throws(() => schema({ sans: "a;b{}" }), "a declaration-breaking stack must be refused");
+  // The fourth set (the messages the reader sends) is served like the other
+  // three: it accepts a real stack, refuses a declaration-breaking one, and its
+  // offsets enforce the same bounds instead of silently clamping.
+  assert.equal(
+    module.plainConfigValue(schema({ stackUser: '"Inter"' })).stackUser,
+    '"Inter"'
+  );
+  assert.throws(() => schema({ stackUser: "a;b{}" }));
+  assert.throws(() => schema({ sizeOffsetUser: 99 }));
+  assert.throws(() => schema({ sizeOffsetUser: -99 }));
+  assert.throws(() => schema({ weightUser: 900 }));
+  assert.throws(() => schema({ weightUser: -301 }));
+  assert.equal(
+    shared.normalizeConfig(module.plainConfigValue(schema({ weightUser: 460 }))).weightUser,
+    60,
+    "a legacy absolute weight is converted like the other weight axes"
+  );
+  assert.equal(module.plainConfigValue(schema({})).stackUser, "");
+  assert.equal(module.plainConfigValue(schema({})).sizeOffsetUser, 0);
+  assert.equal(module.plainConfigValue(schema({})).weightUser, 0);
   const defaults = module.plainConfigValue(schema({}));
   assert.equal(defaults.sans, "");
   assert.equal(defaults.sizeOffset, 0);
@@ -2980,6 +3174,44 @@ await test("a composition without the theme service skips the override layer", a
   assert.ok(tag.textContent.includes('font-family:"Inter"'), "the stylesheet path still applies");
 });
 
+section("the floating panel's element table");
+
+// The panel used to edit the conversation only; it now switches between elements,
+// and the number of controls has to follow the element (the interface has no size
+// or line-height hook, the bubble has no line height of its own). The table is
+// pure, so the counts are asserted here rather than in a screenshot.
+await test("each element lists exactly the axes it has", () => {
+  const off = shared.panelElementEntries({});
+  assert.deepEqual(
+    off.map((entry) => entry.id),
+    ["ui", "code", "dialog"],
+    "with one conversation axis there are three entries"
+  );
+  const ui = off[0];
+  assert.equal(ui.size, "", "the interface has no size axis");
+  assert.equal(ui.line, "", "the interface has no line-height axis");
+  assert.ok(ui.family !== "" && ui.weight !== "", "it does have a family and a weight");
+  const code = off[1];
+  assert.ok(code.size !== "" && code.line !== "" && code.weight !== "", "the code surface has its own axes");
+  const dialog = off[2];
+  assert.equal(dialog.shaping, true, "the conversation keeps the shaping axes");
+
+  const on = shared.panelElementEntries({ splitBubbleFont: true });
+  assert.deepEqual(
+    on.map((entry) => entry.id),
+    ["ui", "code", "reply", "bubble"],
+    "the split turns 对话 into two tabs of its own: 回复 and 气泡"
+  );
+  const reply = on[2];
+  const bubble = on[3];
+  assert.equal(reply.family, shared.STACK_DIALOG_FIELD, "回复 is the conversation's own axes");
+  assert.equal(reply.shaping, true, "回复 keeps the shaping rows");
+  assert.equal(bubble.family, shared.USER_STACK_FIELD, "气泡 is the reader's own message");
+  assert.equal(bubble.line, "", "a bubble has no line height");
+  assert.ok(bubble.size !== "" && bubble.weight !== "", "it has a size and a weight");
+  assert.ok(shared.USER_ROW_SELECTOR.indexOf("_userRow") > 0, "the bubble scope is a class substring");
+});
+
 section("0.4.0: panel chrome, and fields the plugin no longer has");
 
 await test("a removed field is tolerated, never resurrected", () => {
@@ -3101,6 +3333,28 @@ await test("the panel's bounds are the conversation area, or the window", () => 
     height: 800,
   });
   assert.deepEqual(shared.floatFallbackBounds(null, viewport), whole, "no shell uses the window");
+  // Every page snaps. The stand-in region is a home like the conversation: its four
+  // corners are distinct, inside it, and a dot stored anywhere inside it resolves to
+  // the corner it is nearest — that is what makes "no page has no snapping" true.
+  const fallback = shared.floatFallbackBounds(mainColumn, viewport);
+  const corners = ["tl", "tr", "bl", "br"].map((name) => shared.floatCornerPoint(fallback, name));
+  assert.equal(new Set(corners.map((point) => point.x + "," + point.y)).size, 4, "four distinct corners");
+  for (const point of corners) {
+    assert.ok(
+      point.x >= fallback.left && point.y >= fallback.top,
+      "a corner starts inside the region"
+    );
+    assert.ok(
+      point.x + shared.FLOAT_DOT <= fallback.right && point.y + shared.FLOAT_DOT <= fallback.bottom,
+      "and the whole dot fits inside it"
+    );
+  }
+  assert.equal(shared.floatNearestCorner(fallback, corners[0].x + 1, corners[0].y + 1), "tl");
+  assert.equal(shared.floatNearestCorner(fallback, corners[3].x + 1, corners[3].y + 1), "br");
+  // A stored position that ended up OUTSIDE the region (a window resize, a page
+  // change) still has a corner to go to rather than being left where it is.
+  const stranded = shared.floatNearestCorner(fallback, fallback.right + 200, fallback.bottom + 120);
+  assert.ok(["bl", "br"].includes(stranded), "an out-of-bounds dot resolves to the nearest corner");
   // The scroll container the conversation lives in wins over the prose inside it.
   const scroller = { left: 220, top: 56, right: 820, bottom: 800, width: 600, height: 744 };
   const prose = { left: 236, top: 72, right: 804, bottom: 2400, width: 568, height: 2328 };
@@ -3234,8 +3488,48 @@ await test("which candidate is the region is one rule, and it names the box to w
   );
 });
 
-await test("the card's side is the one with room, and never the dot's own corner", () => {
-  // The card hangs off the dot, so its side is a question about ROOM: the side
+// A page that is NOT the conversation can still carry markdown: the plugin market
+// renders its plugin documents with the chat's own `_markdown_` classes (measured
+// live: one 960×511 box, nothing else the conversation selectors match). That box
+// used to become the region, so the dot latched onto the plugin document and hopped
+// between corners. Markdown only counts while the host's conversation marker exists.
+await test("markdown content is a region only on a page that has a conversation", () => {
+  assert.equal(shared.floatMarkdownRegionAllowed(false), false, "the market page has no conversation marker");
+  assert.equal(shared.floatMarkdownRegionAllowed(true), true);
+  assert.equal(shared.floatMarkdownRegionAllowed(undefined), false);
+  const marketDoc = { left: 366, top: 264, right: 1326, bottom: 775, width: 960, height: 511 };
+  // With the class list alone the picker would happily take the document; the gate
+  // is what keeps it out of the candidate list in the first place.
+  const window800 = { width: 1440, height: 800 };
+  assert.equal(shared.floatBoundsPick([marketDoc], window800).index, 0);
+});
+
+// The dot's home is a function of the region, so a region that flickers moves the
+// dot twice in a second. A changed answer has to stand for a couple of readings.
+await test("a region that only flickers does not move the dot", () => {
+  const a = { index: 0, bounds: { left: 220, top: 56, right: 820, bottom: 800 } };
+  const b = { index: 1, bounds: { left: 366, top: 264, right: 1326, bottom: 775 } };
+  let state = shared.floatBoundsConfirm(null, a, 2);
+  assert.equal(state.index, 0, "the first reading is adopted");
+  state = shared.floatBoundsConfirm(state, a, 2);
+  assert.equal(state.index, 0);
+  // One reading of another box: the dot keeps its home.
+  state = shared.floatBoundsConfirm(state, b, 2);
+  assert.equal(state.index, 0, "a single stray reading is held back");
+  assert.equal(state.bounds.right, 820);
+  // The stray box is gone again: still the first region.
+  state = shared.floatBoundsConfirm(state, a, 2);
+  assert.equal(state.index, 0);
+  assert.equal(state.pending, null, "the challenger was dropped");
+  // A real change repeats: the second reading in a row is adopted.
+  state = shared.floatBoundsConfirm(state, b, 2);
+  assert.equal(state.index, 0, "one reading is not a change");
+  state = shared.floatBoundsConfirm(state, b, 2);
+  assert.equal(state.index, 1, "two readings in a row are");
+  assert.equal(state.bounds.right, 1326);
+});
+
+await test("the card's side is the one with room, and never the dot's own corner", () => {  // The card hangs off the dot, so its side is a question about ROOM: the side
   // that holds more of the card wins, measured beyond the dot's own box.
   const region = { left: 220, top: 56, right: 820, bottom: 800, width: 600, height: 744 };
   const dot = shared.FLOAT_DOT;
@@ -3517,7 +3811,9 @@ await test("every corner in the stylesheet is a real round", async () => {
   const end = source.indexOf('].join("");', start);
   assert.ok(start > 0 && end > start, "could not slice CARD_CSS");
   const block = source.slice(start, end);
-  const radii = [...block.matchAll(/border-radius:([^;"}]+)/g)].map((match) => match[1].trim());
+  const radii = [
+    ...block.matchAll(/border(?:-(?:top|bottom)-(?:left|right)|-top-left|-top-right)?-radius:([^;"}]+)/g),
+  ].map((match) => match[1].trim());
   assert.ok(radii.length >= 20, `expected the whole sheet, saw ${radii.length} radii`);
   for (const value of radii) {
     const round = value === "50%" || value === "999px";
