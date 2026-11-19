@@ -2218,6 +2218,14 @@ function weightAxisStacks(editing) {
   };
   return {
     ui: text(SANS_FIELD) !== "" ? withoutOwnAliases(formatStack(parseStack(text(SANS_FIELD)))) : "",
+    // The bubble has a family of its own only while the split is on; with it off the
+    // bubble is the conversation's, so its notches are the conversation's as well.
+    user:
+      text(USER_STACK_FIELD) !== ""
+        ? withoutOwnAliases(formatStack(parseStack(text(USER_STACK_FIELD))))
+        : text(STACK_DIALOG_FIELD) !== ""
+          ? withoutOwnAliases(formatStack(parseStack(text(STACK_DIALOG_FIELD))))
+          : withoutOwnAliases(dialogFallbackFamily),
     dialog:
       text(STACK_DIALOG_FIELD) !== ""
         ? withoutOwnAliases(formatStack(parseStack(text(STACK_DIALOG_FIELD))))
@@ -5662,14 +5670,15 @@ function FontCard(props) {
               ? "+" + editing[USER_SIZE_FIELD]
               : String(editing[USER_SIZE_FIELD]),
         }),
-        // The shape comes from the conversation's family: the bubble is drawn
-        // with the same faces unless it was given a family of its own.
+        // The shape comes from the bubble's own family when it has one, and from the
+        // conversation's while it inherits it — a bubble drawn in a different family
+        // has different faces, so it also has different notches.
         weightField({
           field: WEIGHT_USER_FIELD,
           labelKey: labels.weight,
           hintKey: labels.weightHint,
           value: editing[WEIGHT_USER_FIELD],
-          stack: dialogStack,
+          stack: weightAxisStacks(editing).user,
         })
       );
     }
@@ -9373,7 +9382,9 @@ function mountFloatPanel(scope, t, hostCtx) {
       // The bubble: a size and a weight of its own, and no line height (a bubble
       // is one short block of text).
       offsetRow(chosen.size, t("bubbleSize.label"), SIZE_MIN, SIZE_MAX, 1, "size.unit", "px");
-      weightRow(chosen.weight, dialogStack, chosen.base, t("bubbleWeight.label"));
+      // The bubble's own family when it has one, the conversation's while it inherits
+      // it: a bubble drawn in another family has other faces, so other notches.
+      weightRow(chosen.weight, weightAxisStacks(config).user, chosen.base, t("bubbleWeight.label"));
     }
 
     // What is actually in force, in the panel itself: the three families the page is

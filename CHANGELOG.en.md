@@ -2,6 +2,11 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.13] - 2026-11-19
+
+### Fixed
+- **The bubble's weight notches did not follow its own font**: after the bubble was given a different family the notches still came from the conversation's; they now come from the bubble's family, and the settings card and the floating panel agree.
+
 ## [0.7.12] - 2026-11-18
 
 ### Changed

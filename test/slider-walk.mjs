@@ -673,9 +673,19 @@ const main = async () => {
   await sleep(900);
   const restored = await readUser();
   console.log("host after restore:", restored);
+  // The panel's own placement is not a preference this walk can put back: the panel
+  // re-homes onto the corner of whatever it is anchored to while the sections open
+  // and close (that is its job), so its remembered position legitimately moves. The
+  // typographic layer — everything the walk actually edited — must come back exactly.
+  const PLACEMENT = ["panelPos", "panelCorner", "panelSize"];
+  const typography = (text) => {
+    const copy = { ...JSON.parse(text) };
+    for (const key of PLACEMENT) delete copy[key];
+    return JSON.stringify(copy);
+  };
   check(
     "the user layer is back to its original shape",
-    restored === JSON.stringify(originalUser),
+    typography(restored) === typography(JSON.stringify(originalUser)),
     `${restored} vs ${JSON.stringify(originalUser)}`
   );
 
