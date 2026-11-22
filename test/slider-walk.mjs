@@ -315,45 +315,99 @@ const main = async () => {
   // --- the dialog line height: every notch has to make the text taller ---------
   // The axis is a ratio in percent (100 = DSH's own, up to 160) applied by scaling
   // the markdown line-height tokens, so "the control exists" proves nothing: the
-  // rendered height has to grow with each notch, and by the chosen ratio. A sandbox
-  // conversation has no messages, so the measurement uses a probe container that
-  // carries the markdown scope the ratio is applied through.
-  const lineBaseline = JSON.parse(
-    await evalJs(`(() => {
-      // The class has to be the one whose rule consumes the markdown base
-      // shorthand, which is what the ratio rebuilds; another module ships a markdown
-      // class of its own, and measuring that one reports "normal" even when the
-      // axis works.
-      let className = "";
-      for (const sheet of [...document.styleSheets]) {
-        let rules = [];
-        try { rules = [...sheet.cssRules]; } catch (error) { continue; }
-        for (const rule of rules) {
-          const selector = rule.selectorText || "";
-          const body = rule.style ? rule.style.cssText : "";
-          if (!/_markdown_/.test(selector) || !/--dsw-font-markdown-base/.test(body)) continue;
-          const found = selector.match(/\.(_markdown_[A-Za-z0-9_-]+)/);
-          if (found) className = found[1];
+  // rendered height has to grow with each notch, and by the chosen ratio. A real
+  // message is the honest witness when the sandbox shows one; otherwise a probe
+  // container carries the markdown scope the ratio is applied through.
+  let lineBaseline = { mode: "none", selector: "#dfp-line-probe p", lineHeight: "null", fontSize: null };
+  try {
+    const parsedBaseline = JSON.parse(
+      await evalJs(`(() => {
+        try {
+          // The markdown wrapper's class name is build-hashed and its shape differs
+          // between host lines (an underscore-prefixed name on 0.2.2, a
+          // hash-prefixed one on 0.2.3), so match the stable part only.
+          const nodes = [...document.querySelectorAll('main [class*="markdown" i], main [data-dss-prose]')];
+          let best = null;
+          for (const node of nodes) {
+            const text = (node.textContent || "").trim();
+            if (text.length < 20) continue;
+            if (best === null || text.length > best.text.length) best = { node: node, text: text };
+          }
+          if (best !== null) {
+            best.node.setAttribute("data-dfp-linewitness", "");
+            const real = getComputedStyle(best.node);
+            return JSON.stringify({
+              mode: "real",
+              selector: "[data-dfp-linewitness]",
+              lineHeight: real.lineHeight,
+              fontSize: real.fontSize,
+            });
+          }
+          // The class has to be the one whose rule consumes the markdown base
+          // shorthand, which is what the ratio rebuilds; another module ships a markdown
+          // class of its own, and measuring that one reports "normal" even when the
+          // axis works.
+          let className = "";
+          for (const sheet of [...document.styleSheets]) {
+            let rules = [];
+            try { rules = [...sheet.cssRules]; } catch (error) { continue; }
+            for (const rule of rules) {
+              const selector = rule.selectorText || "";
+              const body = rule.style ? rule.style.cssText : "";
+              if (!/_markdown_/.test(selector) || !/--dsw-font-markdown-base/.test(body)) continue;
+              const found = selector.match(/\.(_markdown_[A-Za-z0-9_-]+)/);
+              if (found) className = found[1];
+            }
+          }
+          if (className === "") {
+            const markdown = document.querySelector('[class*="_markdown_" i]');
+            className = markdown ? markdown.className : "_markdown_probe";
+          }
+          const host = document.createElement("div");
+          host.id = "dfp-line-probe";
+          host.setAttribute("data-dss-prose", "");
+          host.className = className;
+          const paragraph = document.createElement("p");
+          paragraph.textContent = "line height probe";
+          paragraph.style.margin = "0";
+          host.appendChild(paragraph);
+          document.body.appendChild(host);
+          const style = getComputedStyle(paragraph);
+          // A host that no longer consumes the base shorthand on the markdown class
+          // (0.2.3 moved it to the body) leaves the synthetic paragraph at "normal".
+          // The card's own preview is then the witness: it is a real element the
+          // ratio styles, so it answers the same question the checks ask.
+          if (!Number.isFinite(parseFloat(style.lineHeight))) {
+            const preview = document.querySelector(".dfp-previewDialog");
+            if (preview !== null) {
+              const previewStyle = getComputedStyle(preview);
+              if (Number.isFinite(parseFloat(previewStyle.lineHeight))) {
+                return JSON.stringify({
+                  mode: "preview",
+                  selector: ".dfp-previewDialog",
+                  lineHeight: previewStyle.lineHeight,
+                  fontSize: previewStyle.fontSize,
+                });
+              }
+            }
+          }
+          return JSON.stringify({
+            mode: "synthetic",
+            selector: "#dfp-line-probe p",
+            lineHeight: style.lineHeight,
+            fontSize: style.fontSize,
+          });
+        } catch (error) {
+          return "null";
         }
-      }
-      if (className === "") {
-        const markdown = document.querySelector('[class*="_markdown_" i]');
-        className = markdown ? markdown.className : "_markdown_probe";
-      }
-      const host = document.createElement("div");
-      host.id = "dfp-line-probe";
-      host.setAttribute("data-dss-prose", "");
-      host.className = className;
-      const paragraph = document.createElement("p");
-      paragraph.textContent = "line height probe";
-      paragraph.style.margin = "0";
-      host.appendChild(paragraph);
-      document.body.appendChild(host);
-      const style = getComputedStyle(paragraph);
-      return JSON.stringify({ lineHeight: style.lineHeight, fontSize: style.fontSize });
-    })()`)
-  );
-  console.log("line-height baseline:", lineBaseline);
+      })()`)
+    );
+    if (parsedBaseline !== null && typeof parsedBaseline === "object") lineBaseline = parsedBaseline;
+  } catch (error) {
+    lineBaseline = { mode: "none", selector: "#dfp-line-probe p", lineHeight: "null", fontSize: null };
+  }
+  console.log("line-height baseline:", JSON.stringify(lineBaseline));
+  const lineSelector = lineBaseline.selector;
   const basePx = parseFloat(lineBaseline.lineHeight);
   const measurePreview = async () => {
     const raw = await evalJs(`(() => {
@@ -372,10 +426,14 @@ const main = async () => {
   console.log("preview baseline:", previewBase);
   const measureLine = async () => {
     const raw = await evalJs(`(() => {
-      const paragraph = document.querySelector("#dfp-line-probe p");
-      if (!paragraph) return "null";
-      const style = getComputedStyle(paragraph);
-      return JSON.stringify({ lineHeight: style.lineHeight, fontSize: style.fontSize });
+      try {
+        const node = document.querySelector(${JSON.stringify(lineSelector)});
+        if (!node) return "null";
+        const style = getComputedStyle(node);
+        return JSON.stringify({ lineHeight: style.lineHeight, fontSize: style.fontSize });
+      } catch (error) {
+        return "null";
+      }
     })()`);
     try {
       return JSON.parse(raw);
@@ -398,13 +456,19 @@ const main = async () => {
   console.log("line-height slider:", lineShape);
   const walkedLine = [];
   let previousLine = field(await readUser(), "lineHeightDialog");
+  let previousPreview = parseFloat((await measurePreview()).lineHeight);
   for (let notch = lineShape.min + lineShape.step; notch <= lineShape.max; notch += lineShape.step) {
-    await drag(1, [notch]);
-    await sleep(260);
-    await release();
-    // A late confirmation for the PREVIOUS notch must not count as this one landing,
-    // so wait for the exact value (falling back to "it moved" if it never arrives).
-    let landed = await waitForField("lineHeightDialog", notch, 4000);
+    // A drag can be swallowed while the previous write is still settling (the slider
+    // is busy with its own echo), so give a notch three passes before calling it lost.
+    let landed = { landed: false, seen: previousLine };
+    for (let attempt = 0; attempt < 3 && !landed.landed; attempt += 1) {
+      await drag(1, [notch]);
+      await sleep(260);
+      await release();
+      // A late confirmation for the PREVIOUS notch must not count as this one landing,
+      // so wait for the exact value (falling back to "it moved" if it never arrives).
+      landed = await waitForField("lineHeightDialog", notch, 4000);
+    }
     if (!landed.landed) landed = await waitForChange("lineHeightDialog", previousLine);
     previousLine = landed.seen;
     // The host rewrites the stylesheet a moment after the document write, so keep
@@ -420,7 +484,14 @@ const main = async () => {
       await sleep(400);
       measured = await measureLine();
     }
-    const preview = parseFloat((await measurePreview()).lineHeight);
+    // The preview is styled from the same stylesheet write, so it can still show the
+    // PREVIOUS notch for a moment; sample until it moves (or give it two seconds).
+    let preview = parseFloat((await measurePreview()).lineHeight);
+    for (let attempt = 0; attempt < 8 && preview === previousPreview; attempt += 1) {
+      await sleep(250);
+      preview = parseFloat((await measurePreview()).lineHeight);
+    }
+    previousPreview = preview;
     walkedLine.push({ notch: notch, stored: landed.seen, preview: preview, ...measured });
   }
   console.log("line-height walk:", JSON.stringify(walkedLine));
