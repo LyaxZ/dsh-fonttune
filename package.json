@@ -1,6 +1,6 @@
 {
   "name": "dsh-fonttune",
-  "version": "0.7.13",
+  "version": "0.7.14",
   "description": "Font plugin for the DeepSeek Harness Web GUI: the conversation gets its own font, size, line height and weight, the interface font and weight follow it, code keeps its own axis with ligature control, and whole setups save as presets.",
   "type": "module",
   "icon": "icon.svg",
@@ -25,7 +25,7 @@
     "docs/card-shaping.jpg"
   ],
   "engines": {
-    "dsh": ">=0.2.1-rc.2 <0.2.3-0"
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
   },
   "dsh": {
     "bundle": {
@@ -44,7 +44,8 @@
         "0.2.2-rc.2": "compatible",
         "0.2.2-rc.3": "compatible",
         "0.2.2-rc.4": "compatible",
-        "0.2.2-rc.5": "compatible"
+        "0.2.2-rc.5": "compatible",
+        "0.2.3-alpha.2": "compatible"
       }
     }
   },

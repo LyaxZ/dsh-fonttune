@@ -2,6 +2,12 @@
 
 All notable changes to **dsh-fonttune** are documented here. Chinese version: [CHANGELOG.md](CHANGELOG.md).
 
+## [0.7.14] - 2026-11-22
+
+### Changed
+- **The supported range now reaches up to DSH 0.3.0**: the plugin is no longer pinned to the 0.2 line, so a host on 0.2.3 or later is not turned away.
+- **DSH 0.2.3-alpha.2 is supported**: the font, size, weight and line-height controls were verified on that release.
+
 ## [0.7.13] - 2026-11-19
 
 ### Fixed
